@@ -1,0 +1,19 @@
+.DS_Store
+*.log
+.planning/
+
+# Update mode timestamp file (tracks last passive update check)
+.last-update-check
+
+# skill-vetter output
+vetter-report.md
+
+# Local Claude Code state (personal permission cache)
+.claude/settings.local.json
+
+# Safety nets
+.env
+.env.*
+*.pem
+*.key
+*.p12

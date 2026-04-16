@@ -1,6 +1,6 @@
 ---
 name: update
-version: 1.0.1
+version: 1.0.2
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep. Discovers what's outdated

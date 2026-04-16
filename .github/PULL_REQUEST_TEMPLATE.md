@@ -17,7 +17,7 @@
 
 ## Test plan
 
-<!-- How did you verify this? E.g., "ran `/upkeep:clean audit` on my machine, Phase 4 now asks before touching Saved State". If the change is metadata/docs only, say so. -->
+<!-- How did you verify this? E.g., "ran `/upkeep audit` on my machine, Phase 4 now asks before touching Saved State". If the change is metadata/docs only, say so. -->
 
 - [ ]
 

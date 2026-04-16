@@ -1,6 +1,6 @@
 ---
 name: cleanquick
-version: 1.0.1
+version: 1.0.2
 author: KyleNesium
 description: |
   Fast macOS cache sweep: Homebrew, dev tool caches, build artifacts (report),

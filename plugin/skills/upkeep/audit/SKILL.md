@@ -358,7 +358,7 @@ Present the complete report:
 | **Total reclaimable** | | **...GB** | |
 ```
 
-End with: "Audit complete — nothing changed. Run `/upkeep:deepclean` to clean up."
+End with: "Audit complete — nothing changed. Run `/upkeep:cleandeep` to clean up."
 
 ## Rules
 

@@ -9,11 +9,12 @@ labels: bug
 
 <!-- A clear description of what went wrong. Paste the relevant portion of the skill's output if helpful. -->
 
-## Which mode were you running
+## Which command were you running
 
-- [ ] `/upkeep:clean deep`
-- [ ] `/upkeep:clean quick`
-- [ ] `/upkeep:clean audit`
+- [ ] `/upkeep:clean deep` or `/upkeep:cleandeep`
+- [ ] `/upkeep:clean quick` or `/upkeep:cleanquick`
+- [ ] `/upkeep:clean audit` or `/upkeep:audit`
+- [ ] `/upkeep:update`
 - [ ] Other / unclear
 
 ## Which phase was running when the issue occurred

@@ -1,5 +1,5 @@
 ---
-name: deepclean
+name: cleandeep
 version: 1.0.0
 author: KyleNesium
 description: |
@@ -77,7 +77,7 @@ allowed-tools:
   - Grep
 ---
 
-# /upkeep:deepclean — Full macOS Deep Clean
+# /upkeep:cleandeep — Full macOS Deep Clean
 
 You are a macOS system cleanup specialist. Run all 15 phases. Report sizes,
 ask before removing. Never run sudo.

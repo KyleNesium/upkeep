@@ -11,7 +11,7 @@ step, no test runner. Changes take effect immediately.
 | Command | File |
 |---------|------|
 | `/upkeep:clean` | `plugin/skills/upkeep/SKILL.md` |
-| `/upkeep:deepclean` | `plugin/skills/upkeep/deepclean/SKILL.md` |
+| `/upkeep:cleandeep` | `plugin/skills/upkeep/cleandeep/SKILL.md` |
 | `/upkeep:cleanquick` | `plugin/skills/upkeep/cleanquick/SKILL.md` |
 | `/upkeep:audit` | `plugin/skills/upkeep/audit/SKILL.md` |
 | `/upkeep:update` | `plugin/skills/upkeep/update/SKILL.md` |
@@ -43,7 +43,7 @@ Reference tables (cache paths, system dirs, CLI dotdirs) live in
 | Skill file | CLAUDE_SKILL_DIR | Repo root | Reference dir |
 |-----------|-----------------|-----------|---------------|
 | `plugin/skills/upkeep/SKILL.md` | `plugin/skills/upkeep/` | `../../..` | `./reference/` |
-| `plugin/skills/upkeep/deepclean/SKILL.md` | `plugin/skills/upkeep/deepclean/` | `../../../..` | `../reference/` |
+| `plugin/skills/upkeep/cleandeep/SKILL.md` | `plugin/skills/upkeep/cleandeep/` | `../../../..` | `../reference/` |
 | `plugin/skills/upkeep/audit/SKILL.md` | `plugin/skills/upkeep/audit/` | `../../../..` | `../reference/` |
 | `plugin/skills/upkeep/cleanquick/SKILL.md` | `plugin/skills/upkeep/cleanquick/` | `../../../..` | `../reference/` |
 | `plugin/skills/upkeep/update/SKILL.md` | `plugin/skills/upkeep/update/` | `../../../..` | `../reference/` |

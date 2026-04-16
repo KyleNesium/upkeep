@@ -8,6 +8,7 @@ Discovery-based disk audit, cleanup, and one-command updates. Finds orphaned app
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-skill-7C3AED?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgMkw0IDdWMTdMMTIgMjJMMjAgMTdWN0wxMiAyWiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
+[![Version](https://img.shields.io/github/v/release/KyleNesium/upkeep?color=green)](https://github.com/KyleNesium/upkeep/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 </div>
@@ -17,6 +18,7 @@ Discovery-based disk audit, cleanup, and one-command updates. Finds orphaned app
 <details>
 <summary><strong>Table of Contents</strong></summary>
 
+- [Why upkeep?](#why-upkeep)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
 - [Usage](#usage)
@@ -34,6 +36,16 @@ Discovery-based disk audit, cleanup, and one-command updates. Finds orphaned app
 - [License](#license)
 
 </details>
+
+---
+
+## Why upkeep?
+
+macOS doesn't clean up after you. Every time you remove an app, install a dev tool, or run a build, it leaves data behind — caches, orphaned support files, stale LaunchAgents, old iOS backups. Over months and years this compounds into dozens of gigabytes that macOS never reclaims automatically.
+
+Most cleanup tools work from a hardcoded list of known apps and paths. **upkeep is discovery-based**: it looks at what's actually installed and cross-references what's left over, so it catches orphaned data from tools that aren't on any list — renamed apps, one-off installers, anything.
+
+First deep clean on a migrated Mac typically recovers **10–50GB**. Monthly quick sweeps keep dev caches and Electron bloat in check with minimal effort.
 
 ---
 
@@ -87,7 +99,7 @@ The skill is then available as `/upkeep:clean`.
 /upkeep:clean audit         # full scan, report only, no changes
 
 # Direct sub-skill commands (bypass mode selector)
-/upkeep:deepclean           # full 15-phase cleanup, no prompt
+/upkeep:cleandeep           # full 15-phase cleanup, no prompt
 /upkeep:cleanquick          # fast sweep (phases 1-3, 8, 11, 13), no prompt
 /upkeep:audit               # report-only scan, no prompt
 
@@ -137,23 +149,23 @@ This catches cleanup targets that a hardcoded list would miss — new tools, ren
 
 ## Cleanup Categories
 
-| # | Category | Deep | Quick | Audit | What it finds |
-|---|----------|:----:|:-----:|:-----:|---------------|
-| 1 | Baseline | * | * | * | Disk state snapshot for before/after comparison |
-| 2 | Homebrew | * | * | * | Outdated packages, stale downloads, orphan deps, deprecated formulae |
-| 3 | Dev caches | * | * | * | npm, bun, yarn, pnpm, uv, pip, puppeteer, Go, cargo, CocoaPods, Gradle, Maven |
-| 4 | Orphaned app data | * | | * | Application Support, Containers, dotfiles, Saved State, Crash Reports |
-| 5 | LaunchAgents | * | | * | Stale or unloaded agents from removed apps |
-| 6 | Xcode & dev tools | * | | * | DerivedData, Archives, iOS DeviceSupport, Simulators |
-| 7 | Docker | * | | * | Unused images/containers, orphaned Docker.app data |
-| 8 | Build artifacts | * | report | * | node_modules, .venv, .next, dist, \_\_pycache\_\_ across repos |
-| 9 | Stale logs | * | | * | `~/Library/Logs/` from removed apps, rotated log files |
-| 10 | Shell config | * | | * | Dead PATH entries, aliases to missing binaries, broken sources |
-| 11 | Electron caches | * | * | * | Slack, Spotify, VS Code, Discord cache bloat |
-| 12 | Large files | * | | * | Leftover .dmg, .pkg, .iso, .zip installers |
-| 13 | Trash | * | * | * | `~/.Trash/` contents |
-| 14 | iOS backups | * | | * | Local iPhone/iPad backups (can be 50-100GB+) |
-| 15 | pipx tools | * | | * | Unused CLI tools installed via pipx |
+| # | Category | Deep | Quick | Audit | What it finds | Typical savings |
+|---|----------|:----:|:-----:|:-----:|---------------|----------------|
+| 1 | Baseline | ✓ | ✓ | ✓ | Disk state snapshot for before/after comparison | — |
+| 2 | Homebrew | ✓ | ✓ | ✓ | Outdated packages, stale downloads, orphan deps, deprecated formulae | 500MB – 5GB |
+| 3 | Dev caches | ✓ | ✓ | ✓ | npm, bun, yarn, pnpm, uv, pip, puppeteer, Go, cargo, CocoaPods, Gradle, Maven | 1 – 10GB |
+| 4 | Orphaned app data | ✓ | | ✓ | Application Support, Containers, dotfiles, Saved State, Crash Reports | 0 – 20GB |
+| 5 | LaunchAgents | ✓ | | ✓ | Stale or unloaded agents from removed apps | < 100MB |
+| 6 | Xcode & dev tools | ✓ | | ✓ | DerivedData, Archives, iOS DeviceSupport, Simulators | 1 – 20GB |
+| 7 | Docker | ✓ | | ✓ | Unused images/containers, orphaned Docker.app data | 0 – 30GB |
+| 8 | Build artifacts | ✓ | report | ✓ | node_modules, .venv, .next, dist, \_\_pycache\_\_ across repos | 0 – 10GB |
+| 9 | Stale logs | ✓ | | ✓ | `~/Library/Logs/` from removed apps, rotated log files | 100MB – 2GB |
+| 10 | Shell config | ✓ | | ✓ | Dead PATH entries, aliases to missing binaries, broken sources | report only |
+| 11 | Electron caches | ✓ | ✓ | ✓ | Slack, Spotify, VS Code, Discord cache bloat | 200MB – 3GB |
+| 12 | Large files | ✓ | | ✓ | Leftover .dmg, .pkg, .iso, .zip installers | 0 – 10GB |
+| 13 | Trash | ✓ | ✓ | ✓ | `~/.Trash/` contents | varies |
+| 14 | iOS backups | ✓ | | ✓ | Local iPhone/iPad backups (can be 50-100GB+) | 10 – 100GB |
+| 15 | pipx tools | ✓ | | ✓ | Unused CLI tools installed via pipx | 100MB – 2GB |
 
 ---
 
@@ -269,8 +281,8 @@ upkeep/
 │           ├── SKILL.md           # /upkeep:clean — mode selector + all 15 phases
 │           ├── audit/
 │           │   └── SKILL.md       # /upkeep:audit — report-only scan (all 15 phases)
-│           ├── deepclean/
-│           │   └── SKILL.md       # /upkeep:deepclean — full 15-phase cleanup
+│           ├── cleandeep/
+│           │   └── SKILL.md       # /upkeep:cleandeep — full 15-phase cleanup
 │           ├── cleanquick/
 │           │   └── SKILL.md       # /upkeep:cleanquick — fast sweep (phases 1-3, 8, 11, 13)
 │           ├── update/
@@ -286,14 +298,14 @@ upkeep/
 └── SECURITY.md
 ```
 
-Each skill is a `SKILL.md` — a structured prompt that Claude Code follows when invoked. Sub-skills (`audit`, `deepclean`, `cleanquick`, `update`) are direct-invocation shortcuts; `/upkeep:clean` is the mode-selector entry point that routes to the same logic. Reference files provide lookup tables for cache locations, protected directories, and CLI tool ownership. No runtime dependencies, no binaries, no build step.
+Each skill is a `SKILL.md` — a structured prompt that Claude Code follows when invoked. Sub-skills (`audit`, `cleandeep`, `cleanquick`, `update`) are direct-invocation shortcuts; `/upkeep:clean` is the mode-selector entry point that routes to the same logic. Reference files provide lookup tables for cache locations, protected directories, and CLI tool ownership. No runtime dependencies, no binaries, no build step.
 
 ---
 
 ## Contributing
 
 1. Fork the repo
-2. Edit the relevant `SKILL.md` — the main skill at `plugin/skills/upkeep/SKILL.md`, or a sub-skill (`audit/`, `deepclean/`, `cleanquick/`, `update/`)
+2. Edit the relevant `SKILL.md` — the main skill at `plugin/skills/upkeep/SKILL.md`, or a sub-skill (`audit/`, `cleandeep/`, `cleanquick/`, `update/`)
 3. Test by running the affected command in Claude Code pointed at your fork
 4. Open a PR with a description of what you changed and why
 
@@ -323,7 +335,7 @@ Prompt-based skill — no executable source code. Tested via live invocation aga
 | Command | What's validated |
 |---------|-----------------|
 | `/upkeep:clean` | Mode selection routing, keyword detection |
-| `/upkeep:deepclean` | Full 15-phase execution, phase ordering, safety rules |
+| `/upkeep:cleandeep` | Full 15-phase execution, phase ordering, safety rules |
 | `/upkeep:cleanquick` | Phases 1-3, 8, 11, 13 only; build artifacts report-only enforcement |
 | `/upkeep:audit` | All 15 phases, zero mutations, accurate size reporting |
 | `/upkeep:update` | Sub-mode detection, skill discovery, package manager audit, per-category gates |

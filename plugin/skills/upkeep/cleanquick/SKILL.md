@@ -154,7 +154,7 @@ find <DIRS> -maxdepth 4 \( -name ".venv" -o -name "venv" \) -type d -exec du -sh
 find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
 ```
 
-**Quick mode: report totals only — do not offer removal.** For cleanup, run `/upkeep:deepclean`.
+**Quick mode: report totals only — do not offer removal.** For cleanup, run `/upkeep:cleandeep`.
 
 ## Phase 11: Electron App Caches (Quick)
 

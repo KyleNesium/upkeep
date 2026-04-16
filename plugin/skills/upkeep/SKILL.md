@@ -1,5 +1,5 @@
 ---
-name: clean
+name: upkeep
 version: 1.0.0
 author: KyleNesium
 description: |

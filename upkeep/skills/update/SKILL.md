@@ -1,6 +1,6 @@
 ---
-name: update
-version: 1.0.2
+name: upkeep:update
+version: 1.0.5
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep. Discovers what's outdated

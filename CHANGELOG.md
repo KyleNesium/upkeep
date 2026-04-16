@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-04-16
+
+### Fixed
+- Skills still un-namespaced after v1.0.3 fix — root cause was the plugin source directory being named `plugin/` instead of `upkeep/`. Claude Code derives the namespace from the source directory name; `plugin` ≠ `upkeep` so no namespace was applied. Renamed `plugin/` → `upkeep/` and updated `marketplace.json` source path to `"./upkeep"`.
+
 ## [1.0.3] - 2026-04-16
 
 ### Fixed

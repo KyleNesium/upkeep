@@ -11,9 +11,9 @@
   "plugins": [
     {
       "name": "upkeep",
-      "source": "./plugin",
+      "source": "./upkeep",
       "description": "macOS system cleanup and updater. Finds orphaned app data, stale caches, dead LaunchAgents, and configuration drift. Also updates AI skills and package managers (brew, npm, pip, gems, rustup) in one sweep. Four modes: deep, quick, audit, update.",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "category": "developer tools",
       "keywords": ["macos", "cleanup", "disk-space", "system-maintenance", "homebrew", "cache-cleanup", "orphan-detection", "updater", "package-manager"],
       "skills": [

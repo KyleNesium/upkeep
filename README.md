@@ -59,31 +59,11 @@ First deep clean on a migrated Mac typically recovers **10–50GB**. Monthly qui
 
 ## Install
 
-> **Marketplace install coming soon** — pending Claude Code marketplace approval. Manual install in the meantime.
-
-Clone the repo:
-
 ```bash
-git clone https://github.com/KyleNesium/upkeep.git
+claude plugin add KyleNesium/upkeep
 ```
 
-Then add the skill to your global Claude Code settings via `claude config edit`:
-
-```json
-{
-  "projects": {
-    "*": {
-      "skills": {
-        "upkeep": {
-          "path": "/path/to/upkeep/plugin/skills/upkeep"
-        }
-      }
-    }
-  }
-}
-```
-
-The skill is then available as `/upkeep`.
+Restart Claude Code — the skill is then available as `/upkeep`.
 
 ---
 
@@ -270,12 +250,13 @@ upkeep is a Claude Code plugin that runs entirely on your local machine. This po
 ```
 upkeep/
 ├── .claude-plugin/
-│   ├── marketplace.json       # Marketplace manifest for plugin install
-│   └── plugin.json            # Plugin metadata
+│   └── marketplace.json           # Marketplace manifest
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
 │   └── PULL_REQUEST_TEMPLATE.md
-├── plugin/
+├── upkeep/
+│   ├── .claude-plugin/
+│   │   └── plugin.json            # Plugin metadata
 │   └── skills/
 │       ├── upkeep/
 │       │   ├── SKILL.md           # /upkeep — mode selector + all 15 phases
@@ -305,7 +286,7 @@ Each skill is a `SKILL.md` — a structured prompt that Claude Code follows when
 ## Contributing
 
 1. Fork the repo
-2. Edit the relevant `SKILL.md` — the main skill at `plugin/skills/upkeep/SKILL.md`, or a sub-skill (`audit/`, `cleandeep/`, `cleanquick/`, `update/`)
+2. Edit the relevant `SKILL.md` — the main skill at `upkeep/skills/upkeep/SKILL.md`, or a sub-skill (`audit/`, `cleandeep/`, `cleanquick/`, `update/`)
 3. Test by running the affected command in Claude Code pointed at your fork
 4. Open a PR with a description of what you changed and why
 

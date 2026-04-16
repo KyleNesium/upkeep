@@ -88,10 +88,12 @@ allowed-tools:
   - Bash(git -C * remote *)
   - Bash(git symbolic-ref *)
   - Bash(git -C * symbolic-ref *)
-  # Update mode — package manager upgrades (new: rustup, mas, softwareupdate)
+  # Update mode — package manager upgrades
   - Bash(rustup *)
   - Bash(mas *)
   - Bash(softwareupdate *)
+  - Bash(deno *)
+  - Bash(mise *)
 ---
 
 # /clean — macOS System Cleanup
@@ -404,7 +406,9 @@ du -sh ~/Library/Developer/CoreSimulator/ 2>/dev/null
 | DerivedData | Yes | Rebuild cache. Always safe. |
 | Archives | Ask user | Old app archives. May want to keep recent ones. |
 | iOS DeviceSupport | Mostly | Old device symbols. Keep ones matching current devices. |
-| CoreSimulator | Partially | Before offering deletion, count with: `xcrun simctl list devices 2>/dev/null \| grep -c Shutdown`. Offer: "`xcrun simctl delete unavailable`" |
+| CoreSimulator | Partially | Preview count before offering removal (see note below). |
+
+For CoreSimulator: first run `xcrun simctl list devices 2>/dev/null | grep -c Shutdown` to show how many shutdown simulators exist, then offer `xcrun simctl delete unavailable`.
 
 ## Phase 7: Docker (Deep + Audit)
 

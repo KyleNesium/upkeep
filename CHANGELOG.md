@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed (additional)
 - Phase 9 (Stale Logs): rotated log `find` command had `-o \( -name "*.log.[0-9]*" \)` as a top-level OR expression, not inside the `-maxdepth 3` scope — the depth limit only applied to the first group, so the scan could traverse unboundedly into the second. Merged all patterns into a single grouped expression.
 - Phase 2 (Homebrew): `brew leaves` prompt was vague ("ask if any should go") — no structure for user input. Now explicitly prompts: "Uninstall any of these? (space-separated names, or 'none')" to match the selection format used by Phase 5 (LaunchAgents).
-- Phase 6 (Xcode): CoreSimulator row offered `xcrun simctl delete unavailable` with no preview of what would be removed. Now counts shutdown simulators first (`xcrun simctl list devices | grep -c Shutdown`) before offering the delete command.
+- Phase 6 (Xcode): CoreSimulator row offered `xcrun simctl delete unavailable` with no preview of what would be removed. Now counts shutdown simulators first; command moved out of table cell to avoid markdown pipe-escaping ambiguity.
+- `update/SKILL.md` allowed-tools: `bun`, `deno`, `mise`, `uv` were used in Steps 2 and 5 but missing — the skill would silently block those upgrade commands.
+- `upkeep/SKILL.md` allowed-tools: `deno` and `mise` missing from update-mode entries.
 
 ## [1.0.5] - 2026-04-16
 

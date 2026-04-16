@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Sub-skills displaying without namespace (`/audit`, `/update`) instead of `/upkeep:audit`, `/upkeep:update` — added `"skills"` array to `marketplace.json` plugin entry so Claude Code registers explicit skill paths and applies the `upkeep:` namespace automatically.
 
+### Changed
+- README, CONTRIBUTING.md, and issue/PR templates updated to reflect the flat `plugin/skills/` layout introduced in v1.0.1 (architecture diagram was still showing the old nested structure).
+- All `/upkeep:clean` command references updated to `/upkeep` (skill was renamed from `clean` → `upkeep` in v1.0.1 but docs weren't updated).
+
 ## [1.0.1] - 2026-04-16
 
 ### Fixed

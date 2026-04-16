@@ -96,7 +96,7 @@ allowed-tools:
   - Bash(mise *)
 ---
 
-# /clean — macOS System Cleanup
+# /upkeep — macOS System Cleanup
 
 You are a macOS system cleanup specialist. Audit the machine for reclaimable disk
 space, stale data, and configuration issues. Clean up with user approval.
@@ -487,7 +487,7 @@ Flag:
 2. Rotated log files — scan for them:
 ```bash
 find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
-  2>/dev/null | xargs du -sh 2>/dev/null | sort -rh
+  -exec du -sh {} + 2>/dev/null | sort -rh
 ```
 3. Any single log file over 10MB:
 ```bash
@@ -636,6 +636,10 @@ pipx list --short 2>/dev/null                                # installed tools
 gem outdated 2>/dev/null                                     # count outdated
 rustup check 2>/dev/null                                     # toolchain status
 cargo install-update --list 2>/dev/null                      # only if cargo-update installed
+command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
+command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
+command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
+command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
 mas outdated 2>/dev/null                                     # App Store
 softwareupdate -l 2>/dev/null | grep -E "^\s*\*"             # macOS updates
 ```

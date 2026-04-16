@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Phase 6 (Xcode): CoreSimulator row offered `xcrun simctl delete unavailable` with no preview of what would be removed. Now counts shutdown simulators first; command moved out of table cell to avoid markdown pipe-escaping ambiguity.
 - `update/SKILL.md` allowed-tools: `bun`, `deno`, `mise`, `uv` were used in Steps 2 and 5 but missing — the skill would silently block those upgrade commands.
 - `upkeep/SKILL.md` allowed-tools: `deno` and `mise` missing from update-mode entries.
+- `upkeep/SKILL.md` Update Mode Step 2: orchestrator's package discovery block was missing `uv`, `bun`, `deno`, `mise` — had drifted from `update/SKILL.md` where they were added.
+- Phase 9 (Stale Logs): rotated log `find` piped to `xargs du -sh`; on BSD macOS, empty `xargs` input still invokes `du -sh` with no args, reporting the current directory. Replaced with `-exec du -sh {} +` to match the pattern used in Phase 9 step 3 (audit, cleandeep, upkeep).
+- `upkeep/SKILL.md` heading: still said `# /clean — macOS System Cleanup` from before the v1.0.1 rename — corrected to `# /upkeep`.
+- `update/SKILL.md` description: listed old package manager set (brew, npm, pip, gems, rustup); updated to include bun, deno, mise, uv.
 
 ## [1.0.5] - 2026-04-16
 

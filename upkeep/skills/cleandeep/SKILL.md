@@ -371,7 +371,7 @@ Cross-reference against installed apps. Flag:
 2. Rotated log files — scan for them:
 ```bash
 find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
-  2>/dev/null | xargs du -sh 2>/dev/null | sort -rh
+  -exec du -sh {} + 2>/dev/null | sort -rh
 ```
 3. Any single log file over 10MB:
 ```bash

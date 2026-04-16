@@ -6,8 +6,8 @@ description: |
   Update AI skills and package managers in one sweep. Discovers what's outdated
   across git-based skills and package managers, then upgrades with per-category
   confirmation gates. Four sub-modes: audit (check only), skills (git-pull all
-  AI skills), packages (upgrade brew, npm, pip, gems, rustup, mas, macOS),
-  all (skills then packages).
+  AI skills), packages (upgrade brew, npm, pipx, gems, rustup, bun, deno, mise,
+  uv, mas, macOS), all (skills then packages).
   Use when: "update upkeep", "update my AI skills", "update everything",
   "check for updates", "upgrade my packages", "update all my tools",
   "is upkeep up to date", "self-update", "upgrade brew", "update skills".

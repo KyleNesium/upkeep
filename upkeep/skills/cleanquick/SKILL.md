@@ -1,6 +1,6 @@
 ---
 name: upkeep:cleanquick
-version: 1.0.5
+version: 1.0.6
 author: KyleNesium
 description: |
   Fast macOS cache sweep: Homebrew, dev tool caches, build artifacts (report),
@@ -19,6 +19,7 @@ allowed-tools:
   - Bash(sw_vers *)
   - Bash(echo *)
   - Bash(date *)
+  - Bash(touch *)
   - Bash(command *)
   - Bash(which *)
   - Bash(pgrep *)
@@ -151,7 +152,7 @@ If none found, scan `~` with maxdepth 5.
 ```bash
 find <DIRS> -maxdepth 4 -name "node_modules" -type d -exec du -sh {} + 2>/dev/null | sort -rh
 find <DIRS> -maxdepth 4 \( -name ".venv" -o -name "venv" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh
-find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
+find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "out" -o -name "target" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" -o -name ".nx" -o -name "Pods" -o -name ".build" -o -name "coverage" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
 ```
 
 **Quick mode: report totals only — do not offer removal.** For cleanup, run `/upkeep:cleandeep`.
@@ -159,7 +160,10 @@ find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -na
 ## Phase 11: Electron App Caches (Quick)
 
 ```bash
-find ~/Library/Application\ Support -maxdepth 5 \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
+find ~/Library/Application\ Support -maxdepth 5 \
+  -not -path "*/Claude/*" -not -path "*/Claude" \
+  \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) \
+  -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
 ```
 
 Only show caches over 50MB. Before offering to clear, check if app is running:

@@ -1,6 +1,6 @@
 ---
 name: upkeep
-version: 1.0.5
+version: 1.0.6
 author: KyleNesium
 description: |
   macOS system cleanup. Three modes: deep (full 15-phase audit + cleanup),
@@ -23,6 +23,7 @@ allowed-tools:
   - Bash(sw_vers *)
   - Bash(echo *)
   - Bash(date *)
+  - Bash(touch *)
   - Bash(id *)
   - Bash(basename *)
   - Bash(command *)
@@ -86,6 +87,7 @@ allowed-tools:
   - Bash(git -C * pull *)
   - Bash(git -C * remote *)
   - Bash(git symbolic-ref *)
+  - Bash(git -C * symbolic-ref *)
   # Update mode — package manager upgrades (new: rustup, mas, softwareupdate)
   - Bash(rustup *)
   - Bash(mas *)
@@ -335,11 +337,16 @@ before running — these reports may be needed for diagnosis.
 Audit `~/Library/LaunchAgents/`:
 
 ```bash
+_BREW_FORMULA=$(brew list --formula 2>/dev/null)
 for plist in ~/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
   label=$(basename "$plist" .plist)
-  # Skip Homebrew-managed agents
-  [[ "$label" == homebrew.mxcl.* ]] && continue
+  if [[ "$label" == homebrew.mxcl.* ]]; then
+    _formula="${label#homebrew.mxcl.}"
+    echo "$_BREW_FORMULA" | grep -qx "$_formula" || \
+      echo "$label | NOT LOADED | ORPHANED HOMEBREW SERVICE"
+    continue
+  fi
   # Three-state detection
   target=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Print :Program" "$plist" 2>/dev/null || echo "UNKNOWN")
@@ -350,15 +357,14 @@ done
 ```
 
 For each agent, present a table with columns: plist label, load state (LOADED /
-NOT LOADED), target state (OK / TARGET MISSING / UNKNOWN). Then prompt:
-"Remove which? (comma-separated indices, or 'none')" -- per-agent confirmation
-is required, no batch removal.
+NOT LOADED), target state (OK / TARGET MISSING / UNKNOWN / ORPHANED HOMEBREW SERVICE).
+Then prompt: "Remove which? (comma-separated indices, or 'none')" -- per-agent
+confirmation is required, no batch removal.
 
 **Exclusions:**
 - `homebrew.mxcl.*` agents: managed by `brew services`. Never offer removal.
-  If the matching formula is missing from `brew list --formula`, report it as
-  "orphaned homebrew service -- run `brew services cleanup` to remove" but do
-  not remove it directly.
+  Orphaned ones (formula absent from brew list) are reported in the table as
+  "ORPHANED HOMEBREW SERVICE" — tell the user to run `brew services cleanup`.
 - Agents matching the user's own reverse-DNS domain are almost certainly
   intentional -- present but flag as "user-owned".
 
@@ -455,7 +461,7 @@ find <DIRS> -maxdepth 4 -name "node_modules" -type d -exec du -sh {} + 2>/dev/nu
 find <DIRS> -maxdepth 4 \( -name ".venv" -o -name "venv" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh
 
 # Build output directories
-find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
+find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "out" -o -name "target" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" -o -name ".nx" -o -name "Pods" -o -name ".build" -o -name "coverage" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
 ```
 
 Report totals. These are all rebuildable — `npm install` / `bun install` / `pip install`
@@ -473,12 +479,21 @@ ls ~/Library/Logs/ 2>/dev/null
 Cross-reference against installed apps (same logic as Phase 4).
 Flag:
 1. Log directories from uninstalled apps
-2. Rotated log files: `*.old.*`, `*.log.N`, `*.log.old`
-3. Any single log file over 10MB
+2. Rotated log files — scan for them:
+```bash
+find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" \) \
+  -o \( -name "*.log.[0-9]*" \) \
+  2>/dev/null | xargs du -sh 2>/dev/null | sort -rh
+```
+3. Any single log file over 10MB:
+```bash
+find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
+  -exec du -sh {} + 2>/dev/null | sort -rh
+```
 
 ## Phase 10: Shell Config Audit (Deep + Audit)
 
-Read `~/.zshrc`, `~/.zprofile`, `~/.bash_profile` (whichever exist):
+Read `~/.zshrc`, `~/.zprofile`, `~/.zshenv`, `~/.bash_profile` (whichever exist):
 
 1. **Dead PATH entries**: For each PATH addition, check if the target directory exists.
    Flag any that point to uninstalled tools.
@@ -508,7 +523,11 @@ For INSTALLED Electron apps only, check for bloated caches:
 # Generic discovery: find Cache/ and Service Worker/ dirs inside Application Support.
 # Use maxdepth 5 -- VS Code and other apps nest caches deeper
 # (e.g., Code/User/workspaceStorage/<hash>/Cache).
-find ~/Library/Application\ Support -maxdepth 5 \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
+# Exclude Claude's own Application Support dir (protected by rules).
+find ~/Library/Application\ Support -maxdepth 5 \
+  -not -path "*/Claude/*" -not -path "*/Claude" \
+  \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) \
+  -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
 ```
 
 Only show caches over 50MB. These rebuild on next app launch.
@@ -527,11 +546,11 @@ download them to — avoid scanning `~` wholesale (catches iCloud Documents,
 syncs, and takes forever):
 
 ```bash
-find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" 2>/dev/null
+find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" -exec du -sh {} + 2>/dev/null | sort -rh
 ```
 
 Also check `~/Documents` if the user reports slowness or missing installers
-— some users stash downloads there. Report with sizes. Offer to remove.
+— some users stash downloads there. Offer to remove.
 
 ## Phase 13: Trash (all modes)
 
@@ -649,7 +668,7 @@ if present. Ask: "Apply updates to <tool>? A) Yes  B) Skip"
 Before pulling, check:
 1. `git -C "$d" status --porcelain` — if dirty, show `git status --short` output,
    warn about conflicts, ask "Continue anyway? A) Yes  B) Skip this tool"
-2. `git symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
+2. `git -C "$d" symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
    then retry" — skip this tool, continue others.
 
 Apply: `git -C "$d" pull --ff-only origin <branch> 2>&1`
@@ -669,6 +688,10 @@ Each category has its own gate. Skipping one does NOT cancel others.
 | gems | `gem outdated` | `gem update` | |
 | rustup | `rustup check` | `rustup update` | |
 | cargo | `cargo install-update --list` | `cargo install-update -a` | Only if cargo-update installed |
+| uv | `uv self version` | `uv self update` | Python package manager replacement |
+| bun | `bun --version` | `bun upgrade` | |
+| deno | `deno --version` | `deno upgrade` | |
+| mise | `mise outdated` | `mise upgrade` | Language version manager |
 | mas | `mas outdated` | `mas upgrade` | |
 | macOS | `softwareupdate -l` | `softwareupdate -ia` | ⚠ Check for `[restart]` in listing — if restart required, warn explicitly before asking |
 

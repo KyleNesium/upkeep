@@ -1,6 +1,6 @@
 ---
 name: upkeep:update
-version: 1.0.5
+version: 1.0.6
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep. Discovers what's outdated
@@ -39,6 +39,7 @@ allowed-tools:
   - Bash(git -C * pull *)
   - Bash(git -C * remote *)
   - Bash(git symbolic-ref *)
+  - Bash(git -C * symbolic-ref *)
   - Read
   - Glob
 ---
@@ -95,6 +96,10 @@ pipx list --short 2>/dev/null
 gem outdated 2>/dev/null
 rustup check 2>/dev/null
 cargo install-update --list 2>/dev/null
+command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
+command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
+command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
+command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
 mas outdated 2>/dev/null
 softwareupdate -l 2>/dev/null | grep -E "^\s*\*"
 ```
@@ -132,7 +137,7 @@ if present. Ask: "Apply updates to <tool>? A) Yes  B) Skip"
 Before pulling, check:
 1. `git -C "$d" status --porcelain` — if dirty, show `git status --short` output,
    warn about conflicts, ask "Continue anyway? A) Yes  B) Skip this tool"
-2. `git symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
+2. `git -C "$d" symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
    then retry" — skip this tool, continue others.
 
 Apply: `git -C "$d" pull --ff-only origin <branch> 2>&1`
@@ -152,6 +157,10 @@ Each category has its own gate. Skipping one does NOT cancel others.
 | gems | `gem outdated` | `gem update` | |
 | rustup | `rustup check` | `rustup update` | |
 | cargo | `cargo install-update --list` | `cargo install-update -a` | Only if cargo-update installed |
+| uv | `uv self version` | `uv self update` | Python package manager replacement |
+| bun | `bun --version` | `bun upgrade` | |
+| deno | `deno --version` | `deno upgrade` | |
+| mise | `mise outdated` | `mise upgrade` | Language version manager |
 | mas | `mas outdated` | `mas upgrade` | |
 | macOS | `softwareupdate -l` | `softwareupdate -ia` | ⚠ Check for `[restart]` in listing — if restart required, warn explicitly before asking |
 

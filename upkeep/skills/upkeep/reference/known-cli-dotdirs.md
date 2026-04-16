@@ -9,10 +9,28 @@ Mapping of common ~/.<dir> directories to their owning CLI tools. Used to avoid 
 | `~/.rustup/` | rustup | Rust toolchain manager |
 | `~/.cargo/` | cargo | Rust package manager |
 | `~/.nvm/` | nvm | Node version manager |
+| `~/.fnm/` | fnm | Fast Node Manager |
 | `~/.pyenv/` | pyenv | Python version manager |
 | `~/.rbenv/` | rbenv | Ruby version manager |
 | `~/.volta/` | volta | JavaScript tool manager |
+| `~/.asdf/` | asdf | Multi-language version manager |
+| `~/.mise/` | mise / rtx | Multi-language version manager |
 | `~/.sdkman/` | SDKMAN! | JVM SDK manager |
+| `~/.deno/` | deno | Deno JS/TS runtime |
+| `~/.swiftpm/` | Swift PM | Swift Package Manager |
+| `~/.pub-cache/` | Dart/Flutter | Dart package cache |
+| `~/.terraform.d/` | Terraform | Provider configs and plugins |
+| `~/.ansible/` | Ansible | Plugins and inventory |
+| `~/.helm/` | Helm | Kubernetes package manager |
+| `~/.kube/` | kubectl / Kubernetes | K8s config |
+| `~/.aws/` | AWS CLI | Credentials and config |
+| `~/.gcloud/` | Google Cloud SDK | Credentials and config |
+| `~/.pulumi/` | Pulumi | IaC tool stacks and plugins |
+| `~/.heroku/` | Heroku CLI | Credentials and plugins |
+| `~/.fly/` | Fly.io CLI | Credentials |
+| `~/.vercel/` | Vercel CLI | Credentials |
+| `~/.netlify/` | Netlify CLI | Credentials |
+| `~/.dagger/` | Dagger | CI/CD runner config |
 | `~/.local/` | various | XDG local data/bin |
 | `~/.config/` | various | XDG config |
 | `~/.cache/` | various | XDG cache |
@@ -32,3 +50,6 @@ These dotdirs typically indicate an uninstalled tool. Verify the tool is absent 
 | `~/.codeium/` | Windsurf/Codeium | Windsurf in /Applications |
 | `~/.cursor/` | Cursor IDE | Cursor in /Applications |
 | `~/.eclipse/` | Eclipse IDE | Eclipse in /Applications |
+| `~/.windsurf/` | Windsurf IDE | Windsurf in /Applications |
+| `~/.vagrant.d/` | Vagrant | `command -v vagrant` |
+| `~/.phpls/` | PHP Language Server | `command -v composer` |

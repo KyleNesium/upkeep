@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-04-16
+
+### Fixed
+- `touch` command was missing from `allowed-tools` in all four cleanup/audit skills — the passive update check calls `touch "$_CHECK_FILE"` to throttle git fetches to once per 24h, but without this permission the file was never written, causing a redundant fetch on every single run.
+- Phase 5 (LaunchAgents): `[[ "$label" == homebrew.mxcl.* ]] && continue` short-circuited before the orphaned-homebrew-service check could run — orphaned `homebrew.mxcl.*` agents were never detected. Replaced with an `if/continue` block that checks for orphaned formulas before skipping.
+- Phase 12 (Large File Scan): `find` command printed file paths only — "report with sizes" was unworkable. Added `-exec du -sh {} +` with `sort -rh` to output sizes directly.
+- Phase 11 (Electron Caches): `find` command included `~/Library/Application Support/Claude/` in its results even though the rules prohibit touching it. Added `-not -path "*/Claude/*" -not -path "*/Claude"` guards to the find command in all three cleanup skills (upkeep, cleandeep, cleanquick) and audit.
+- Update skill Step 4: `git symbolic-ref --quiet HEAD` was missing `-C "$d"` — without it the command checked the CWD (the upkeep repo itself) instead of the skill being updated, giving wrong detached-HEAD results. Fixed to `git -C "$d" symbolic-ref --quiet HEAD` and added `Bash(git -C * symbolic-ref *)` to `allowed-tools`.
+- Phase 10 (Shell Config): `~/.zshenv` was listed in Edit `allowed-tools` but omitted from the read/audit list. Added to Phase 10 in upkeep, cleandeep, and audit skills.
+- Phase 9 (Stale Logs): Phase 9 only did `ls ~/Library/Logs/` — the instruction to flag rotated files (`*.old`, `*.log.N`) and large logs (>10MB) had no backing `find` commands. Added explicit `find` commands for both cases.
+- Phase 8 (Build Artifacts): Scan patterns were missing `target/` (Rust/Maven), `Pods/` (CocoaPods), `.build/` (Swift PM), `out/`, `coverage/`, `.nx/`. Added to find command in all four skills.
+
+### Added
+- `dev-tool-caches.md`: Added Playwright, Dart/Flutter pub-cache, Swift PM, Terraform plugin-cache, asdf, volta, mise, Deno, Ruby gem specs, node-gyp.
+- `known-cli-dotdirs.md`: Added fnm, asdf, mise, deno, swiftpm, pub-cache, terraform, ansible, helm, kube, aws, gcloud, pulumi, heroku, fly, vercel, netlify, dagger to valid tool dotdirs. Added windsurf, vagrant.d, phpls to common orphan dotdirs.
+- Update mode: Added `uv`, `bun`, `deno`, `mise` to the package update table (Step 5) in both update and main upkeep skills.
+- Audit skill Rules section expanded: added rules for Apple system dir skipping, Keychains/Preferences protection, conditional-block handling.
+
 ## [1.0.5] - 2026-04-16
 
 ### Fixed

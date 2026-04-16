@@ -11,9 +11,9 @@ labels: bug
 
 ## Which command were you running
 
-- [ ] `/upkeep:clean deep` or `/upkeep:cleandeep`
-- [ ] `/upkeep:clean quick` or `/upkeep:cleanquick`
-- [ ] `/upkeep:clean audit` or `/upkeep:audit`
+- [ ] `/upkeep deep` or `/upkeep:cleandeep`
+- [ ] `/upkeep quick` or `/upkeep:cleanquick`
+- [ ] `/upkeep audit` or `/upkeep:audit`
 - [ ] `/upkeep:update`
 - [ ] Other / unclear
 

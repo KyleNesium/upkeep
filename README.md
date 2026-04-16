@@ -52,7 +52,7 @@ First deep clean on a migrated Mac typically recovers **10–50GB**. Monthly qui
 ## Prerequisites
 
 - **macOS 14+** (Sonoma or later)
-- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (for `/upkeep:clean` slash command)
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (for `/upkeep` slash command)
 - **Homebrew** (optional — Phase 2 is skipped if not installed)
 
 ---
@@ -83,7 +83,7 @@ Then add the skill to your global Claude Code settings via `claude config edit`:
 }
 ```
 
-The skill is then available as `/upkeep:clean`.
+The skill is then available as `/upkeep`.
 
 ---
 
@@ -93,10 +93,10 @@ The skill is then available as `/upkeep:clean`.
 
 ```
 # Mode selector — asks if no keyword detected
-/upkeep:clean               # asks which mode
-/upkeep:clean deep          # full 15-phase audit + cleanup
-/upkeep:clean quick         # routine cache + brew sweep
-/upkeep:clean audit         # full scan, report only, no changes
+/upkeep                     # asks which mode
+/upkeep deep                # full 15-phase audit + cleanup
+/upkeep quick               # routine cache + brew sweep
+/upkeep audit               # full scan, report only, no changes
 
 # Direct sub-skill commands (bypass mode selector)
 /upkeep:cleandeep           # full 15-phase cleanup, no prompt
@@ -129,7 +129,7 @@ Claude will load the skill automatically when you ask for a cleanup in natural l
 The skill scans your system, presents a summary table with reclaimable space per category, and asks before removing anything. Before/after disk usage comparison at the end.
 
 > [!TIP]
-> Run `/upkeep:clean deep` after migrating to a new Mac — migrations carry over gigabytes of orphaned data from apps you no longer use.
+> Run `/upkeep deep` after migrating to a new Mac — migrations carry over gigabytes of orphaned data from apps you no longer use.
 
 ---
 
@@ -277,20 +277,20 @@ upkeep/
 │   └── PULL_REQUEST_TEMPLATE.md
 ├── plugin/
 │   └── skills/
-│       └── upkeep/
-│           ├── SKILL.md           # /upkeep:clean — mode selector + all 15 phases
-│           ├── audit/
-│           │   └── SKILL.md       # /upkeep:audit — report-only scan (all 15 phases)
-│           ├── cleandeep/
-│           │   └── SKILL.md       # /upkeep:cleandeep — full 15-phase cleanup
-│           ├── cleanquick/
-│           │   └── SKILL.md       # /upkeep:cleanquick — fast sweep (phases 1-3, 8, 11, 13)
-│           ├── update/
-│           │   └── SKILL.md       # /upkeep:update — update skills + package managers
-│           └── reference/
-│               ├── dev-tool-caches.md      # Cache paths by tool
-│               ├── apple-system-dirs.md    # Protected system directories
-│               └── known-cli-dotdirs.md    # CLI tool dotdir ownership
+│       ├── upkeep/
+│       │   ├── SKILL.md           # /upkeep — mode selector + all 15 phases
+│       │   └── reference/
+│       │       ├── dev-tool-caches.md      # Cache paths by tool
+│       │       ├── apple-system-dirs.md    # Protected system directories
+│       │       └── known-cli-dotdirs.md    # CLI tool dotdir ownership
+│       ├── audit/
+│       │   └── SKILL.md           # /upkeep:audit — report-only scan (all 15 phases)
+│       ├── cleandeep/
+│       │   └── SKILL.md           # /upkeep:cleandeep — full 15-phase cleanup
+│       ├── cleanquick/
+│       │   └── SKILL.md           # /upkeep:cleanquick — fast sweep (phases 1-3, 8, 11, 13)
+│       └── update/
+│           └── SKILL.md           # /upkeep:update — update skills + package managers
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── LICENSE
@@ -298,7 +298,7 @@ upkeep/
 └── SECURITY.md
 ```
 
-Each skill is a `SKILL.md` — a structured prompt that Claude Code follows when invoked. Sub-skills (`audit`, `cleandeep`, `cleanquick`, `update`) are direct-invocation shortcuts; `/upkeep:clean` is the mode-selector entry point that routes to the same logic. Reference files provide lookup tables for cache locations, protected directories, and CLI tool ownership. No runtime dependencies, no binaries, no build step.
+Each skill is a `SKILL.md` — a structured prompt that Claude Code follows when invoked. Sub-skills (`audit`, `cleandeep`, `cleanquick`, `update`) are direct-invocation shortcuts; `/upkeep` is the mode-selector entry point that routes to the same logic. Reference files provide lookup tables for cache locations, protected directories, and CLI tool ownership. No runtime dependencies, no binaries, no build step.
 
 ---
 
@@ -334,7 +334,7 @@ Prompt-based skill — no executable source code. Tested via live invocation aga
 
 | Command | What's validated |
 |---------|-----------------|
-| `/upkeep:clean` | Mode selection routing, keyword detection |
+| `/upkeep` | Mode selection routing, keyword detection |
 | `/upkeep:cleandeep` | Full 15-phase execution, phase ordering, safety rules |
 | `/upkeep:cleanquick` | Phases 1-3, 8, 11, 13 only; build artifacts report-only enforcement |
 | `/upkeep:audit` | All 15 phases, zero mutations, accurate size reporting |

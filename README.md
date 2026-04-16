@@ -133,12 +133,12 @@ This catches cleanup targets that a hardcoded list would miss — new tools, ren
 |---|----------|:----:|:-----:|:-----:|---------------|----------------|
 | 1 | Baseline | ✓ | ✓ | ✓ | Disk state snapshot for before/after comparison | — |
 | 2 | Homebrew | ✓ | ✓ | ✓ | Outdated packages, stale downloads, orphan deps, deprecated formulae | 500MB – 5GB |
-| 3 | Dev caches | ✓ | ✓ | ✓ | npm, bun, yarn, pnpm, uv, pip, puppeteer, Go, cargo, CocoaPods, Gradle, Maven | 1 – 10GB |
+| 3 | Dev caches | ✓ | ✓ | ✓ | npm, bun, yarn, pnpm, uv, pip, Playwright, Go, cargo, CocoaPods, Gradle, Maven, Dart/Flutter, Swift PM, Terraform, asdf, volta, mise, Deno, Bundler, Bazel, and more | 1 – 10GB |
 | 4 | Orphaned app data | ✓ | | ✓ | Application Support, Containers, dotfiles, Saved State, Crash Reports | 0 – 20GB |
 | 5 | LaunchAgents | ✓ | | ✓ | Stale or unloaded agents from removed apps | < 100MB |
 | 6 | Xcode & dev tools | ✓ | | ✓ | DerivedData, Archives, iOS DeviceSupport, Simulators | 1 – 20GB |
 | 7 | Docker | ✓ | | ✓ | Unused images/containers, orphaned Docker.app data | 0 – 30GB |
-| 8 | Build artifacts | ✓ | report | ✓ | node_modules, .venv, .next, dist, \_\_pycache\_\_ across repos | 0 – 10GB |
+| 8 | Build artifacts | ✓ | report | ✓ | node_modules, .venv, .next, dist, \_\_pycache\_\_, target, Pods, .build, out, coverage, .nx across repos | 0 – 10GB |
 | 9 | Stale logs | ✓ | | ✓ | `~/Library/Logs/` from removed apps, rotated log files | 100MB – 2GB |
 | 10 | Shell config | ✓ | | ✓ | Dead PATH entries, aliases to missing binaries, broken sources | report only |
 | 11 | Electron caches | ✓ | ✓ | ✓ | Slack, Spotify, VS Code, Discord cache bloat | 200MB – 3GB |
@@ -171,7 +171,7 @@ Separate from cleanup entirely. Discovers what's outdated across AI skills and p
 |----------|--------------|
 | `update audit` | Scan everything — show what's outdated, no changes |
 | `update skills` | Git-pull all AI skills in `~/.claude/skills/` |
-| `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, mas, macOS |
+| `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, bun, deno, mise, uv, mas, macOS |
 | `update all` | Skills first, then packages — full sweep with per-category gates |
 
 Nothing applies without your approval. `softwareupdate` (macOS system updates) gets an extra restart warning before running.
@@ -188,7 +188,7 @@ Four sub-modes:
 |------|--------------|
 | `update audit` | Check what's outdated across skills + packages — no changes |
 | `update skills` | Git-pull all AI skills (upkeep, gstack, any others in `~/.claude/skills/`) |
-| `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, mas, macOS updates |
+| `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, bun, deno, mise, uv, mas, macOS updates |
 | `update all` | Skills first, then packages — full sweep |
 
 Everything is confirmation-gated. Nothing applies without your approval. Destructive or disruptive operations (macOS system updates, brew toolchain changes) get extra warnings.

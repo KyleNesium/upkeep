@@ -234,7 +234,14 @@ du -sh ~/Library/Developer/Xcode/iOS\ DeviceSupport/ 2>/dev/null
 du -sh ~/Library/Developer/CoreSimulator/ 2>/dev/null
 ```
 
-Report sizes with notes on reclaimability.
+| Item | Reclaimable? | Notes |
+|------|-------------|-------|
+| DerivedData | Yes | Rebuild cache — always safe to clear. |
+| Archives | Partially | Old app archives. Recent ones may be needed. |
+| iOS DeviceSupport | Mostly | Device debug symbols. Keep ones matching current devices. |
+| CoreSimulator | Partially | Count stale simulators (see note below). |
+
+For CoreSimulator: run `xcrun simctl list devices 2>/dev/null | grep -c Shutdown` and report how many shutdown simulators exist.
 
 ## Phase 7: Docker
 

@@ -116,14 +116,17 @@ Always present before touching anything:
   upkeep    N commits behind
   gstack       up to date
 ── Packages ───────────────────────────────
-  brew         N outdated
-  npm globals  N outdated    pipx  N tools
-  gems         N outdated    rustup  <status>
-  mas          N outdated    macOS  N updates
+  brew         N outdated      npm globals  N outdated
+  pipx         N tools         gems  N outdated
+  rustup       <status>        cargo  <status>
+  uv           <version>       bun  <version>
+  deno         <version>       mise  N outdated
+  mas          N outdated      macOS  N updates
 ── Informational ──────────────────────────
   Claude plugins  N (Claude Code manages)
   Codex skills    N (manual update)
 ```
+Omit any row where the tool is not installed.
 
 **Update Audit:** stop here. "Audit complete — nothing changed."
 If nothing needs updating: "Everything is up to date." — stop.
@@ -181,11 +184,14 @@ Apply? A) Yes  B) Skip macOS updates"
   brew     ✓ upgraded   12 packages
   npm      ↷ skipped
   pipx     ✓ upgraded   2 tools
+  bun      ✓ upgraded   1.1.0 → 1.2.0
+  mise     ✓ upgraded   3 runtimes
   mas      ✓ upgraded   1 app
 ── Informational ────────────────────────────────
   Claude plugins  9  (managed by Claude Code)
   Codex skills   12  (manual update required)
 ```
+Omit rows for tools not installed on this machine.
 
 ## Rules
 

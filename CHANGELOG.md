@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `upkeep/SKILL.md` heading: stale `# /clean` title from before the v1.0.1 rename; corrected to `# /upkeep`.
 - `update/SKILL.md` description: listed old package set (brew, npm, pip, gems, rustup); updated to include bun, deno, mise, uv.
 - `marketplace.json` / `plugin.json` descriptions: same stale package list; updated to match.
+- Update mode Step 3 overview table: uv, bun, deno, mise absent from the template — model would omit them from the overview even when installed. Added all four tools to both `update/SKILL.md` and `upkeep/SKILL.md`.
+- Update mode Step 6 final report template: same omission — uv, bun, deno, mise never appeared in the example output. Added representative rows; note to omit tools not installed.
+- `audit/SKILL.md` Phase 6: cleandeep and upkeep got a CoreSimulator reclaimability table in this pass; audit still had the old "report sizes with notes" prose. Added matching table with `xcrun simctl list devices | grep -c Shutdown` count step (report-only; no delete offered).
 
 ### Added
 

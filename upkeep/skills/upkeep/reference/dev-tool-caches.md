@@ -28,4 +28,6 @@ Known dev tool cache locations. Check each, report size, skip any that don't exi
 | mise | `~/.mise/installs/` | `mise prune` |
 | Deno | `~/.deno/` | `deno cache --reload` (rebuilds on demand) |
 | Ruby gems | `~/.gem/specs/` | `gem cleanup` |
+| Bundler | `~/.bundle/cache/` | `rm -rf ~/.bundle/cache/` |
+| Bazel | `~/.cache/bazel/` | `bazel clean --expunge` |
 | node-gyp | `~/Library/Caches/node-gyp/` | `rm -rf ~/Library/Caches/node-gyp/` |

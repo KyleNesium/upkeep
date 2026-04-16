@@ -18,10 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Phase 8 (Build Artifacts): Scan patterns were missing `target/` (Rust/Maven), `Pods/` (CocoaPods), `.build/` (Swift PM), `out/`, `coverage/`, `.nx/`. Added to find command in all four skills.
 
 ### Added
-- `dev-tool-caches.md`: Added Playwright, Dart/Flutter pub-cache, Swift PM, Terraform plugin-cache, asdf, volta, mise, Deno, Ruby gem specs, node-gyp.
+- `dev-tool-caches.md`: Added Playwright, Dart/Flutter pub-cache, Swift PM, Terraform plugin-cache, asdf, volta, mise, Deno, Ruby gem specs, node-gyp, Bundler, Bazel.
 - `known-cli-dotdirs.md`: Added fnm, asdf, mise, deno, swiftpm, pub-cache, terraform, ansible, helm, kube, aws, gcloud, pulumi, heroku, fly, vercel, netlify, dagger to valid tool dotdirs. Added windsurf, vagrant.d, phpls to common orphan dotdirs.
 - Update mode: Added `uv`, `bun`, `deno`, `mise` to the package update table (Step 5) in both update and main upkeep skills.
 - Audit skill Rules section expanded: added rules for Apple system dir skipping, Keychains/Preferences protection, conditional-block handling.
+
+### Fixed (additional)
+- Phase 9 (Stale Logs): rotated log `find` command had `-o \( -name "*.log.[0-9]*" \)` as a top-level OR expression, not inside the `-maxdepth 3` scope — the depth limit only applied to the first group, so the scan could traverse unboundedly into the second. Merged all patterns into a single grouped expression.
+- Phase 2 (Homebrew): `brew leaves` prompt was vague ("ask if any should go") — no structure for user input. Now explicitly prompts: "Uninstall any of these? (space-separated names, or 'none')" to match the selection format used by Phase 5 (LaunchAgents).
+- Phase 6 (Xcode): CoreSimulator row offered `xcrun simctl delete unavailable` with no preview of what would be removed. Now counts shutdown simulators first (`xcrun simctl list devices | grep -c Shutdown`) before offering the delete command.
 
 ## [1.0.5] - 2026-04-16
 

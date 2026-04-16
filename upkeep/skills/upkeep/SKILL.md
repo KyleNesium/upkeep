@@ -180,7 +180,8 @@ If the output says "skipped", skip this entire phase.
    "No orphan dependencies to remove." If packages are listed, show them all
    and ask for confirmation before running the live `brew autoremove`.
 4. `brew doctor 2>&1 | grep -iE "deprecated|warning|error"` — health issues
-5. `brew leaves` — top-level packages. Present the list and ask if any should go.
+5. `brew leaves` — top-level packages. Present the list and prompt:
+   "Uninstall any of these? (space-separated names, or 'none')"
 6. Check Xcode Command Line Tools: `xcode-select --version` and compare against
    what `brew doctor` reports. If outdated, tell the user to run the update manually
    (requires sudo + interactive prompt).
@@ -403,7 +404,7 @@ du -sh ~/Library/Developer/CoreSimulator/ 2>/dev/null
 | DerivedData | Yes | Rebuild cache. Always safe. |
 | Archives | Ask user | Old app archives. May want to keep recent ones. |
 | iOS DeviceSupport | Mostly | Old device symbols. Keep ones matching current devices. |
-| CoreSimulator | Partially | `xcrun simctl delete unavailable` removes stale ones safely. |
+| CoreSimulator | Partially | Before offering deletion, count with: `xcrun simctl list devices 2>/dev/null \| grep -c Shutdown`. Offer: "`xcrun simctl delete unavailable`" |
 
 ## Phase 7: Docker (Deep + Audit)
 
@@ -481,8 +482,7 @@ Flag:
 1. Log directories from uninstalled apps
 2. Rotated log files — scan for them:
 ```bash
-find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" \) \
-  -o \( -name "*.log.[0-9]*" \) \
+find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
   2>/dev/null | xargs du -sh 2>/dev/null | sort -rh
 ```
 3. Any single log file over 10MB:

@@ -63,7 +63,7 @@ Then add the skill to your global Claude Code settings via `claude config edit`:
     "*": {
       "skills": {
         "upkeep": {
-          "path": "/path/to/upkeep/skills/upkeep"
+          "path": "/path/to/upkeep/plugin/skills/upkeep"
         }
       }
     }
@@ -80,16 +80,23 @@ The skill is then available as `/upkeep:clean`.
 ### Slash commands
 
 ```
+# Mode selector — asks if no keyword detected
 /upkeep:clean               # asks which mode
 /upkeep:clean deep          # full 15-phase audit + cleanup
 /upkeep:clean quick         # routine cache + brew sweep
 /upkeep:clean audit         # full scan, report only, no changes
 
-/upkeep:clean update        # asks which update sub-mode
-/upkeep:clean update audit  # check what's outdated, no changes
-/upkeep:clean update skills # update AI skills only
-/upkeep:clean update packages # upgrade brew, npm, pip, gems, etc.
-/upkeep:clean update all    # skills + packages, full sweep
+# Direct sub-skill commands (bypass mode selector)
+/upkeep:deepclean           # full 15-phase cleanup, no prompt
+/upkeep:cleanquick          # fast sweep (phases 1-3, 8, 11, 13), no prompt
+/upkeep:audit               # report-only scan, no prompt
+
+# Update mode
+/upkeep:update              # asks which update sub-mode
+/upkeep:update audit        # check what's outdated, no changes
+/upkeep:update skills       # update AI skills only
+/upkeep:update packages     # upgrade brew, npm, pip, gems, etc.
+/upkeep:update all          # skills + packages, full sweep
 ```
 
 ### Trigger phrases
@@ -181,7 +188,7 @@ Nothing applies without your approval. `softwareupdate` (macOS system updates) g
 
 ## Updating
 
-Say **"update everything"** in Claude Code, or run `/upkeep:clean update`.
+Say **"update everything"** in Claude Code, or run `/upkeep:update`.
 
 Four sub-modes:
 
@@ -256,28 +263,38 @@ upkeep/
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
 │   └── PULL_REQUEST_TEMPLATE.md
-├── skills/
-│   └── upkeep/
-│       ├── SKILL.md           # Skill definition (15 phases, rules, reporting)
-│       └── reference/
-│           ├── dev-tool-caches.md      # Cache paths by tool
-│           ├── apple-system-dirs.md    # Protected system directories
-│           └── known-cli-dotdirs.md    # CLI tool dotdir ownership
+├── plugin/
+│   └── skills/
+│       └── upkeep/
+│           ├── SKILL.md           # /upkeep:clean — mode selector + all 15 phases
+│           ├── audit/
+│           │   └── SKILL.md       # /upkeep:audit — report-only scan (all 15 phases)
+│           ├── deepclean/
+│           │   └── SKILL.md       # /upkeep:deepclean — full 15-phase cleanup
+│           ├── cleanquick/
+│           │   └── SKILL.md       # /upkeep:cleanquick — fast sweep (phases 1-3, 8, 11, 13)
+│           ├── update/
+│           │   └── SKILL.md       # /upkeep:update — update skills + package managers
+│           └── reference/
+│               ├── dev-tool-caches.md      # Cache paths by tool
+│               ├── apple-system-dirs.md    # Protected system directories
+│               └── known-cli-dotdirs.md    # CLI tool dotdir ownership
 ├── CHANGELOG.md
+├── CONTRIBUTING.md
 ├── LICENSE
 ├── README.md
 └── SECURITY.md
 ```
 
-The entire skill is a single `SKILL.md` file — a structured prompt that Claude Code follows when invoked. Reference files provide lookup tables for cache locations, protected directories, and CLI tool ownership. No runtime dependencies, no binaries, no build step.
+Each skill is a `SKILL.md` — a structured prompt that Claude Code follows when invoked. Sub-skills (`audit`, `deepclean`, `cleanquick`, `update`) are direct-invocation shortcuts; `/upkeep:clean` is the mode-selector entry point that routes to the same logic. Reference files provide lookup tables for cache locations, protected directories, and CLI tool ownership. No runtime dependencies, no binaries, no build step.
 
 ---
 
 ## Contributing
 
 1. Fork the repo
-2. Edit `skills/upkeep/SKILL.md`
-3. Test by running `/upkeep:clean` in Claude Code pointed at your fork
+2. Edit the relevant `SKILL.md` — the main skill at `plugin/skills/upkeep/SKILL.md`, or a sub-skill (`audit/`, `deepclean/`, `cleanquick/`, `update/`)
+3. Test by running the affected command in Claude Code pointed at your fork
 4. Open a PR with a description of what you changed and why
 
 Ideas for contributions:
@@ -301,7 +318,15 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-Prompt-based skill — no executable source code. Tested via live invocation of `/upkeep:clean deep`, `/upkeep:clean quick`, and `/upkeep:clean audit` on macOS. Validation covers mode selection, phase execution order, safety rule adherence, and disk reporting accuracy.
+Prompt-based skill — no executable source code. Tested via live invocation against all five entry points on macOS.
+
+| Command | What's validated |
+|---------|-----------------|
+| `/upkeep:clean` | Mode selection routing, keyword detection |
+| `/upkeep:deepclean` | Full 15-phase execution, phase ordering, safety rules |
+| `/upkeep:cleanquick` | Phases 1-3, 8, 11, 13 only; build artifacts report-only enforcement |
+| `/upkeep:audit` | All 15 phases, zero mutations, accurate size reporting |
+| `/upkeep:update` | Sub-mode detection, skill discovery, package manager audit, per-category gates |
 
 ---
 

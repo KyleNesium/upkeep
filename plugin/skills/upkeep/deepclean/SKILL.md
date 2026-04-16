@@ -1,6 +1,6 @@
 ---
 name: deepclean
-version: 1.1.0
+version: 1.0.0
 author: KyleNesium
 description: |
   Full 15-phase macOS deep clean: Homebrew, dev caches, orphaned app data,
@@ -100,12 +100,12 @@ Then run a passive update check (at most once per 24h, silent on all failures):
 
 ```bash
 if [ "${UPKEEP_SKIP_UPDATE_CHECK:-}" != "1" ] && command -v git >/dev/null 2>&1; then
-  _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../..\.last-update-check"
+  _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../../../.last-update-check"
   _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || echo 0)
   if [ $(( $(date +%s) - $_LAST )) -gt 86400 ]; then
-    git -C "${CLAUDE_SKILL_DIR}/../../.." fetch --tags --quiet origin main 2>/dev/null
+    git -C "${CLAUDE_SKILL_DIR}/../../../.." fetch --tags --quiet origin main 2>/dev/null
     touch "$_CHECK_FILE" 2>/dev/null
-    _BEHIND=$(git -C "${CLAUDE_SKILL_DIR}/../../.." log HEAD..origin/main --oneline \
+    _BEHIND=$(git -C "${CLAUDE_SKILL_DIR}/../../../.." log HEAD..origin/main --oneline \
       2>/dev/null | wc -l | tr -d ' ')
     [ "${_BEHIND:-0}" -gt 0 ] && \
       echo "ℹ upkeep update available — run: /upkeep:update"

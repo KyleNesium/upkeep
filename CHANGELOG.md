@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `upkeep/SKILL.md` Update Mode Step 2: package discovery block missing `uv`, `bun`, `deno`, `mise` — had drifted from `update/SKILL.md`.
 - `upkeep/SKILL.md` heading: stale `# /clean` title from before the v1.0.1 rename; corrected to `# /upkeep`.
 - `update/SKILL.md` description: listed old package set (brew, npm, pip, gems, rustup); updated to include bun, deno, mise, uv.
+- `README.md` header tagline: same stale package manager list; updated to match.
+- `upkeep/SKILL.md` Update Mode Step 1: failure branch said "check for `.git`" — misleading because the `.git` check had already failed. Clarified to "check for `plugin.json`", matching the identical wording in `update/SKILL.md`.
 - `marketplace.json` / `plugin.json` descriptions: same stale package list; updated to match.
 - Update mode Step 3 overview table: uv, bun, deno, mise absent from the template — model would omit them from the overview even when installed. Added all four tools to both `update/SKILL.md` and `upkeep/SKILL.md`.
 - Update mode Step 6 final report template: same omission — uv, bun, deno, mise never appeared in the example output. Added representative rows; note to omit tools not installed.

@@ -4,7 +4,7 @@
 
 **macOS system cleanup and updater Skill for Claude Code**
 
-Discovery-based disk audit, cleanup, and one-command updates. Finds orphaned app data, stale caches, dead LaunchAgents, and configuration drift. Also updates AI skills (upkeep, gstack, etc.) and package managers (brew, npm, pip, gems, rustup) in one sweep.
+Discovery-based disk audit, cleanup, and one-command updates. Finds orphaned app data, stale caches, dead LaunchAgents, and configuration drift. Also updates AI skills (upkeep, gstack, etc.) and package managers (brew, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep.
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-skill-7C3AED?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgMkw0IDdWMTdMMTIgMjJMMjAgMTdWN0wxMiAyWiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)

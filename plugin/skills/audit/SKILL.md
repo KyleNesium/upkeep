@@ -1,6 +1,6 @@
 ---
 name: audit
-version: 1.0.0
+version: 1.0.1
 author: KyleNesium
 description: |
   Full 15-phase macOS disk audit — report only, no changes made.

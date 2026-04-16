@@ -1,6 +1,6 @@
 ---
 name: cleandeep
-version: 1.0.0
+version: 1.0.1
 author: KyleNesium
 description: |
   Full 15-phase macOS deep clean: Homebrew, dev caches, orphaned app data,

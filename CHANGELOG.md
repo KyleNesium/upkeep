@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-04-16
+
+### Fixed
+- Sub-skills (`audit`, `cleandeep`, `cleanquick`, `update`) appearing in autocomplete without the `upkeep:` namespace prefix — the `name:` field in each skill's `SKILL.md` was set to the bare skill name (e.g. `name: audit`) rather than the namespaced name (`name: upkeep:audit`). Claude Code uses the `name` field directly as the autocomplete entry, so the fix is to include the full `upkeep:` prefix in every sub-skill's `name` field.
+- Fixed version mismatch between `marketplace.json` (was `1.0.3`) and `plugin.json` (was `1.0.4`).
+
 ## [1.0.4] - 2026-04-16
 
 ### Fixed

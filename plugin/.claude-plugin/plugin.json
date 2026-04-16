@@ -1,0 +1,25 @@
+{
+  "name": "upkeep",
+  "version": "1.0.0",
+  "description": "macOS system cleanup and updater. Finds orphaned app data, stale caches, dead LaunchAgents, and configuration drift. Also updates AI skills and package managers (brew, npm, pip, gems, rustup) in one sweep. Four modes: deep, quick, audit, update.",
+  "author": {
+    "name": "KyleNesium",
+    "url": "https://github.com/KyleNesium"
+  },
+  "homepage": "https://github.com/KyleNesium/upkeep",
+  "repository": "https://github.com/KyleNesium/upkeep",
+  "license": "MIT",
+  "keywords": [
+    "macos",
+    "cleanup",
+    "disk-space",
+    "system-maintenance",
+    "homebrew",
+    "cache-cleanup",
+    "orphan-detection",
+    "launchagents",
+    "claude-code",
+    "claude-skill",
+    "skill"
+  ]
+}

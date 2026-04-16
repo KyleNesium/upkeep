@@ -1,6 +1,6 @@
 ---
 name: audit
-version: 1.0.0
+version: 1.0.1
 author: KyleNesium
 description: |
   Full 15-phase macOS disk audit — report only, no changes made.
@@ -81,12 +81,12 @@ Then run a passive update check (at most once per 24h, silent on all failures):
 
 ```bash
 if [ "${UPKEEP_SKIP_UPDATE_CHECK:-}" != "1" ] && command -v git >/dev/null 2>&1; then
-  _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../../../.last-update-check"
+  _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../../.last-update-check"
   _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || echo 0)
   if [ $(( $(date +%s) - $_LAST )) -gt 86400 ]; then
-    git -C "${CLAUDE_SKILL_DIR}/../../../.." fetch --tags --quiet origin main 2>/dev/null
+    git -C "${CLAUDE_SKILL_DIR}/../../.." fetch --tags --quiet origin main 2>/dev/null
     touch "$_CHECK_FILE" 2>/dev/null
-    _BEHIND=$(git -C "${CLAUDE_SKILL_DIR}/../../../.." log HEAD..origin/main --oneline \
+    _BEHIND=$(git -C "${CLAUDE_SKILL_DIR}/../../.." log HEAD..origin/main --oneline \
       2>/dev/null | wc -l | tr -d ' ')
     [ "${_BEHIND:-0}" -gt 0 ] && \
       echo "ℹ upkeep update available — run: /upkeep:update"
@@ -113,7 +113,7 @@ Report:
 
 ### Step 1: Known cache locations
 
-Read the cache table from ${CLAUDE_SKILL_DIR}/../reference/dev-tool-caches.md.
+Read the cache table from ${CLAUDE_SKILL_DIR}/../upkeep/reference/dev-tool-caches.md.
 Check each listed location. Report size. Skip any that don't exist.
 
 ### Step 2: Discovery scan
@@ -151,7 +151,7 @@ for app in /Applications/*.app /Applications/Utilities/*.app ~/Applications/*.ap
 done | sort -u
 ```
 
-Cross-reference ${CLAUDE_SKILL_DIR}/../reference/known-cli-dotdirs.md for CLI tools.
+Cross-reference ${CLAUDE_SKILL_DIR}/../upkeep/reference/known-cli-dotdirs.md for CLI tools.
 
 ### Step 2: Scan Application Support
 
@@ -159,7 +159,7 @@ Cross-reference ${CLAUDE_SKILL_DIR}/../reference/known-cli-dotdirs.md for CLI to
 ls ~/Library/Application\ Support/ 2>/dev/null
 ```
 
-Skip entries matching ${CLAUDE_SKILL_DIR}/../reference/apple-system-dirs.md.
+Skip entries matching ${CLAUDE_SKILL_DIR}/../upkeep/reference/apple-system-dirs.md.
 Report orphan candidates over 1MB with size and mtime (e.g., "3mo ago (2026-01-13)").
 
 ### Step 3: Scan Containers
@@ -177,7 +177,7 @@ du -sh ~/.[!.]* 2>/dev/null | sort -rh | head -20
 ```
 
 Flag dotdirs over 100MB not corresponding to an installed tool (reference:
-${CLAUDE_SKILL_DIR}/../reference/known-cli-dotdirs.md). Flag as "unknown — investigate".
+${CLAUDE_SKILL_DIR}/../upkeep/reference/known-cli-dotdirs.md). Flag as "unknown — investigate".
 
 ### Step 5: Saved Application State
 

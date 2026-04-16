@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-04-16
+
+### Fixed
+- `/upkeep` skill not appearing in slash command autocomplete — skill `name` field was `clean` instead of `upkeep`.
+- Sub-skills (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`, `/upkeep:update`) not appearing — they were nested inside `skills/upkeep/` but Claude Code only discovers skills one level deep. Moved all sub-skills to the top of `skills/` and updated `CLAUDE_SKILL_DIR` relative paths accordingly.
+- Plugin not loading in sessions outside the project directory — `plugin.json` was missing from the plugin source directory (`plugin/.claude-plugin/plugin.json`) so the installer never copied it into the cache.
+
 ## [1.0.0] - 2026-04-16
 
 ### Added
@@ -23,4 +30,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CONTRIBUTING.md` with path depth reference table for sub-skill authors.
 - `VERSION` file for programmatic version reads during update checks.
 
+[1.0.1]: https://github.com/KyleNesium/upkeep/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/KyleNesium/upkeep/releases/tag/v1.0.0

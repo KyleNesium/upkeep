@@ -1,6 +1,6 @@
 ---
 name: upkeep
-version: 1.0.0
+version: 1.0.1
 author: KyleNesium
 description: |
   macOS system cleanup. Three modes: deep (full 15-phase audit + cleanup),

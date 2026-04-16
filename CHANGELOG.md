@@ -8,31 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.6] - 2026-04-16
 
 ### Fixed
-- `touch` command was missing from `allowed-tools` in all four cleanup/audit skills — the passive update check calls `touch "$_CHECK_FILE"` to throttle git fetches to once per 24h, but without this permission the file was never written, causing a redundant fetch on every single run.
-- Phase 5 (LaunchAgents): `[[ "$label" == homebrew.mxcl.* ]] && continue` short-circuited before the orphaned-homebrew-service check could run — orphaned `homebrew.mxcl.*` agents were never detected. Replaced with an `if/continue` block that checks for orphaned formulas before skipping.
-- Phase 12 (Large File Scan): `find` command printed file paths only — "report with sizes" was unworkable. Added `-exec du -sh {} +` with `sort -rh` to output sizes directly.
-- Phase 11 (Electron Caches): `find` command included `~/Library/Application Support/Claude/` in its results even though the rules prohibit touching it. Added `-not -path "*/Claude/*" -not -path "*/Claude"` guards to the find command in all three cleanup skills (upkeep, cleandeep, cleanquick) and audit.
-- Update skill Step 4: `git symbolic-ref --quiet HEAD` was missing `-C "$d"` — without it the command checked the CWD (the upkeep repo itself) instead of the skill being updated, giving wrong detached-HEAD results. Fixed to `git -C "$d" symbolic-ref --quiet HEAD` and added `Bash(git -C * symbolic-ref *)` to `allowed-tools`.
-- Phase 10 (Shell Config): `~/.zshenv` was listed in Edit `allowed-tools` but omitted from the read/audit list. Added to Phase 10 in upkeep, cleandeep, and audit skills.
-- Phase 9 (Stale Logs): Phase 9 only did `ls ~/Library/Logs/` — the instruction to flag rotated files (`*.old`, `*.log.N`) and large logs (>10MB) had no backing `find` commands. Added explicit `find` commands for both cases.
-- Phase 8 (Build Artifacts): Scan patterns were missing `target/` (Rust/Maven), `Pods/` (CocoaPods), `.build/` (Swift PM), `out/`, `coverage/`, `.nx/`. Added to find command in all four skills.
+
+- `touch` missing from `allowed-tools` in all four cleanup/audit skills — the 24h update-check throttle silently broke on first run (check file never written → redundant fetch every invocation).
+- Phase 5 (LaunchAgents): `[[ "$label" == homebrew.mxcl.* ]] && continue` short-circuited before orphan detection — orphaned Homebrew agents were never flagged. Replaced with `if/continue` block that checks the formula list first.
+- Phase 12 (Large File Scan): `find` printed bare paths with no sizes. Added `-exec du -sh {} +` and `sort -rh`.
+- Phase 11 (Electron Caches): `find` included `~/Library/Application Support/Claude/`. Added `-not -path "*/Claude/*" -not -path "*/Claude"` guards to all four skills.
+- Update skill Step 4: `git symbolic-ref --quiet HEAD` missing `-C "$d"` — checked the upkeep repo instead of the skill being updated. Fixed to `git -C "$d" symbolic-ref --quiet HEAD`; added `Bash(git -C * symbolic-ref *)` to `allowed-tools`.
+- Phase 10 (Shell Config): `~/.zshenv` in `allowed-tools` Edit list but missing from the Phase 10 read/audit list in upkeep, cleandeep, and audit.
+- Phase 9 (Stale Logs): rotated-file and large-log detection was prose-only — no backing `find` commands. Added `find` with `-exec du -sh {} +` for both cases.
+- Phase 9 (Stale Logs): rotated log `find` had a top-level `-o` group outside `-maxdepth 3` scope — depth limit only applied to the first pattern group. Merged all patterns into one grouped expression.
+- Phase 9 (Stale Logs): rotated log `find` piped to `xargs du -sh` — on BSD macOS, empty `xargs` input still calls `du -sh` with no args, reporting the current directory. Replaced with `-exec du -sh {} +` throughout (audit, cleandeep, upkeep).
+- Phase 8 (Build Artifacts): Scan patterns missing `target/` (Rust/Maven), `Pods/` (CocoaPods), `.build/` (Swift PM), `out/`, `coverage/`, `.nx/`. Added to all four skills.
+- Phase 6 (Xcode): CoreSimulator cleanup offered `xcrun simctl delete unavailable` blind — no preview of what would be removed. Now counts shutdown simulators first; command moved out of markdown table cell to avoid pipe-escape ambiguity.
+- Phase 2 (Homebrew): `brew leaves` prompt was vague — no defined input format. Now prompts "Uninstall any of these? (space-separated names, or 'none')" to match Phase 5 style.
+- `update/SKILL.md` allowed-tools: `bun`, `deno`, `mise`, `uv` used in Steps 2 and 5 but missing — those upgrade commands were silently blocked.
+- `upkeep/SKILL.md` allowed-tools: `deno` and `mise` missing from update-mode section.
+- `upkeep/SKILL.md` Update Mode Step 2: package discovery block missing `uv`, `bun`, `deno`, `mise` — had drifted from `update/SKILL.md`.
+- `upkeep/SKILL.md` heading: stale `# /clean` title from before the v1.0.1 rename; corrected to `# /upkeep`.
+- `update/SKILL.md` description: listed old package set (brew, npm, pip, gems, rustup); updated to include bun, deno, mise, uv.
+- `marketplace.json` / `plugin.json` descriptions: same stale package list; updated to match.
 
 ### Added
-- `dev-tool-caches.md`: Added Playwright, Dart/Flutter pub-cache, Swift PM, Terraform plugin-cache, asdf, volta, mise, Deno, Ruby gem specs, node-gyp, Bundler, Bazel.
-- `known-cli-dotdirs.md`: Added fnm, asdf, mise, deno, swiftpm, pub-cache, terraform, ansible, helm, kube, aws, gcloud, pulumi, heroku, fly, vercel, netlify, dagger to valid tool dotdirs. Added windsurf, vagrant.d, phpls to common orphan dotdirs.
-- Update mode: Added `uv`, `bun`, `deno`, `mise` to the package update table (Step 5) in both update and main upkeep skills.
-- Audit skill Rules section expanded: added rules for Apple system dir skipping, Keychains/Preferences protection, conditional-block handling.
 
-### Fixed (additional)
-- Phase 9 (Stale Logs): rotated log `find` command had `-o \( -name "*.log.[0-9]*" \)` as a top-level OR expression, not inside the `-maxdepth 3` scope — the depth limit only applied to the first group, so the scan could traverse unboundedly into the second. Merged all patterns into a single grouped expression.
-- Phase 2 (Homebrew): `brew leaves` prompt was vague ("ask if any should go") — no structure for user input. Now explicitly prompts: "Uninstall any of these? (space-separated names, or 'none')" to match the selection format used by Phase 5 (LaunchAgents).
-- Phase 6 (Xcode): CoreSimulator row offered `xcrun simctl delete unavailable` with no preview of what would be removed. Now counts shutdown simulators first; command moved out of table cell to avoid markdown pipe-escaping ambiguity.
-- `update/SKILL.md` allowed-tools: `bun`, `deno`, `mise`, `uv` were used in Steps 2 and 5 but missing — the skill would silently block those upgrade commands.
-- `upkeep/SKILL.md` allowed-tools: `deno` and `mise` missing from update-mode entries.
-- `upkeep/SKILL.md` Update Mode Step 2: orchestrator's package discovery block was missing `uv`, `bun`, `deno`, `mise` — had drifted from `update/SKILL.md` where they were added.
-- Phase 9 (Stale Logs): rotated log `find` piped to `xargs du -sh`; on BSD macOS, empty `xargs` input still invokes `du -sh` with no args, reporting the current directory. Replaced with `-exec du -sh {} +` to match the pattern used in Phase 9 step 3 (audit, cleandeep, upkeep).
-- `upkeep/SKILL.md` heading: still said `# /clean — macOS System Cleanup` from before the v1.0.1 rename — corrected to `# /upkeep`.
-- `update/SKILL.md` description: listed old package manager set (brew, npm, pip, gems, rustup); updated to include bun, deno, mise, uv.
+- `dev-tool-caches.md`: Playwright, Dart/Flutter, Swift PM, Terraform, asdf, volta, mise, Deno, Ruby gem specs, node-gyp, Bundler, Bazel (12 new entries).
+- `known-cli-dotdirs.md`: fnm, asdf, mise, deno, swiftpm, pub-cache, terraform, ansible, helm, kube, aws, gcloud, pulumi, heroku, fly, vercel, netlify, dagger added to valid tool dotdirs; windsurf, vagrant.d, phpls added to common orphan dotdirs (21 new entries).
+- Update mode: `uv`, `bun`, `deno`, `mise` added to the Step 5 package update table in both `update/SKILL.md` and `upkeep/SKILL.md`.
+- Audit skill Rules: added explicit rules for Apple system dir skipping, Keychains/Preferences protection, and conditional-block handling.
 
 ## [1.0.5] - 2026-04-16
 

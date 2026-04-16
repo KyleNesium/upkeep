@@ -67,10 +67,10 @@ Announce (`Mode: Update / <sub-mode>`) before proceeding.
 Check git is installed: `command -v git` — if missing, skip skills section and
 note: "Install git: `xcode-select --install`"
 
-**upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../../.." rev-parse --show-toplevel 2>&1`
+**upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
 - Fails → check for `plugin.json`: if present, "managed by plugin manager";
   otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
-- Succeeds → verify remote: `git -C "${CLAUDE_SKILL_DIR}/../../../.." remote get-url origin`
+- Succeeds → verify remote: `git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin`
   must contain `KyleNesium/upkeep` or skip with "unexpected remote URL".
 
 **Other Claude skills (discovery-based):**

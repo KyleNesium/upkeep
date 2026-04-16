@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-04-16
+
+### Fixed
+
+- `touch` missing from `allowed-tools` in all four cleanup/audit skills — the 24h update-check throttle silently broke on first run (check file never written → redundant fetch every invocation).
+- Phase 5 (LaunchAgents): `[[ "$label" == homebrew.mxcl.* ]] && continue` short-circuited before orphan detection — orphaned Homebrew agents were never flagged. Replaced with `if/continue` block that checks the formula list first.
+- Phase 12 (Large File Scan): `find` printed bare paths with no sizes. Added `-exec du -sh {} +` and `sort -rh`.
+- Phase 11 (Electron Caches): `find` included `~/Library/Application Support/Claude/`. Added `-not -path "*/Claude/*" -not -path "*/Claude"` guards to all four skills.
+- Update skill Step 4: `git symbolic-ref --quiet HEAD` missing `-C "$d"` — checked the upkeep repo instead of the skill being updated. Fixed to `git -C "$d" symbolic-ref --quiet HEAD`; added `Bash(git -C * symbolic-ref *)` to `allowed-tools`.
+- Phase 10 (Shell Config): `~/.zshenv` in `allowed-tools` Edit list but missing from the Phase 10 read/audit list in upkeep, cleandeep, and audit.
+- Phase 9 (Stale Logs): rotated-file and large-log detection was prose-only — no backing `find` commands. Added `find` with `-exec du -sh {} +` for both cases.
+- Phase 9 (Stale Logs): rotated log `find` had a top-level `-o` group outside `-maxdepth 3` scope — depth limit only applied to the first pattern group. Merged all patterns into one grouped expression.
+- Phase 9 (Stale Logs): rotated log `find` piped to `xargs du -sh` — on BSD macOS, empty `xargs` input still calls `du -sh` with no args, reporting the current directory. Replaced with `-exec du -sh {} +` throughout (audit, cleandeep, upkeep).
+- Phase 8 (Build Artifacts): Scan patterns missing `target/` (Rust/Maven), `Pods/` (CocoaPods), `.build/` (Swift PM), `out/`, `coverage/`, `.nx/`. Added to all four skills.
+- Phase 6 (Xcode): CoreSimulator cleanup offered `xcrun simctl delete unavailable` blind — no preview of what would be removed. Now counts shutdown simulators first; command moved out of markdown table cell to avoid pipe-escape ambiguity.
+- Phase 2 (Homebrew): `brew leaves` prompt was vague — no defined input format. Now prompts "Uninstall any of these? (space-separated names, or 'none')" to match Phase 5 style.
+- `update/SKILL.md` allowed-tools: `bun`, `deno`, `mise`, `uv` used in Steps 2 and 5 but missing — those upgrade commands were silently blocked.
+- `upkeep/SKILL.md` allowed-tools: `deno` and `mise` missing from update-mode section.
+- `upkeep/SKILL.md` Update Mode Step 2: package discovery block missing `uv`, `bun`, `deno`, `mise` — had drifted from `update/SKILL.md`.
+- `upkeep/SKILL.md` heading: stale `# /clean` title from before the v1.0.1 rename; corrected to `# /upkeep`.
+- `update/SKILL.md` description: listed old package set (brew, npm, pip, gems, rustup); updated to include bun, deno, mise, uv.
+- `README.md` header tagline: same stale package manager list; updated to match.
+- `upkeep/SKILL.md` Update Mode Step 1: failure branch said "check for `.git`" — misleading because the `.git` check had already failed. Clarified to "check for `plugin.json`", matching the identical wording in `update/SKILL.md`.
+- `marketplace.json` / `plugin.json` descriptions: same stale package list; updated to match.
+- Update mode Step 3 overview table: uv, bun, deno, mise absent from the template — model would omit them from the overview even when installed. Added all four tools to both `update/SKILL.md` and `upkeep/SKILL.md`.
+- Update mode Step 6 final report template: same omission — uv, bun, deno, mise never appeared in the example output. Added representative rows; note to omit tools not installed.
+- `audit/SKILL.md` Phase 6: cleandeep and upkeep got a CoreSimulator reclaimability table in this pass; audit still had the old "report sizes with notes" prose. Added matching table with `xcrun simctl list devices | grep -c Shutdown` count step (report-only; no delete offered).
+
+### Added
+
+- `dev-tool-caches.md`: Playwright, Dart/Flutter, Swift PM, Terraform, asdf, volta, mise, Deno, Ruby gem specs, node-gyp, Bundler, Bazel (12 new entries).
+- `known-cli-dotdirs.md`: fnm, asdf, mise, deno, swiftpm, pub-cache, terraform, ansible, helm, kube, aws, gcloud, pulumi, heroku, fly, vercel, netlify, dagger added to valid tool dotdirs; windsurf, vagrant.d, phpls added to common orphan dotdirs (21 new entries).
+- Update mode: `uv`, `bun`, `deno`, `mise` added to the Step 5 package update table in both `update/SKILL.md` and `upkeep/SKILL.md`.
+- Audit skill Rules: added explicit rules for Apple system dir skipping, Keychains/Preferences protection, and conditional-block handling.
+
 ## [1.0.5] - 2026-04-16
 
 ### Fixed

@@ -1,13 +1,13 @@
 ---
 name: upkeep:update
-version: 1.0.5
+version: 1.0.6
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep. Discovers what's outdated
   across git-based skills and package managers, then upgrades with per-category
   confirmation gates. Four sub-modes: audit (check only), skills (git-pull all
-  AI skills), packages (upgrade brew, npm, pip, gems, rustup, mas, macOS),
-  all (skills then packages).
+  AI skills), packages (upgrade brew, npm, pipx, gems, rustup, bun, deno, mise,
+  uv, mas, macOS), all (skills then packages).
   Use when: "update upkeep", "update my AI skills", "update everything",
   "check for updates", "upgrade my packages", "update all my tools",
   "is upkeep up to date", "self-update", "upgrade brew", "update skills".
@@ -31,6 +31,10 @@ allowed-tools:
   - Bash(cargo *)
   - Bash(mas *)
   - Bash(softwareupdate *)
+  - Bash(bun *)
+  - Bash(deno *)
+  - Bash(mise *)
+  - Bash(uv *)
   # Git ops (scoped to specific subcommands, never global git ops)
   - Bash(git -C * rev-parse *)
   - Bash(git -C * status *)
@@ -39,6 +43,7 @@ allowed-tools:
   - Bash(git -C * pull *)
   - Bash(git -C * remote *)
   - Bash(git symbolic-ref *)
+  - Bash(git -C * symbolic-ref *)
   - Read
   - Glob
 ---
@@ -95,6 +100,10 @@ pipx list --short 2>/dev/null
 gem outdated 2>/dev/null
 rustup check 2>/dev/null
 cargo install-update --list 2>/dev/null
+command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
+command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
+command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
+command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
 mas outdated 2>/dev/null
 softwareupdate -l 2>/dev/null | grep -E "^\s*\*"
 ```
@@ -107,14 +116,17 @@ Always present before touching anything:
   upkeep    N commits behind
   gstack       up to date
 ── Packages ───────────────────────────────
-  brew         N outdated
-  npm globals  N outdated    pipx  N tools
-  gems         N outdated    rustup  <status>
-  mas          N outdated    macOS  N updates
+  brew         N outdated      npm globals  N outdated
+  pipx         N tools         gems  N outdated
+  rustup       <status>        cargo  <status>
+  uv           <version>       bun  <version>
+  deno         <version>       mise  N outdated
+  mas          N outdated      macOS  N updates
 ── Informational ──────────────────────────
   Claude plugins  N (Claude Code manages)
   Codex skills    N (manual update)
 ```
+Omit any row where the tool is not installed.
 
 **Update Audit:** stop here. "Audit complete — nothing changed."
 If nothing needs updating: "Everything is up to date." — stop.
@@ -132,7 +144,7 @@ if present. Ask: "Apply updates to <tool>? A) Yes  B) Skip"
 Before pulling, check:
 1. `git -C "$d" status --porcelain` — if dirty, show `git status --short` output,
    warn about conflicts, ask "Continue anyway? A) Yes  B) Skip this tool"
-2. `git symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
+2. `git -C "$d" symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
    then retry" — skip this tool, continue others.
 
 Apply: `git -C "$d" pull --ff-only origin <branch> 2>&1`
@@ -152,6 +164,10 @@ Each category has its own gate. Skipping one does NOT cancel others.
 | gems | `gem outdated` | `gem update` | |
 | rustup | `rustup check` | `rustup update` | |
 | cargo | `cargo install-update --list` | `cargo install-update -a` | Only if cargo-update installed |
+| uv | `uv self version` | `uv self update` | Python package manager replacement |
+| bun | `bun --version` | `bun upgrade` | |
+| deno | `deno --version` | `deno upgrade` | |
+| mise | `mise outdated` | `mise upgrade` | Language version manager |
 | mas | `mas outdated` | `mas upgrade` | |
 | macOS | `softwareupdate -l` | `softwareupdate -ia` | ⚠ Check for `[restart]` in listing — if restart required, warn explicitly before asking |
 
@@ -168,11 +184,14 @@ Apply? A) Yes  B) Skip macOS updates"
   brew     ✓ upgraded   12 packages
   npm      ↷ skipped
   pipx     ✓ upgraded   2 tools
+  bun      ✓ upgraded   1.1.0 → 1.2.0
+  mise     ✓ upgraded   3 runtimes
   mas      ✓ upgraded   1 app
 ── Informational ────────────────────────────────
   Claude plugins  9  (managed by Claude Code)
   Codex skills   12  (manual update required)
 ```
+Omit rows for tools not installed on this machine.
 
 ## Rules
 

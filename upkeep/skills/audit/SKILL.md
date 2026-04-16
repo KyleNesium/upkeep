@@ -1,6 +1,6 @@
 ---
 name: upkeep:audit
-version: 1.0.5
+version: 1.0.6
 author: KyleNesium
 description: |
   Full 15-phase macOS disk audit — report only, no changes made.
@@ -21,6 +21,7 @@ allowed-tools:
   - Bash(sw_vers *)
   - Bash(echo *)
   - Bash(date *)
+  - Bash(touch *)
   - Bash(id *)
   - Bash(basename *)
   - Bash(command *)
@@ -198,10 +199,16 @@ Report size.
 ## Phase 5: LaunchAgents
 
 ```bash
+_BREW_FORMULA=$(brew list --formula 2>/dev/null)
 for plist in ~/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
   label=$(basename "$plist" .plist)
-  [[ "$label" == homebrew.mxcl.* ]] && continue
+  if [[ "$label" == homebrew.mxcl.* ]]; then
+    _formula="${label#homebrew.mxcl.}"
+    echo "$_BREW_FORMULA" | grep -qx "$_formula" || \
+      echo "$label | NOT LOADED | ORPHANED HOMEBREW SERVICE"
+    continue
+  fi
   target=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Print :Program" "$plist" 2>/dev/null || echo "UNKNOWN")
   launchctl list 2>/dev/null | grep -q "$label" && load="LOADED" || load="NOT LOADED"
@@ -211,10 +218,7 @@ done
 ```
 
 Present a table: plist label, load state (LOADED / NOT LOADED), target state
-(OK / TARGET MISSING / UNKNOWN). Report only — do not offer removal.
-
-Flag `homebrew.mxcl.*` agents whose formula is missing from `brew list --formula`
-as "orphaned homebrew service".
+(OK / TARGET MISSING / UNKNOWN / ORPHANED HOMEBREW SERVICE). Report only — do not offer removal.
 
 ## Phase 6: Xcode & Developer Tools
 
@@ -230,7 +234,14 @@ du -sh ~/Library/Developer/Xcode/iOS\ DeviceSupport/ 2>/dev/null
 du -sh ~/Library/Developer/CoreSimulator/ 2>/dev/null
 ```
 
-Report sizes with notes on reclaimability.
+| Item | Reclaimable? | Notes |
+|------|-------------|-------|
+| DerivedData | Yes | Rebuild cache — always safe to clear. |
+| Archives | Partially | Old app archives. Recent ones may be needed. |
+| iOS DeviceSupport | Mostly | Device debug symbols. Keep ones matching current devices. |
+| CoreSimulator | Partially | Count stale simulators (see note below). |
+
+For CoreSimulator: run `xcrun simctl list devices 2>/dev/null | grep -c Shutdown` and report how many shutdown simulators exist.
 
 ## Phase 7: Docker
 
@@ -259,7 +270,7 @@ done
 ```bash
 find <DIRS> -maxdepth 4 -name "node_modules" -type d -exec du -sh {} + 2>/dev/null | sort -rh
 find <DIRS> -maxdepth 4 \( -name ".venv" -o -name "venv" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh
-find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
+find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "out" -o -name "target" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" -o -name ".nx" -o -name "Pods" -o -name ".build" -o -name "coverage" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
 ```
 
 Report totals only.
@@ -272,24 +283,39 @@ ls ~/Library/Logs/ 2>/dev/null
 
 Cross-reference against installed apps. Flag:
 1. Log directories from uninstalled apps
-2. Rotated log files: `*.old.*`, `*.log.N`, `*.log.old`
-3. Any single log file over 10MB
+2. Rotated log files — scan for them:
+```bash
+find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
+  -exec du -sh {} + 2>/dev/null | sort -rh
+```
+3. Any single log file over 10MB:
+```bash
+find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
+  -exec du -sh {} + 2>/dev/null | sort -rh
+```
 
 ## Phase 10: Shell Config Audit
 
-Read `~/.zshrc`, `~/.zprofile`, `~/.bash_profile` (whichever exist):
+Read `~/.zshrc`, `~/.zprofile`, `~/.zshenv`, `~/.bash_profile` (whichever exist):
 
 1. **Dead PATH entries**: target directory doesn't exist
 2. **Dead aliases**: target binary doesn't exist
 3. **Dead sources**: sourced file doesn't exist
 4. **Duplicate PATH entries**: duplicates in $PATH
 
+**Conditional blocks are report-only.** Lines inside `if`/`fi`, `case`/`esac`,
+or containing `&& `/`|| ` operators are never flagged as safe-to-remove — report
+as findings only. These gate on env/hostname/OS.
+
 Report all findings. No edits in audit mode.
 
 ## Phase 11: Electron App Caches
 
 ```bash
-find ~/Library/Application\ Support -maxdepth 5 \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
+find ~/Library/Application\ Support -maxdepth 5 \
+  -not -path "*/Claude/*" -not -path "*/Claude" \
+  \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) \
+  -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
 ```
 
 Report caches over 50MB.
@@ -297,7 +323,7 @@ Report caches over 50MB.
 ## Phase 12: Large File Scan
 
 ```bash
-find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" 2>/dev/null
+find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" -exec du -sh {} + 2>/dev/null | sort -rh
 ```
 
 Report with sizes.
@@ -364,5 +390,9 @@ End with: "Audit complete — nothing changed. Run `/upkeep:cleandeep` to clean 
 
 - NEVER remove, modify, or take any action — report only
 - NEVER touch `~/Library/Application Support/Claude/` or `~/.claude/`
-- Report Apple system directories only if they appear anomalously large
+- NEVER report Apple system directories (`com.apple.*`) as orphan candidates — skip them
+- NEVER report `~/Library/Keychains/` or `~/Library/Preferences/` contents
+- Report Apple system directories only if they appear anomalously large (>1GB)
+- Shell config audit: flag dead entries as findings only, never suggest edits
+- Conditional blocks (`if`/`fi`, `&& `/ `|| `) are findings only — do not suggest removal
 - Never execute sudo

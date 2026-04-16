@@ -1,6 +1,6 @@
 ---
 name: upkeep
-version: 1.0.5
+version: 1.0.6
 author: KyleNesium
 description: |
   macOS system cleanup. Three modes: deep (full 15-phase audit + cleanup),
@@ -23,6 +23,7 @@ allowed-tools:
   - Bash(sw_vers *)
   - Bash(echo *)
   - Bash(date *)
+  - Bash(touch *)
   - Bash(id *)
   - Bash(basename *)
   - Bash(command *)
@@ -86,13 +87,16 @@ allowed-tools:
   - Bash(git -C * pull *)
   - Bash(git -C * remote *)
   - Bash(git symbolic-ref *)
-  # Update mode — package manager upgrades (new: rustup, mas, softwareupdate)
+  - Bash(git -C * symbolic-ref *)
+  # Update mode — package manager upgrades
   - Bash(rustup *)
   - Bash(mas *)
   - Bash(softwareupdate *)
+  - Bash(deno *)
+  - Bash(mise *)
 ---
 
-# /clean — macOS System Cleanup
+# /upkeep — macOS System Cleanup
 
 You are a macOS system cleanup specialist. Audit the machine for reclaimable disk
 space, stale data, and configuration issues. Clean up with user approval.
@@ -178,7 +182,8 @@ If the output says "skipped", skip this entire phase.
    "No orphan dependencies to remove." If packages are listed, show them all
    and ask for confirmation before running the live `brew autoremove`.
 4. `brew doctor 2>&1 | grep -iE "deprecated|warning|error"` — health issues
-5. `brew leaves` — top-level packages. Present the list and ask if any should go.
+5. `brew leaves` — top-level packages. Present the list and prompt:
+   "Uninstall any of these? (space-separated names, or 'none')"
 6. Check Xcode Command Line Tools: `xcode-select --version` and compare against
    what `brew doctor` reports. If outdated, tell the user to run the update manually
    (requires sudo + interactive prompt).
@@ -335,11 +340,16 @@ before running — these reports may be needed for diagnosis.
 Audit `~/Library/LaunchAgents/`:
 
 ```bash
+_BREW_FORMULA=$(brew list --formula 2>/dev/null)
 for plist in ~/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
   label=$(basename "$plist" .plist)
-  # Skip Homebrew-managed agents
-  [[ "$label" == homebrew.mxcl.* ]] && continue
+  if [[ "$label" == homebrew.mxcl.* ]]; then
+    _formula="${label#homebrew.mxcl.}"
+    echo "$_BREW_FORMULA" | grep -qx "$_formula" || \
+      echo "$label | NOT LOADED | ORPHANED HOMEBREW SERVICE"
+    continue
+  fi
   # Three-state detection
   target=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Print :Program" "$plist" 2>/dev/null || echo "UNKNOWN")
@@ -350,15 +360,14 @@ done
 ```
 
 For each agent, present a table with columns: plist label, load state (LOADED /
-NOT LOADED), target state (OK / TARGET MISSING / UNKNOWN). Then prompt:
-"Remove which? (comma-separated indices, or 'none')" -- per-agent confirmation
-is required, no batch removal.
+NOT LOADED), target state (OK / TARGET MISSING / UNKNOWN / ORPHANED HOMEBREW SERVICE).
+Then prompt: "Remove which? (comma-separated indices, or 'none')" -- per-agent
+confirmation is required, no batch removal.
 
 **Exclusions:**
 - `homebrew.mxcl.*` agents: managed by `brew services`. Never offer removal.
-  If the matching formula is missing from `brew list --formula`, report it as
-  "orphaned homebrew service -- run `brew services cleanup` to remove" but do
-  not remove it directly.
+  Orphaned ones (formula absent from brew list) are reported in the table as
+  "ORPHANED HOMEBREW SERVICE" — tell the user to run `brew services cleanup`.
 - Agents matching the user's own reverse-DNS domain are almost certainly
   intentional -- present but flag as "user-owned".
 
@@ -397,7 +406,9 @@ du -sh ~/Library/Developer/CoreSimulator/ 2>/dev/null
 | DerivedData | Yes | Rebuild cache. Always safe. |
 | Archives | Ask user | Old app archives. May want to keep recent ones. |
 | iOS DeviceSupport | Mostly | Old device symbols. Keep ones matching current devices. |
-| CoreSimulator | Partially | `xcrun simctl delete unavailable` removes stale ones safely. |
+| CoreSimulator | Partially | Preview count before offering removal (see note below). |
+
+For CoreSimulator: first run `xcrun simctl list devices 2>/dev/null | grep -c Shutdown` to show how many shutdown simulators exist, then offer `xcrun simctl delete unavailable`.
 
 ## Phase 7: Docker (Deep + Audit)
 
@@ -455,7 +466,7 @@ find <DIRS> -maxdepth 4 -name "node_modules" -type d -exec du -sh {} + 2>/dev/nu
 find <DIRS> -maxdepth 4 \( -name ".venv" -o -name "venv" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh
 
 # Build output directories
-find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
+find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "out" -o -name "target" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" -o -name ".nx" -o -name "Pods" -o -name ".build" -o -name "coverage" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
 ```
 
 Report totals. These are all rebuildable — `npm install` / `bun install` / `pip install`
@@ -473,12 +484,20 @@ ls ~/Library/Logs/ 2>/dev/null
 Cross-reference against installed apps (same logic as Phase 4).
 Flag:
 1. Log directories from uninstalled apps
-2. Rotated log files: `*.old.*`, `*.log.N`, `*.log.old`
-3. Any single log file over 10MB
+2. Rotated log files — scan for them:
+```bash
+find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
+  -exec du -sh {} + 2>/dev/null | sort -rh
+```
+3. Any single log file over 10MB:
+```bash
+find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
+  -exec du -sh {} + 2>/dev/null | sort -rh
+```
 
 ## Phase 10: Shell Config Audit (Deep + Audit)
 
-Read `~/.zshrc`, `~/.zprofile`, `~/.bash_profile` (whichever exist):
+Read `~/.zshrc`, `~/.zprofile`, `~/.zshenv`, `~/.bash_profile` (whichever exist):
 
 1. **Dead PATH entries**: For each PATH addition, check if the target directory exists.
    Flag any that point to uninstalled tools.
@@ -508,7 +527,11 @@ For INSTALLED Electron apps only, check for bloated caches:
 # Generic discovery: find Cache/ and Service Worker/ dirs inside Application Support.
 # Use maxdepth 5 -- VS Code and other apps nest caches deeper
 # (e.g., Code/User/workspaceStorage/<hash>/Cache).
-find ~/Library/Application\ Support -maxdepth 5 \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
+# Exclude Claude's own Application Support dir (protected by rules).
+find ~/Library/Application\ Support -maxdepth 5 \
+  -not -path "*/Claude/*" -not -path "*/Claude" \
+  \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) \
+  -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
 ```
 
 Only show caches over 50MB. These rebuild on next app launch.
@@ -527,11 +550,11 @@ download them to — avoid scanning `~` wholesale (catches iCloud Documents,
 syncs, and takes forever):
 
 ```bash
-find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" 2>/dev/null
+find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" -exec du -sh {} + 2>/dev/null | sort -rh
 ```
 
 Also check `~/Documents` if the user reports slowness or missing installers
-— some users stash downloads there. Report with sizes. Offer to remove.
+— some users stash downloads there. Offer to remove.
 
 ## Phase 13: Trash (all modes)
 
@@ -586,7 +609,7 @@ Check git is installed: `command -v git` — if missing, skip skills section and
 note: "Install git: `xcode-select --install`"
 
 **upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
-- Fails → check for `.git`: if plugin.json exists, "managed by plugin manager";
+- Fails → check for `plugin.json`: if present, "managed by plugin manager";
   otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
 - Succeeds → verify remote: `git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin`
   must contain `KyleNesium/upkeep` or skip with "unexpected remote URL".
@@ -613,6 +636,10 @@ pipx list --short 2>/dev/null                                # installed tools
 gem outdated 2>/dev/null                                     # count outdated
 rustup check 2>/dev/null                                     # toolchain status
 cargo install-update --list 2>/dev/null                      # only if cargo-update installed
+command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
+command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
+command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
+command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
 mas outdated 2>/dev/null                                     # App Store
 softwareupdate -l 2>/dev/null | grep -E "^\s*\*"             # macOS updates
 ```
@@ -625,14 +652,17 @@ Always present before touching anything:
   upkeep    N commits behind
   gstack       up to date
 ── Packages ───────────────────────────────
-  brew         N outdated
-  npm globals  N outdated    pipx  N tools
-  gems         N outdated    rustup  <status>
-  mas          N outdated    macOS  N updates
+  brew         N outdated      npm globals  N outdated
+  pipx         N tools         gems  N outdated
+  rustup       <status>        cargo  <status>
+  uv           <version>       bun  <version>
+  deno         <version>       mise  N outdated
+  mas          N outdated      macOS  N updates
 ── Informational ──────────────────────────
   Claude plugins  N (Claude Code manages)
   Codex skills    N (manual update)
 ```
+Omit any row where the tool is not installed.
 **Update Audit:** stop here. "Audit complete — nothing changed."
 If nothing needs updating: "Everything is up to date." — stop.
 
@@ -649,7 +679,7 @@ if present. Ask: "Apply updates to <tool>? A) Yes  B) Skip"
 Before pulling, check:
 1. `git -C "$d" status --porcelain` — if dirty, show `git status --short` output,
    warn about conflicts, ask "Continue anyway? A) Yes  B) Skip this tool"
-2. `git symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
+2. `git -C "$d" symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
    then retry" — skip this tool, continue others.
 
 Apply: `git -C "$d" pull --ff-only origin <branch> 2>&1`
@@ -669,6 +699,10 @@ Each category has its own gate. Skipping one does NOT cancel others.
 | gems | `gem outdated` | `gem update` | |
 | rustup | `rustup check` | `rustup update` | |
 | cargo | `cargo install-update --list` | `cargo install-update -a` | Only if cargo-update installed |
+| uv | `uv self version` | `uv self update` | Python package manager replacement |
+| bun | `bun --version` | `bun upgrade` | |
+| deno | `deno --version` | `deno upgrade` | |
+| mise | `mise outdated` | `mise upgrade` | Language version manager |
 | mas | `mas outdated` | `mas upgrade` | |
 | macOS | `softwareupdate -l` | `softwareupdate -ia` | ⚠ Check for `[restart]` in listing — if restart required, warn explicitly before asking |
 
@@ -681,15 +715,18 @@ Apply? A) Yes  B) Skip macOS updates"
 ```
 ── Update Report ────────────────────────────────
   upkeep   ✓ updated    v1.0.0 → v1.0.1
-  gstack      ✓ updated    0.17.0 → 0.18.0
-  brew        ✓ upgraded   12 packages
-  npm         ↷ skipped
-  pipx        ✓ upgraded   2 tools
-  mas         ✓ upgraded   1 app
+  gstack   ✓ updated    0.17.0 → 0.18.0
+  brew     ✓ upgraded   12 packages
+  npm      ↷ skipped
+  pipx     ✓ upgraded   2 tools
+  bun      ✓ upgraded   1.1.0 → 1.2.0
+  mise     ✓ upgraded   3 runtimes
+  mas      ✓ upgraded   1 app
 ── Informational ────────────────────────────────
   Claude plugins  9  (managed by Claude Code)
   Codex skills   12  (manual update required)
 ```
+Omit rows for tools not installed on this machine.
 
 ## Reporting
 

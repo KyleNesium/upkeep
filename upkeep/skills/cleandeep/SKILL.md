@@ -1,6 +1,6 @@
 ---
 name: upkeep:cleandeep
-version: 1.0.5
+version: 1.0.6
 author: KyleNesium
 description: |
   Full 15-phase macOS deep clean: Homebrew, dev caches, orphaned app data,
@@ -20,6 +20,7 @@ allowed-tools:
   - Bash(sw_vers *)
   - Bash(echo *)
   - Bash(date *)
+  - Bash(touch *)
   - Bash(id *)
   - Bash(basename *)
   - Bash(command *)
@@ -129,7 +130,8 @@ If skipped, skip this entire phase.
    to remove." If packages listed, show all and ask confirmation before
    running live `brew autoremove`.
 4. `brew doctor 2>&1 | grep -iE "deprecated|warning|error"` — health issues
-5. `brew leaves` — top-level packages. Present and ask if any should go.
+5. `brew leaves` — top-level packages. Present the list and prompt:
+   "Uninstall any of these? (space-separated names, or 'none')"
 6. Check Xcode CLT: `xcode-select --version`. If outdated, tell user to update
    manually (requires sudo + interactive prompt).
 
@@ -255,10 +257,16 @@ Warn if user is actively debugging or working with AppleCare.
 ## Phase 5: LaunchAgents
 
 ```bash
+_BREW_FORMULA=$(brew list --formula 2>/dev/null)
 for plist in ~/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
   label=$(basename "$plist" .plist)
-  [[ "$label" == homebrew.mxcl.* ]] && continue
+  if [[ "$label" == homebrew.mxcl.* ]]; then
+    _formula="${label#homebrew.mxcl.}"
+    echo "$_BREW_FORMULA" | grep -qx "$_formula" || \
+      echo "$label | NOT LOADED | ORPHANED HOMEBREW SERVICE"
+    continue
+  fi
   target=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Print :Program" "$plist" 2>/dev/null || echo "UNKNOWN")
   launchctl list 2>/dev/null | grep -q "$label" && load="LOADED" || load="NOT LOADED"
@@ -271,9 +279,9 @@ Present a table: plist label, load state, target state. Then:
 "Remove which? (comma-separated indices, or 'none')" — per-agent confirmation required.
 
 **Exclusions:**
-- `homebrew.mxcl.*`: managed by `brew services`. Never offer removal. If the
-  formula is missing from `brew list --formula`, report as "orphaned homebrew
-  service — run `brew services cleanup`" but don't remove directly.
+- `homebrew.mxcl.*`: managed by `brew services`. Never offer removal. Orphaned
+  ones (formula absent from brew list) appear in the table as "ORPHANED HOMEBREW
+  SERVICE" — tell the user to run `brew services cleanup`.
 - Agents matching user's reverse-DNS domain: flag as "user-owned".
 
 To remove:
@@ -302,7 +310,9 @@ du -sh ~/Library/Developer/CoreSimulator/ 2>/dev/null
 | DerivedData | Yes | Rebuild cache. Always safe. |
 | Archives | Ask user | Old app archives. May want to keep recent ones. |
 | iOS DeviceSupport | Mostly | Old device symbols. Keep ones matching current devices. |
-| CoreSimulator | Partially | `xcrun simctl delete unavailable` removes stale ones safely. |
+| CoreSimulator | Partially | Preview count before offering removal (see note below). |
+
+For CoreSimulator: first run `xcrun simctl list devices 2>/dev/null | grep -c Shutdown` to show how many shutdown simulators exist, then offer `xcrun simctl delete unavailable`.
 
 ## Phase 7: Docker
 
@@ -344,7 +354,7 @@ If none found, scan `~` with maxdepth 5.
 ```bash
 find <DIRS> -maxdepth 4 -name "node_modules" -type d -exec du -sh {} + 2>/dev/null | sort -rh
 find <DIRS> -maxdepth 4 \( -name ".venv" -o -name "venv" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh
-find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
+find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -name "out" -o -name "target" -o -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".turbo" -o -name ".nx" -o -name "Pods" -o -name ".build" -o -name "coverage" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -20
 ```
 
 Report totals. Offer to remove with user approval — all are rebuildable via
@@ -358,12 +368,20 @@ ls ~/Library/Logs/ 2>/dev/null
 
 Cross-reference against installed apps. Flag:
 1. Log directories from uninstalled apps
-2. Rotated log files: `*.old.*`, `*.log.N`, `*.log.old`
-3. Any single log file over 10MB
+2. Rotated log files — scan for them:
+```bash
+find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
+  -exec du -sh {} + 2>/dev/null | sort -rh
+```
+3. Any single log file over 10MB:
+```bash
+find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
+  -exec du -sh {} + 2>/dev/null | sort -rh
+```
 
 ## Phase 10: Shell Config Audit
 
-Read `~/.zshrc`, `~/.zprofile`, `~/.bash_profile` (whichever exist):
+Read `~/.zshrc`, `~/.zprofile`, `~/.zshenv`, `~/.bash_profile` (whichever exist):
 
 1. **Dead PATH entries**: Check if target directories exist.
 2. **Dead aliases**: Check if target binaries exist.
@@ -382,7 +400,10 @@ print restore notice with stderr output, abort further edits to that file.
 ## Phase 11: Electron App Caches
 
 ```bash
-find ~/Library/Application\ Support -maxdepth 5 \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
+find ~/Library/Application\ Support -maxdepth 5 \
+  -not -path "*/Claude/*" -not -path "*/Claude" \
+  \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) \
+  -type d -exec du -sh {} + 2>/dev/null | sort -rh | head -15
 ```
 
 Only show caches over 50MB. Before offering to clear, check if app is running:
@@ -393,7 +414,7 @@ Only offer clearing for confirmed-not-running apps.
 ## Phase 12: Large File Scan
 
 ```bash
-find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" 2>/dev/null
+find ~/Downloads ~/Desktop -maxdepth 3 \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) -not -path "*/.Trash/*" -exec du -sh {} + 2>/dev/null | sort -rh
 ```
 
 Report with sizes. Offer to remove.

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-04-16
+
+### Fixed
+- Sub-skills still displaying without namespace (`/audit`, `/update`) instead of `upkeep:audit`, `upkeep:update` — root-level `.claude-plugin/plugin.json` was conflicting with `marketplace.json`, causing the plugin loader to register skills un-namespaced. Removed the duplicate root `plugin.json`; the authoritative manifest is now exclusively `plugin/.claude-plugin/plugin.json`.
+
 ## [1.0.2] - 2026-04-16
 
 ### Fixed

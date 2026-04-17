@@ -345,7 +345,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-Prompt-based skill — no executable source code. Tested via live invocation against all five entry points on macOS.
+Prompt-based skill — no executable source code. Tested via live invocation against all five entry points across macOS, Linux, and WSL2.
 
 | Command | What's validated |
 |---------|-----------------|

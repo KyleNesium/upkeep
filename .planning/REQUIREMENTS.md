@@ -71,29 +71,29 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OS-01 | Phase 1 | Pending |
-| OS-02 | Phase 1 | Pending |
-| OS-03 | Phase 1 | Pending |
-| OS-04 | Phase 1 | Pending |
-| LNX-01 | Phase 2 | Pending |
-| LNX-02 | Phase 2 | Pending |
-| LNX-03 | Phase 2 | Pending |
-| LNX-04 | Phase 2 | Pending |
-| LNX-05 | Phase 2 | Pending |
-| LNX-06 | Phase 2 | Pending |
-| LNX-07 | Phase 2 | Pending |
-| LNX-08 | Phase 2 | Pending |
-| WSL-01 | Phase 3 | Pending |
-| WSL-02 | Phase 3 | Pending |
-| WSL-03 | Phase 3 | Pending |
-| WSL-04 | Phase 3 | Pending |
-| UPD-01 | Phase 4 | Pending |
-| UPD-02 | Phase 4 | Pending |
-| UPD-03 | Phase 4 | Pending |
-| UPD-04 | Phase 4 | Pending |
-| CFG-01 | Phase 1 | Pending |
-| CFG-02 | Phase 4 | Pending |
-| CFG-03 | Phase 4 | Pending |
+| OS-01 | Phase 1: OS Detection & Config | Pending |
+| OS-02 | Phase 1: OS Detection & Config | Pending |
+| OS-03 | Phase 1: OS Detection & Config | Pending |
+| OS-04 | Phase 1: OS Detection & Config | Pending |
+| CFG-01 | Phase 1: OS Detection & Config | Pending |
+| LNX-01 | Phase 2: Linux Cleanup | Pending |
+| LNX-02 | Phase 2: Linux Cleanup | Pending |
+| LNX-03 | Phase 2: Linux Cleanup | Pending |
+| LNX-04 | Phase 2: Linux Cleanup | Pending |
+| LNX-05 | Phase 2: Linux Cleanup | Pending |
+| LNX-06 | Phase 2: Linux Cleanup | Pending |
+| LNX-07 | Phase 2: Linux Cleanup | Pending |
+| LNX-08 | Phase 2: Linux Cleanup | Pending |
+| WSL-01 | Phase 3: WSL2 Support | Pending |
+| WSL-02 | Phase 3: WSL2 Support | Pending |
+| WSL-03 | Phase 3: WSL2 Support | Pending |
+| WSL-04 | Phase 3: WSL2 Support | Pending |
+| UPD-01 | Phase 4: Update Skill & Polish | Pending |
+| UPD-02 | Phase 4: Update Skill & Polish | Pending |
+| UPD-03 | Phase 4: Update Skill & Polish | Pending |
+| UPD-04 | Phase 4: Update Skill & Polish | Pending |
+| CFG-02 | Phase 4: Update Skill & Polish | Pending |
+| CFG-03 | Phase 4: Update Skill & Polish | Pending |
 
 **Coverage:**
 - v1 requirements: 23 total
@@ -102,4 +102,4 @@
 
 ---
 *Requirements defined: 2026-04-17*
-*Last updated: 2026-04-17 after initial definition*
+*Last updated: 2026-04-17 after roadmap creation*

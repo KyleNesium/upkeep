@@ -178,6 +178,15 @@ If the nudge fires, display it once at the top before phase output.
 ## Phase 2: Homebrew Audit
 
 ```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 2: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
+
+```bash
 command -v brew >/dev/null 2>&1 && echo "OK" || echo "Phase 2 skipped — brew not installed"
 ```
 If skipped, skip this entire phase.
@@ -226,6 +235,15 @@ If a tool's CLI binary isn't installed, skip its clear command and offer
 Present the total and ask for approval before clearing.
 
 ## Phase 4: Orphaned Application Data
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 4: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 **Discovery-based.** Cross-reference installed apps against leftover data.
 
@@ -316,6 +334,15 @@ Warn if user is actively debugging or working with AppleCare.
 ## Phase 5: LaunchAgents
 
 ```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 5: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
+
+```bash
 _BREW_FORMULA=$(brew list --formula 2>/dev/null)
 for plist in ~/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
@@ -351,6 +378,15 @@ rm -f ~/Library/LaunchAgents/<plist>
 ```
 
 ## Phase 6: Xcode & Developer Tools
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 6: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ```bash
 command -v xcode-select >/dev/null 2>&1 && echo "OK" || echo "Phase 6 skipped — Xcode not installed"
@@ -459,6 +495,15 @@ print restore notice with stderr output, abort further edits to that file.
 ## Phase 11: Electron App Caches
 
 ```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 11: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
+
+```bash
 find ~/Library/Application\ Support -maxdepth 5 \
   -not -path "*/Claude/*" -not -path "*/Claude" \
   \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" -o -name "CachedData" -o -name "CachedExtension*" -o -name "PersistentCache" -o -name "GPUCache" \) \
@@ -487,6 +532,15 @@ du -sh ~/.Trash/ 2>/dev/null
 Offer: `rm -rf ~/.Trash/*` or suggest Finder (Cmd+Shift+Delete).
 
 ## Phase 14: iPhone / iOS Backups
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 14: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ```bash
 du -sh ~/Library/Application\ Support/MobileSync/Backup/ 2>/dev/null

@@ -172,8 +172,40 @@ fi
 ## Phase 2: Homebrew Audit
 
 ```bash
-if [ "$OS_TYPE" != "macos" ]; then
-  echo "Phase 2: skipped (macOS only) — detected $OS_TYPE"
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "Phase 2: Linux package state (read-only — pkg: $PKG_MGR)"
+  case "$PKG_MGR" in
+    apt)
+      echo "=== Installed packages (count) ==="
+      dpkg -l 2>/dev/null | grep -c '^ii' || echo "dpkg not available"
+      echo "=== apt cache size ==="
+      du -sh /var/cache/apt/archives/ 2>/dev/null || echo "(unable to read)"
+      echo "=== Orphan packages (autoremove preview) ==="
+      apt-get autoremove --dry-run 2>/dev/null | grep -E "^(Remv|The following)" | head -20 || echo "none"
+      ;;
+    dnf)
+      echo "=== Installed packages (count) ==="
+      dnf list installed 2>/dev/null | wc -l
+      echo "=== dnf cache size ==="
+      du -sh /var/cache/dnf/ 2>/dev/null || echo "(unable to read)"
+      echo "=== Orphan packages (autoremove preview) ==="
+      dnf autoremove --assumeno 2>/dev/null | grep -E "^(Remove|Removing)" | head -20 || echo "none"
+      ;;
+    pacman)
+      echo "=== Installed packages (count) ==="
+      pacman -Q 2>/dev/null | wc -l
+      echo "=== pacman cache size ==="
+      du -sh /var/cache/pacman/pkg/ 2>/dev/null || echo "(unable to read)"
+      echo "=== Orphan packages (pacman -Qtdq) ==="
+      pacman -Qtdq 2>/dev/null || echo "none"
+      ;;
+    *)
+      echo "Phase 2: no supported package manager detected"
+      ;;
+  esac
+  # End of Linux branch — stop Phase 2, continue to Phase 3. Do NOT run brew commands below.
+elif [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 2: skipped (unsupported OS: $OS_TYPE)"
   # Stop this phase here. Continue to the next phase.
 fi
 ```

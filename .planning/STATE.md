@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 01-04-PLAN.md (audit OS detection + phase guards)
-last_updated: "2026-04-17T08:57:51.639Z"
+stopped_at: Completed 01-01-PLAN.md (router skill OS detection + Linux allowed-tools + macOS guards)
+last_updated: "2026-04-17T08:58:13.736Z"
 progress:
   total_phases: 4
   completed_phases: 1
@@ -48,6 +48,8 @@ Plan: 4 of 5
 *Updated after each plan completion*
 | Phase 01 P03 | 8 | 2 tasks | 1 files |
 | Phase 01-os-detection-config P02 | 13 | 3 tasks | 1 files |
+| Phase 01 P01 | 2 | 3 tasks | 1 files |
+| Phase 01 P05 | 15 | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -64,6 +66,11 @@ Recent decisions affecting current work:
 - [Phase 01]: Phase 13 (Trash) left unguarded in cleanquick — Linux ~/.local/share/Trash handled in Phase 2 of roadmap
 - [Phase 01]: audit allowed-tools declares Linux package managers (apt/dnf/pacman) proactively — read-only query context; avoids frontmatter re-edits when Phase 2 adds Linux commands
 - [Phase 01]: audit OS guard placed BEFORE existing command -v checks to prevent brew/xcode-select invocation on Linux
+- [Phase 01-os-detection-config]: cleandeep guards placed BEFORE command -v checks so macOS falls through to existing tool-availability checks unchanged
+- [Phase 01]: Only mas and softwareupdate need OS guards in update skill — brew, npm, pipx, gem, rustup, cargo, bun, deno, mise, uv are cross-platform and remain unconditional
+- [Phase 01-os-detection-config]: cleandeep version bumped to 1.1.0-dev to signal cross-platform work in progress
+- [Phase 01]: Linux allowed-tools slots pre-populated in update skill so Phase 4 can add upgrade commands without re-editing frontmatter
+- [Phase 01]: Version bumped to 1.1.0-dev in router skill to mark in-progress cross-platform work
 
 ### Pending Todos
 
@@ -75,6 +82,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T09:10:00.000Z
-Stopped at: Completed 01-04-PLAN.md (audit OS detection + phase guards)
+Last session: 2026-04-17T08:58:02.405Z
+Stopped at: Completed 01-01-PLAN.md (router skill OS detection + Linux allowed-tools + macOS guards)
 Resume file: None

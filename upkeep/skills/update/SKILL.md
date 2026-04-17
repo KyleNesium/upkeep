@@ -163,8 +163,12 @@ command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
 command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
 command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
 command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
-mas outdated 2>/dev/null
-softwareupdate -l 2>/dev/null | grep -E "^\s*\*"
+if [ "$OS_TYPE" = "macos" ]; then
+  mas outdated 2>/dev/null                                   # App Store
+  softwareupdate -l 2>/dev/null | grep -E "^\s*\*"           # macOS updates
+else
+  echo "mas + softwareupdate: skipped (macOS only)"
+fi
 ```
 
 ## Step 3: Overview Table
@@ -186,6 +190,7 @@ Always present before touching anything:
   Codex skills    N (manual update)
 ```
 Omit any row where the tool is not installed.
+On Linux or WSL2 (`$OS_TYPE != "macos"`), also omit the `mas` and `macOS` rows — those are macOS-only. The final report in Step 6 shows them as `skipped (macOS only)` so the user sees they were intentionally excluded.
 
 **Update Audit:** stop here. "Audit complete — nothing changed."
 If nothing needs updating: "Everything is up to date." — stop.
@@ -214,6 +219,8 @@ On success: read `plugin.json` / `VERSION` for old → new version string.
 ## Step 5: Apply Package Updates
 
 Each category has its own gate. Skipping one does NOT cancel others.
+
+On Linux or WSL2, skip the `mas` and `macOS` rows below — do not run `mas upgrade` or `softwareupdate -ia`. Mark both as `skipped (macOS only)` in the Step 6 final report.
 
 | Tool | Audit command | Apply command | Extra warning |
 |------|--------------|---------------|---------------|
@@ -251,6 +258,7 @@ Apply? A) Yes  B) Skip macOS updates"
   Codex skills   12  (manual update required)
 ```
 Omit rows for tools not installed on this machine.
+On Linux or WSL2, show both `mas  ↷ skipped (macOS only)` and `macOS  ↷ skipped (macOS only)` rows in the report so the skip is visible rather than silent.
 
 ## Rules
 

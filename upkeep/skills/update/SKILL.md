@@ -81,6 +81,51 @@ If no sub-mode is specified, ask:
 
 Announce (`Mode: Update / <sub-mode>`) before proceeding.
 
+## Environment Detection
+
+Run this FIRST, before any step. It sets `$OS_TYPE` (macos / linux / wsl2), `$OS_DISTRO`, and `$PKG_MGR` — Step 2 and Step 5 gate `mas` and `softwareupdate` on `$OS_TYPE = "macos"`.
+
+```bash
+# ── OS Detection (run once, export for all steps) ────────────────
+_KERNEL=$(uname -s 2>/dev/null || echo "unknown")
+_KREL=$(uname -r 2>/dev/null || echo "")
+case "$_KERNEL" in
+  Darwin)
+    OS_TYPE="macos"
+    OS_DISTRO="macos"
+    ;;
+  Linux)
+    if echo "$_KREL" | grep -qi "microsoft"; then
+      OS_TYPE="wsl2"
+    else
+      OS_TYPE="linux"
+    fi
+    if [ -r /etc/os-release ]; then
+      OS_DISTRO=$(. /etc/os-release 2>/dev/null; echo "${ID_LIKE:-$ID}" | awk '{print $1}')
+    elif command -v lsb_release >/dev/null 2>&1; then
+      OS_DISTRO=$(lsb_release -si 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    else
+      OS_DISTRO="unknown"
+    fi
+    case "$OS_DISTRO" in
+      debian|ubuntu) PKG_MGR="apt" ;;
+      fedora|rhel|centos|rocky|almalinux) PKG_MGR="dnf" ;;
+      arch|manjaro|endeavouros) PKG_MGR="pacman" ;;
+      *) PKG_MGR="unknown" ;;
+    esac
+    ;;
+  *)
+    OS_TYPE="unknown"
+    OS_DISTRO="unknown"
+    PKG_MGR="unknown"
+    ;;
+esac
+export OS_TYPE OS_DISTRO PKG_MGR
+echo "Environment: $OS_TYPE / $OS_DISTRO${PKG_MGR:+ (pkg: $PKG_MGR)}"
+```
+
+If `$OS_TYPE` is `unknown`, report "Update skill requires macOS, Linux, or WSL2. Detected: $(uname -s)" and stop.
+
 ## Step 1: Discover AI Skills (skip for Update Packages)
 
 Check git is installed: `command -v git` — if missing, skip skills section and

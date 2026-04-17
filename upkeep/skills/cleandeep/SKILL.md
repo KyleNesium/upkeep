@@ -193,13 +193,58 @@ If the nudge fires, display it once at the top before phase output.
 ## Phase 2: Homebrew Audit
 
 ```bash
-if [ "$OS_TYPE" != "macos" ]; then
-  echo "Phase 2: skipped (macOS only) — detected $OS_TYPE"
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "Phase 2: Linux package cache cleanup (pkg manager: $PKG_MGR)"
+  case "$PKG_MGR" in
+    apt)
+      echo "--- Current apt cache size ---"
+      du -sh /var/cache/apt/archives/ 2>/dev/null || echo "(unable to read — permission denied; continuing)"
+      echo "--- apt-get clean (dry-run preview) ---"
+      echo "Would run: apt-get clean  (removes /var/cache/apt/archives/*.deb)"
+      echo "--- apt-get autoclean (dry-run preview) ---"
+      apt-get autoclean --dry-run 2>/dev/null || echo "(dry-run unavailable; will only run with approval)"
+      echo "--- apt autoremove (dry-run) ---"
+      apt-get autoremove --dry-run 2>/dev/null | grep -E "^(Remv|The following)" || echo "No orphan packages to remove"
+      echo "--- Old kernel images (superseded, reclaimable) ---"
+      dpkg -l 'linux-image-*' 2>/dev/null | grep "^ii" | grep -v "$(uname -r)" | awk '{print $2}' || echo "No old kernel packages detected"
+      ;;
+    dnf)
+      echo "--- Current dnf cache size ---"
+      du -sh /var/cache/dnf/ 2>/dev/null || echo "(unable to read — permission denied; continuing)"
+      echo "--- dnf clean all (preview) ---"
+      echo "Would run: dnf clean all  (removes metadata + package cache)"
+      echo "--- dnf autoremove (dry-run) ---"
+      dnf autoremove --assumeno 2>/dev/null | grep -E "^(Remove|Removing)" || echo "No orphan packages to remove"
+      ;;
+    pacman)
+      echo "--- Current pacman cache size ---"
+      du -sh /var/cache/pacman/pkg/ 2>/dev/null || echo "(unable to read — permission denied; continuing)"
+      echo "--- pacman cached packages (uninstalled only) ---"
+      echo "Would run: pacman -Sc  (removes cached pkgs for uninstalled software, keeps installed versions)"
+      echo "--- Orphan packages (pacman -Qtdq) ---"
+      pacman -Qtdq 2>/dev/null || echo "No orphan packages to remove"
+      ;;
+    *)
+      echo "Phase 2: skipped — unsupported package manager ($PKG_MGR)"
+      # Stop this phase here. Continue to the next phase.
+      ;;
+  esac
+  # End of Linux branch — DO NOT run the macOS brew commands below. Stop Phase 2 here, continue to Phase 3.
+elif [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 2: skipped (unsupported OS: $OS_TYPE)"
   # Stop this phase here. Continue to the next phase.
 fi
 ```
 
-If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
+**Approval gate.** Show the dry-run output verbatim. Ask: "Run the apt/dnf/pacman cache cleanup and autoremove shown above? (yes / no / skip-autoremove)". Execute only the parts the user approves:
+
+> - `yes` → for apt: `apt-get clean && apt-get autoclean && apt-get autoremove -y`. For dnf: `dnf clean all && dnf autoremove -y`. For pacman: `pacman -Sc --noconfirm` then for each orphan printed by `pacman -Qtdq`, run `pacman -Rns --noconfirm <pkg>`.
+> - `skip-autoremove` → run only the cache cleanup (apt-get clean / dnf clean all / pacman -Sc --noconfirm). Do NOT remove orphans.
+> - `no` → skip Phase 2 entirely, continue to Phase 3.
+>
+> Never use sudo. If any command fails with a permission error, surface the sudo'd command to the user in a fenced bash block under ## Manual Steps and move on.
+
+If the Linux branch ran above, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ```bash
 command -v brew >/dev/null 2>&1 && echo "OK" || echo "Phase 2 skipped — brew not installed"

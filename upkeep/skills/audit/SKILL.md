@@ -241,6 +241,19 @@ du -sh ~/Library/Caches/*/ 2>/dev/null | sort -rh | head -15
 
 Report anything over 50MB not in the known list.
 
+### Step 3: Linux cache report (Linux/WSL2 only)
+
+```bash
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== ~/.cache total ==="
+  du -sh ~/.cache/ 2>/dev/null || echo "~/.cache/ not present"
+  echo "=== Top 15 ~/.cache subdirectories ==="
+  du -sh ~/.cache/*/ 2>/dev/null | sort -rh | head -15
+fi
+```
+
+Report only — audit never removes cache entries. For removal, run `/upkeep:cleandeep`.
+
 ## Phase 4: Orphaned Application Data
 
 ```bash
@@ -420,20 +433,39 @@ Report totals only.
 ## Phase 9: Stale Logs
 
 ```bash
-ls ~/Library/Logs/ 2>/dev/null
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== systemd journal disk usage ==="
+  journalctl --disk-usage 2>/dev/null || echo "journalctl not available"
+  echo "=== user journal ==="
+  journalctl --user --disk-usage 2>/dev/null || echo "user journal not configured"
+fi
+```
+
+Note: audit-mode reports disk usage but NEVER vacuums.
+
+The remainder of Phase 9 (Library/Logs scan) runs on macOS only:
+
+```bash
+if [ "$OS_TYPE" = "macos" ]; then
+  ls ~/Library/Logs/ 2>/dev/null
+fi
 ```
 
 Cross-reference against installed apps. Flag:
 1. Log directories from uninstalled apps
-2. Rotated log files — scan for them:
+2. Rotated log files — scan for them (macOS only):
 ```bash
-find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
-  -exec du -sh {} + 2>/dev/null | sort -rh
+if [ "$OS_TYPE" = "macos" ]; then
+  find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
+    -exec du -sh {} + 2>/dev/null | sort -rh
+fi
 ```
-3. Any single log file over 10MB:
+3. Any single log file over 10MB (macOS only):
 ```bash
-find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
-  -exec du -sh {} + 2>/dev/null | sort -rh
+if [ "$OS_TYPE" = "macos" ]; then
+  find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
+    -exec du -sh {} + 2>/dev/null | sort -rh
+fi
 ```
 
 ## Phase 10: Shell Config Audit
@@ -487,11 +519,34 @@ du -sh ~/.Trash/ 2>/dev/null
 
 Report size.
 
-## Phase 14: iPhone / iOS Backups
+## Phase 14: iOS Backups (macOS) / Snap + Flatpak (Linux)
 
 ```bash
-if [ "$OS_TYPE" != "macos" ]; then
-  echo "Phase 14: skipped (macOS only) — detected $OS_TYPE"
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "Phase 14: Linux snap + flatpak state (read-only)"
+  if command -v snap >/dev/null 2>&1; then
+    echo "=== Snap: installed packages ==="
+    snap list 2>/dev/null | tail -n +2 | wc -l
+    echo "=== Snap: disabled revisions ==="
+    snap list --all 2>/dev/null | awk '/disabled/ {print $1, $3}' | wc -l
+    echo "=== Snap total disk usage ==="
+    du -sh /var/lib/snapd/snaps/ 2>/dev/null || echo "(unable to read)"
+  else
+    echo "Snap: not installed"
+  fi
+  if command -v flatpak >/dev/null 2>&1; then
+    echo "=== Flatpak: installed apps ==="
+    flatpak list --app 2>/dev/null | wc -l
+    echo "=== Flatpak: installed runtimes ==="
+    flatpak list --runtime 2>/dev/null | wc -l
+    echo "=== Flatpak total disk usage ==="
+    du -sh ~/.local/share/flatpak/ /var/lib/flatpak/ 2>/dev/null || echo "(paths unavailable)"
+  else
+    echo "Flatpak: not installed"
+  fi
+  # End of Linux branch — stop Phase 14, continue to Phase 15.
+elif [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 14: skipped (unsupported OS: $OS_TYPE)"
   # Stop this phase here. Continue to the next phase.
 fi
 ```

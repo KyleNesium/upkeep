@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 02-05-PLAN.md (Linux read-only reporting in audit Phases 1, 2, 3, 9, 14)
-last_updated: "2026-04-17T12:30:57.300Z"
+stopped_at: Completed 02-02-PLAN.md (Linux user cache and journal cleanup in cleandeep Phases 3 and 9)
+last_updated: "2026-04-17T12:34:14.653Z"
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -53,6 +53,7 @@ Plan: 2 of 5
 | Phase 02 P01 | 2 | 2 tasks | 1 files |
 | Phase 02-linux-cleanup P04 | 2 | 2 tasks | 1 files |
 | Phase 02-linux-cleanup P05 | 3 | 3 tasks | 1 files |
+| Phase 02-linux-cleanup P02 | 1 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,9 @@ Recent decisions affecting current work:
 - [Phase 02-linux-cleanup]: Phase 9 macOS Library/Logs body wrapped in OS guard to prevent Linux noise
 - [Phase 02-linux-cleanup]: stat -c %Y fallback added to update-check for Linux stat compatibility
 - [Phase 02-linux-cleanup]: audit Phase 14 heading renamed to cover iOS Backups (macOS) / Snap + Flatpak (Linux)
+- [Phase 02-linux-cleanup]: Phase 3 Linux approval flow added as Step 3 after cross-platform Step 2; never blanket-wipe ~/.cache/, only named subdirs
+- [Phase 02-linux-cleanup]: Warn list for slow-to-rebuild caches: mesa_shader_cache, fontconfig, nvidia
+- [Phase 02-linux-cleanup]: User journal vacuumed at 200M; system journal sudo command surfaced as manual step only — never in executable fence
 
 ### Pending Todos
 
@@ -93,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T12:30:57.298Z
-Stopped at: Completed 02-05-PLAN.md (Linux read-only reporting in audit Phases 1, 2, 3, 9, 14)
+Last session: 2026-04-17T12:34:14.652Z
+Stopped at: Completed 02-02-PLAN.md (Linux user cache and journal cleanup in cleandeep Phases 3 and 9)
 Resume file: None

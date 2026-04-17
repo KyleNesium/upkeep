@@ -87,6 +87,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. OS Detection & Config | 5/5 | Complete    | 2026-04-17 |
-| 2. Linux Cleanup | 2/5 | In Progress|  |
+| 2. Linux Cleanup | 4/5 | In Progress|  |
 | 3. WSL2 Support | 0/TBD | Not started | - |
 | 4. Update Skill & Polish | 0/TBD | Not started | - |

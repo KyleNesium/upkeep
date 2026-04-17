@@ -1,6 +1,6 @@
 ---
 name: upkeep
-version: 1.0.6
+version: 1.1.0-dev
 author: KyleNesium
 description: |
   macOS system cleanup. Three modes: deep (full 15-phase audit + cleanup),
@@ -33,6 +33,11 @@ allowed-tools:
   - Bash(mdutil *)
   - Bash(defaults *)
   - Bash(/usr/libexec/PlistBuddy *)
+  # OS detection (cross-platform)
+  - Bash(uname *)
+  - Bash(lsb_release *)
+  - Bash(lsblk *)
+  - Bash(cat *)
   # Text processing for pipelines
   - Bash(sort *)
   - Bash(head *)
@@ -94,6 +99,15 @@ allowed-tools:
   - Bash(softwareupdate *)
   - Bash(deno *)
   - Bash(mise *)
+  # Linux system tools
+  - Bash(systemctl *)
+  - Bash(journalctl *)
+  # Linux package managers
+  - Bash(apt *)
+  - Bash(dnf *)
+  - Bash(pacman *)
+  - Bash(snap *)
+  - Bash(flatpak *)
 ---
 
 # /upkeep — macOS System Cleanup

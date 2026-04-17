@@ -781,6 +781,45 @@ fi
 >
 > This removes only the contents of the Temp directory, not the directory itself — Windows recreates files as needed. Some files may be locked by running Windows processes; the `|| true` swallows those specific failures so the phase keeps going. Never use sudo on /mnt/c/ paths — if a file cannot be removed, surface the path as a findings line and move on. On `no`, skip to Phase 18.
 
+## Phase 18: Windows npm/pip Cache Audit (WSL2 only)
+
+```bash
+if [ "$OS_TYPE" != "wsl2" ]; then
+  echo "Phase 18: skipped (WSL2 only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to Reporting.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to Reporting.
+
+```bash
+if [ ! -d "/mnt/c" ]; then
+  echo "Phase 18: /mnt/c not mounted — Windows drive unavailable. Skipping."
+else
+  _WIN_NPM="/mnt/c/Users/$USER/AppData/Roaming/npm-cache"
+  _WIN_PIP="/mnt/c/Users/$USER/AppData/Local/pip/Cache"
+  echo "=== Windows npm-cache ==="
+  if [ -d "$_WIN_NPM" ]; then
+    du -sh "$_WIN_NPM" 2>/dev/null || echo "(unable to stat)"
+  else
+    echo "(not present at $_WIN_NPM)"
+  fi
+  echo "=== Windows pip Cache ==="
+  if [ -d "$_WIN_PIP" ]; then
+    du -sh "$_WIN_PIP" 2>/dev/null || echo "(unable to stat)"
+  else
+    echo "(not present at $_WIN_PIP)"
+  fi
+fi
+```
+
+> **Windows package caches — approval gate.** For each cache that is present and non-trivial (>100MB), prompt individually:
+>
+> - npm-cache: "Clear Windows npm-cache at /mnt/c/Users/$USER/AppData/Roaming/npm-cache/? (yes / no)" → on yes: `rm -rf /mnt/c/Users/"$USER"/AppData/Roaming/npm-cache/* 2>/dev/null || true`
+> - pip Cache: "Clear Windows pip Cache at /mnt/c/Users/$USER/AppData/Local/pip/Cache/? (yes / no)" → on yes: `rm -rf /mnt/c/Users/"$USER"/AppData/Local/pip/Cache/* 2>/dev/null || true`
+>
+> These caches rebuild on next `npm install` / `pip install` invoked from the Windows side. Never use sudo on /mnt/c/ paths — if any file resists removal, surface it as a findings line and move on. Skipping one prompt never skips the other.
+
 ## Reporting
 
 ### Per-phase

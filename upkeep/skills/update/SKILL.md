@@ -233,9 +233,15 @@ Always present before touching anything:
 ── Informational ──────────────────────────
   Claude plugins  N (Claude Code manages)
   Codex skills    N (manual update)
+── Windows Packages (WSL2 only — audit only) ──
+  winget       N installed  (upgrade via Windows PowerShell)
+  scoop        N installed  (upgrade via Windows PowerShell)
+  choco        N installed  (upgrade via Windows PowerShell)
 ```
 Omit any row where the tool is not installed.
 On Linux or WSL2 (`$OS_TYPE != "macos"`), also omit the `mas` and `macOS` rows — those are macOS-only. The final report in Step 6 shows them as `skipped (macOS only)` so the user sees they were intentionally excluded.
+
+On macOS or plain Linux, omit the entire "Windows Packages" group — it appears only when $OS_TYPE = "wsl2". For each Windows tool not found via command -v, omit that row. Windows package managers are labeled "audit only" because update never invokes winget upgrade, scoop update, or choco upgrade — surface guidance for the user to run those from a Windows shell instead.
 
 **Update Audit:** stop here. "Audit complete — nothing changed."
 If nothing needs updating: "Everything is up to date." — stop.
@@ -266,6 +272,8 @@ On success: read `plugin.json` / `VERSION` for old → new version string.
 Each category has its own gate. Skipping one does NOT cancel others.
 
 On Linux or WSL2, skip the `mas` and `macOS` rows below — do not run `mas upgrade` or `softwareupdate -ia`. Mark both as `skipped (macOS only)` in the Step 6 final report.
+
+On WSL2, the Step 2 "Windows package managers" block is audit-only — this Step 5 table does NOT include winget, scoop, or choco. Upgrades for those require a Windows PowerShell session and are intentionally out of scope for update. The Step 6 final report lists each detected Windows package manager under "Windows Packages" with status "audit only" so the skip is visible rather than silent.
 
 | Tool | Audit command | Apply command | Extra warning |
 |------|--------------|---------------|---------------|
@@ -301,9 +309,15 @@ Apply? A) Yes  B) Skip macOS updates"
 ── Informational ────────────────────────────────
   Claude plugins  9  (managed by Claude Code)
   Codex skills   12  (manual update required)
+── Windows Packages (WSL2 only) ─────────────────
+  winget   ⓘ audit only    N installed
+  scoop    ⓘ audit only    N installed
+  choco    ⓘ audit only    N installed
 ```
 Omit rows for tools not installed on this machine.
 On Linux or WSL2, show both `mas  ↷ skipped (macOS only)` and `macOS  ↷ skipped (macOS only)` rows in the report so the skip is visible rather than silent.
+
+Omit the entire "Windows Packages" group on macOS or plain Linux. In WSL2, omit any row whose tool was not detected by command -v in Step 2.
 
 ## Rules
 

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 02-04-PLAN.md (cleanquick Linux Phase 2 pkg cache + Phase 3 age sweep)
-last_updated: "2026-04-17T12:30:07.723Z"
+stopped_at: Completed 02-05-PLAN.md (Linux read-only reporting in audit Phases 1, 2, 3, 9, 14)
+last_updated: "2026-04-17T12:30:57.300Z"
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 10
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -52,6 +52,7 @@ Plan: 2 of 5
 | Phase 01 P05 | 15 | 3 tasks | 1 files |
 | Phase 02 P01 | 2 | 2 tasks | 1 files |
 | Phase 02-linux-cleanup P04 | 2 | 2 tasks | 1 files |
+| Phase 02-linux-cleanup P05 | 3 | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Phase 2 approval gate documented as markdown prose outside bash fence, not shell code
 - [Phase 02-linux-cleanup]: cleanquick Phase 2 quick mode: apt-get autoclean (not clean), dnf clean packages (not clean all) — lighter footprint for monthly cadence, no autoremove
 - [Phase 02-linux-cleanup]: cleanquick Phase 3 Step 3: find -mtime +30 -mindepth 1 -maxdepth 2 bounds to avoid ~/.cache itself and hot sub-paths; warn-list for mesa_shader_cache/fontconfig/nvidia
+- [Phase 02-linux-cleanup]: Phase 9 macOS Library/Logs body wrapped in OS guard to prevent Linux noise
+- [Phase 02-linux-cleanup]: stat -c %Y fallback added to update-check for Linux stat compatibility
+- [Phase 02-linux-cleanup]: audit Phase 14 heading renamed to cover iOS Backups (macOS) / Snap + Flatpak (Linux)
 
 ### Pending Todos
 
@@ -89,6 +93,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T12:30:07.721Z
-Stopped at: Completed 02-04-PLAN.md (cleanquick Linux Phase 2 pkg cache + Phase 3 age sweep)
+Last session: 2026-04-17T12:30:57.298Z
+Stopped at: Completed 02-05-PLAN.md (Linux read-only reporting in audit Phases 1, 2, 3, 9, 14)
 Resume file: None

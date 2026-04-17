@@ -21,7 +21,7 @@
 - [ ] **LNX-05**: cleandeep adds Snap/Flatpak cleanup (snap list, flatpak uninstall --unused) where installed
 - [x] **LNX-06**: cleandeep adds orphaned .deb/.rpm files and old kernel cleanup (approval-gated)
 - [x] **LNX-07**: cleanquick includes Linux equivalents (package cache, user cache) alongside existing dev cache phases
-- [ ] **LNX-08**: audit skill reports Linux-specific disk usage and package manager state
+- [x] **LNX-08**: audit skill reports Linux-specific disk usage and package manager state
 
 ### WSL2 Support
 
@@ -83,7 +83,7 @@
 | LNX-05 | Phase 2: Linux Cleanup | Pending |
 | LNX-06 | Phase 2: Linux Cleanup | Complete |
 | LNX-07 | Phase 2: Linux Cleanup | Complete |
-| LNX-08 | Phase 2: Linux Cleanup | Pending |
+| LNX-08 | Phase 2: Linux Cleanup | Complete |
 | WSL-01 | Phase 3: WSL2 Support | Pending |
 | WSL-02 | Phase 3: WSL2 Support | Pending |
 | WSL-03 | Phase 3: WSL2 Support | Pending |

@@ -81,7 +81,10 @@ Plans:
   3. update on Linux detects and upgrades flatpak packages where flatpak is installed
   4. update on Linux/WSL2 skips mas and softwareupdate with a visible "skipped (macOS only)" note
   5. The upkeep SKILL.md description states cross-platform support and the README shows macOS 14+ / Linux / WSL2 prerequisites and badges
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 04-01-PLAN.md — update/SKILL.md: Linux upgrade paths (apt/dnf/pacman) + snap + flatpak + per-tool mas/softwareupdate skip visibility (UPD-01, UPD-02, UPD-03, UPD-04)
+- [ ] 04-02-PLAN.md — Docs polish: upkeep router SKILL.md description + README badges, Prerequisites, and Platform Support section (CFG-02, CFG-03)
 
 ## Progress
 
@@ -93,4 +96,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. OS Detection & Config | 5/5 | Complete    | 2026-04-17 |
 | 2. Linux Cleanup | 5/5 | Complete   | 2026-04-17 |
 | 3. WSL2 Support | 3/3 | Complete   | 2026-04-17 |
-| 4. Update Skill & Polish | 0/TBD | Not started | - |
+| 4. Update Skill & Polish | 0/2 | Not started | - |

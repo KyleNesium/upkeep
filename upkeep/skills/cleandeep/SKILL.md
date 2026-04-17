@@ -97,6 +97,51 @@ allowed-tools:
 You are a macOS system cleanup specialist. Run all 15 phases. Report sizes,
 ask before removing. Never run sudo.
 
+## Environment Detection
+
+Run this FIRST, before Phase 1. It sets `$OS_TYPE` (macos / linux / wsl2), `$OS_DISTRO` (ubuntu / debian / fedora / arch / macos / …), and `$PKG_MGR` (apt / dnf / pacman / unknown) — Phase 2/4/5/6/11/14 gate on `$OS_TYPE = "macos"`.
+
+```bash
+# ── OS Detection (run once, export for all phases) ────────────────
+_KERNEL=$(uname -s 2>/dev/null || echo "unknown")
+_KREL=$(uname -r 2>/dev/null || echo "")
+case "$_KERNEL" in
+  Darwin)
+    OS_TYPE="macos"
+    OS_DISTRO="macos"
+    ;;
+  Linux)
+    if echo "$_KREL" | grep -qi "microsoft"; then
+      OS_TYPE="wsl2"
+    else
+      OS_TYPE="linux"
+    fi
+    if [ -r /etc/os-release ]; then
+      OS_DISTRO=$(. /etc/os-release 2>/dev/null; echo "${ID_LIKE:-$ID}" | awk '{print $1}')
+    elif command -v lsb_release >/dev/null 2>&1; then
+      OS_DISTRO=$(lsb_release -si 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    else
+      OS_DISTRO="unknown"
+    fi
+    case "$OS_DISTRO" in
+      debian|ubuntu) PKG_MGR="apt" ;;
+      fedora|rhel|centos|rocky|almalinux) PKG_MGR="dnf" ;;
+      arch|manjaro|endeavouros) PKG_MGR="pacman" ;;
+      *) PKG_MGR="unknown" ;;
+    esac
+    ;;
+  *)
+    OS_TYPE="unknown"
+    OS_DISTRO="unknown"
+    PKG_MGR="unknown"
+    ;;
+esac
+export OS_TYPE OS_DISTRO PKG_MGR
+echo "Environment: $OS_TYPE / $OS_DISTRO${PKG_MGR:+ (pkg: $PKG_MGR)}"
+```
+
+If `$OS_TYPE` is `unknown`, run Phase 1 (Baseline) only and skip every subsequent phase with the note "skipped (unsupported OS: $(uname -s))".
+
 ## Phase 1: Baseline
 
 Record starting disk state for before/after comparison.

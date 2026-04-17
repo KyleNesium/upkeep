@@ -28,7 +28,7 @@
 - [x] **WSL-01**: All skills detect WSL2 and display environment banner ("Running in WSL2 on Windows")
 - [x] **WSL-02**: cleandeep adds WSL2 bonus phase: Windows temp file cleanup via `/mnt/c/Users/$USER/AppData/Local/Temp/` (approval-gated)
 - [x] **WSL-03**: cleandeep adds WSL2 bonus phase: Windows %LOCALAPPDATA% npm/pip caches via /mnt/c/ bridge (size audit + optional cleanup)
-- [ ] **WSL-04**: update skill detects WSL2 and reports Windows package managers (winget, scoop, chocolatey) if accessible — audit only, no auto-upgrade
+- [x] **WSL-04**: update skill detects WSL2 and reports Windows package managers (winget, scoop, chocolatey) if accessible — audit only, no auto-upgrade
 
 ### Update Skill
 
@@ -87,7 +87,7 @@
 | WSL-01 | Phase 3: WSL2 Support | Complete |
 | WSL-02 | Phase 3: WSL2 Support | Complete |
 | WSL-03 | Phase 3: WSL2 Support | Complete |
-| WSL-04 | Phase 3: WSL2 Support | Pending |
+| WSL-04 | Phase 3: WSL2 Support | Complete |
 | UPD-01 | Phase 4: Update Skill & Polish | Pending |
 | UPD-02 | Phase 4: Update Skill & Polish | Pending |
 | UPD-03 | Phase 4: Update Skill & Polish | Pending |

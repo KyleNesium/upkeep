@@ -4,12 +4,12 @@ milestone: v1.0
 milestone_name: milestone
 status: unknown
 stopped_at: Completed 03-03-PLAN.md (Windows package manager audit added to update skill as WSL-01 + WSL-04)
-last_updated: "2026-04-17T15:48:22.429Z"
+last_updated: "2026-04-17T15:49:18.444Z"
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 13
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -57,6 +57,7 @@ Plan: 3 of 3
 | Phase 02-linux-cleanup P03 | 1 | 2 tasks | 1 files |
 | Phase 03-wsl2-support P01 | 8 | 3 tasks | 3 files |
 | Phase 03 P02 | 2 | 4 tasks | 1 files |
+| Phase 03-wsl2-support P03 | 3 | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,9 @@ Recent decisions affecting current work:
 - [Phase 03-wsl2-support]: Banner position: after OS Detection closing fence, before "If $OS_TYPE is unknown" paragraph — consistent across all five skills
 - [Phase 03]: Phase 17/18 'Never use sudo' prose increases sudo grep count by 2 — these are policy statements, not commands
 - [Phase 03]: /mnt/c accessibility guard placed as outer block so path stat errors never surface to user
+- [Phase 03-wsl2-support]: Windows package managers detected via command -v + /mnt/c guard — never upgrade from WSL2 (UAC/permission implications)
+- [Phase 03-wsl2-support]: Upgrade commands for winget/scoop/choco appear only in prose blockquote, never in executable bash fences
+- [Phase 03-wsl2-support]: Step 5 upgrade table explicitly excludes winget/scoop/choco — audit-only note added before table for machine-checkable compliance
 
 ### Pending Todos
 
@@ -106,6 +110,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T15:48:22.427Z
-Stopped at: Completed 03-02-PLAN.md (WSL2 banner + Phase 17 + Phase 18 added to cleandeep)
+Last session: 2026-04-17T15:49:18.443Z
+Stopped at: Completed 03-03-PLAN.md (Windows package manager audit added to update skill as WSL-01 + WSL-04)
 Resume file: None

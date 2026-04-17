@@ -24,8 +24,8 @@ Every upkeep command gracefully handles all three environments (macOS, Linux, WS
 - ✓ Linux-specific cleanup phases (apt cache, snap, flatpak, systemd, journald, ~/.cache) — Validated in Phase 2: Linux Cleanup
 - ✓ All SKILL.md allowed-tools updated with Linux commands — Validated in Phase 1: OS Detection & Config
 - ✓ WSL2 detection and Windows-side cleanup via /mnt/c/ — Validated in Phase 3: WSL2 Support
-- [ ] Linux package manager support in update skill (apt, dnf, pacman, snap, flatpak)
-- [ ] README and badges reflect cross-platform support
+- ✓ Linux package manager support in update skill (apt, dnf, pacman, snap, flatpak) — Validated in Phase 4: Update Skill & Polish
+- ✓ README and badges reflect cross-platform support — Validated in Phase 4: Update Skill & Polish
 
 ### Out of Scope
 
@@ -72,4 +72,4 @@ WSL2 extras: Windows temp files via `/mnt/c/Users/$WIN_USER/AppData/Local/Temp/`
 | Linux distro support: Debian/Ubuntu (apt), Fedora/RHEL (dnf), Arch (pacman) | Covers ~90% of Linux desktop users; others get graceful skips | — Pending |
 
 ---
-*Last updated: 2026-04-17 after Phase 3 (WSL2 Support) — OS detection, Linux cleanup, and WSL2 support complete*
+*Last updated: 2026-04-17 after Phase 4 (Update Skill & Polish) — all 4 phases complete, milestone ready for lifecycle*

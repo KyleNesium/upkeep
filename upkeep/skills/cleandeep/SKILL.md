@@ -294,6 +294,19 @@ If a tool's CLI binary isn't installed, skip its clear command and offer
 `rm -rf` on the directory instead.
 Present the total and ask for approval before clearing.
 
+### Step 3: Linux user cache approval (Linux/WSL2 only)
+
+```bash
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== Total ~/.cache size ==="
+  du -sh ~/.cache/ 2>/dev/null || echo "~/.cache/ not present"
+  echo "=== Top 15 subdirectories (sorted largest first) ==="
+  du -sh ~/.cache/*/ 2>/dev/null | sort -rh | head -15
+fi
+```
+
+> **Linux cache removal — approval gate.** If the output above shows any subdirectory over 100MB, present it as a numbered table (index, path, size) and prompt: "Remove which? (space-separated indices, 'all', or 'none')". For each approved index, run `rm -rf ~/.cache/<subdir>/`. NEVER clear `~/.cache/` as a whole directory — some tools (e.g. `~/.cache/mesa_shader_cache`, `~/.cache/fontconfig`) rebuild slowly and impact desktop startup. Only remove named subdirectories the user approves. Known-safe-to-remove subdirs: `pip`, `yarn`, `pnpm`, `go-build`, `thumbnails`, `mozilla`, `chromium`, `vscode-cpptools`. Known-costly-to-rebuild (warn before removing): `mesa_shader_cache`, `fontconfig`, `nvidia`.
+
 ## Phase 4: Orphaned Application Data
 
 ```bash

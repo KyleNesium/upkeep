@@ -13,7 +13,7 @@ upkeep is a macOS-only skill set today. This milestone adds OS awareness so ever
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: OS Detection & Config** - Add OS/distro detection to all skills and update allowed-tools frontmatter (completed 2026-04-17)
-- [ ] **Phase 2: Linux Cleanup** - Add Linux-specific phases to cleandeep, cleanquick, and audit skills
+- [x] **Phase 2: Linux Cleanup** - Add Linux-specific phases to cleandeep, cleanquick, and audit skills (completed 2026-04-17)
 - [ ] **Phase 3: WSL2 Support** - Add WSL2 detection, banner, and Windows-side bonus cleanup phases
 - [ ] **Phase 4: Update Skill & Polish** - Add Linux/WSL2 package upgrade paths; update skill descriptions and README
 
@@ -87,6 +87,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. OS Detection & Config | 5/5 | Complete    | 2026-04-17 |
-| 2. Linux Cleanup | 4/5 | In Progress|  |
+| 2. Linux Cleanup | 5/5 | Complete   | 2026-04-17 |
 | 3. WSL2 Support | 0/TBD | Not started | - |
 | 4. Update Skill & Polish | 0/TBD | Not started | - |

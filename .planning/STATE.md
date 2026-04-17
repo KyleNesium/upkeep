@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 02-02-PLAN.md (Linux user cache and journal cleanup in cleandeep Phases 3 and 9)
-last_updated: "2026-04-17T12:34:14.653Z"
+stopped_at: Completed 02-03-PLAN.md (Snap & Flatpak cleanup added to cleandeep as Phase 16, Linux/WSL2)
+last_updated: "2026-04-17T12:37:29.776Z"
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -54,6 +54,7 @@ Plan: 2 of 5
 | Phase 02-linux-cleanup P04 | 2 | 2 tasks | 1 files |
 | Phase 02-linux-cleanup P05 | 3 | 3 tasks | 1 files |
 | Phase 02-linux-cleanup P02 | 1 | 2 tasks | 1 files |
+| Phase 02-linux-cleanup P03 | 1 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ Recent decisions affecting current work:
 - [Phase 02-linux-cleanup]: Phase 3 Linux approval flow added as Step 3 after cross-platform Step 2; never blanket-wipe ~/.cache/, only named subdirs
 - [Phase 02-linux-cleanup]: Warn list for slow-to-rebuild caches: mesa_shader_cache, fontconfig, nvidia
 - [Phase 02-linux-cleanup]: User journal vacuumed at 200M; system journal sudo command surfaced as manual step only — never in executable fence
+- [Phase 02-linux-cleanup]: Phase 16 placed after Phase 15 (pipx) and before Reporting — mirrors macOS optional-tool tail pattern
+- [Phase 02-linux-cleanup]: sudo snap remove and sudo flatpak uninstall shown in fenced blocks with comment noting Manual Steps context, matching Phase 2/7/9 pattern throughout cleandeep skill
 
 ### Pending Todos
 
@@ -97,6 +100,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T12:34:14.652Z
-Stopped at: Completed 02-02-PLAN.md (Linux user cache and journal cleanup in cleandeep Phases 3 and 9)
+Last session: 2026-04-17T12:37:29.774Z
+Stopped at: Completed 02-03-PLAN.md (Snap & Flatpak cleanup added to cleandeep as Phase 16, Linux/WSL2)
 Resume file: None

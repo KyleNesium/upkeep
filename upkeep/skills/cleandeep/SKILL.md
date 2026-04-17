@@ -766,6 +766,7 @@ Batch removals by phase — don't ask per-file unless ambiguous.
 | 13| Trash | ... | ...GB | Cleaned / Skipped |
 | 14| iOS backups | ... | ...GB | Cleaned / Skipped |
 | 15| pipx tools | ... | — | Cleaned / Skipped |
+| 16| Snap & Flatpak | ... | ...MB | Cleaned / Skipped |
 | **Total** | | | **...GB** | |
 ```
 

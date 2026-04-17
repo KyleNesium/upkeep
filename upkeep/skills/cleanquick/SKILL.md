@@ -72,6 +72,51 @@ allowed-tools:
 You are a macOS system cleanup specialist. Run the quick phases only: 1, 2, 3, 8, 11, 13.
 Report sizes, ask before removing. Never run sudo. Tag each phase header with `(Quick)`.
 
+## Environment Detection
+
+Run this FIRST, before Phase 1. It sets `$OS_TYPE` (macos / linux / wsl2), `$OS_DISTRO`, and `$PKG_MGR` — Phase 2 and Phase 11 gate on `$OS_TYPE = "macos"`.
+
+```bash
+# ── OS Detection (run once, export for all phases) ────────────────
+_KERNEL=$(uname -s 2>/dev/null || echo "unknown")
+_KREL=$(uname -r 2>/dev/null || echo "")
+case "$_KERNEL" in
+  Darwin)
+    OS_TYPE="macos"
+    OS_DISTRO="macos"
+    ;;
+  Linux)
+    if echo "$_KREL" | grep -qi "microsoft"; then
+      OS_TYPE="wsl2"
+    else
+      OS_TYPE="linux"
+    fi
+    if [ -r /etc/os-release ]; then
+      OS_DISTRO=$(. /etc/os-release 2>/dev/null; echo "${ID_LIKE:-$ID}" | awk '{print $1}')
+    elif command -v lsb_release >/dev/null 2>&1; then
+      OS_DISTRO=$(lsb_release -si 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    else
+      OS_DISTRO="unknown"
+    fi
+    case "$OS_DISTRO" in
+      debian|ubuntu) PKG_MGR="apt" ;;
+      fedora|rhel|centos|rocky|almalinux) PKG_MGR="dnf" ;;
+      arch|manjaro|endeavouros) PKG_MGR="pacman" ;;
+      *) PKG_MGR="unknown" ;;
+    esac
+    ;;
+  *)
+    OS_TYPE="unknown"
+    OS_DISTRO="unknown"
+    PKG_MGR="unknown"
+    ;;
+esac
+export OS_TYPE OS_DISTRO PKG_MGR
+echo "Environment: $OS_TYPE / $OS_DISTRO${PKG_MGR:+ (pkg: $PKG_MGR)}"
+```
+
+If `$OS_TYPE` is `unknown`, run Phase 1 (Baseline) only and skip remaining phases.
+
 ## Phase 1: Baseline (Quick)
 
 Record starting disk state for before/after comparison.
@@ -106,6 +151,15 @@ fi
 If the nudge fires, display it once at the top before phase output.
 
 ## Phase 2: Homebrew Audit (Quick)
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 2: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next.
 
 ```bash
 command -v brew >/dev/null 2>&1 && echo "OK" || echo "Phase 2 skipped — brew not installed"
@@ -172,6 +226,15 @@ find <DIRS> -maxdepth 4 \( -name ".next" -o -name "dist" -o -name "build" -o -na
 **Quick mode: report totals only — do not offer removal.** For cleanup, run `/upkeep:cleandeep`.
 
 ## Phase 11: Electron App Caches (Quick)
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 11: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next.
 
 ```bash
 find ~/Library/Application\ Support -maxdepth 5 \

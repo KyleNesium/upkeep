@@ -32,10 +32,10 @@
 
 ### Update Skill
 
-- [ ] **UPD-01**: update skill supports apt/dnf/pacman upgrade paths (with per-package-manager confirmation gates)
-- [ ] **UPD-02**: update skill detects and updates snap packages where installed
-- [ ] **UPD-03**: update skill detects and updates flatpak packages where installed
-- [ ] **UPD-04**: update skill skips mas and softwareupdate on Linux/WSL2 with a clear skip note
+- [x] **UPD-01**: update skill supports apt/dnf/pacman upgrade paths (with per-package-manager confirmation gates)
+- [x] **UPD-02**: update skill detects and updates snap packages where installed
+- [x] **UPD-03**: update skill detects and updates flatpak packages where installed
+- [x] **UPD-04**: update skill skips mas and softwareupdate on Linux/WSL2 with a clear skip note
 
 ### Tooling & Config
 
@@ -88,10 +88,10 @@
 | WSL-02 | Phase 3: WSL2 Support | Complete |
 | WSL-03 | Phase 3: WSL2 Support | Complete |
 | WSL-04 | Phase 3: WSL2 Support | Complete |
-| UPD-01 | Phase 4: Update Skill & Polish | Pending |
-| UPD-02 | Phase 4: Update Skill & Polish | Pending |
-| UPD-03 | Phase 4: Update Skill & Polish | Pending |
-| UPD-04 | Phase 4: Update Skill & Polish | Pending |
+| UPD-01 | Phase 4: Update Skill & Polish | Complete |
+| UPD-02 | Phase 4: Update Skill & Polish | Complete |
+| UPD-03 | Phase 4: Update Skill & Polish | Complete |
+| UPD-04 | Phase 4: Update Skill & Polish | Complete |
 | CFG-02 | Phase 4: Update Skill & Polish | Pending |
 | CFG-03 | Phase 4: Update Skill & Polish | Pending |
 

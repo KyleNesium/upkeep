@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 03-03-PLAN.md (Windows package manager audit added to update skill as WSL-01 + WSL-04)
-last_updated: "2026-04-17T15:52:12.633Z"
+stopped_at: Completed 04-01-PLAN.md (Linux upgrade paths + snap/flatpak + split mas/softwareupdate skip notes)
+last_updated: "2026-04-17T16:07:05.670Z"
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 13
-  completed_plans: 13
+  total_plans: 15
+  completed_plans: 14
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-17)
 
 **Core value:** Every upkeep command gracefully handles macOS, Linux, and WSL2 without errors
-**Current focus:** Phase 03 — wsl2-support
+**Current focus:** Phase 04 — update-skill-polish
 
 ## Current Position
 
-Phase: 03 (wsl2-support) — EXECUTING
-Plan: 3 of 3
+Phase: 04 (update-skill-polish) — EXECUTING
+Plan: 1 of 2
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Plan: 3 of 3
 | Phase 03-wsl2-support P01 | 8 | 3 tasks | 3 files |
 | Phase 03 P02 | 2 | 4 tasks | 1 files |
 | Phase 03-wsl2-support P03 | 3 | 3 tasks | 1 files |
+| Phase 04-update-skill-polish P01 | 2 | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,9 @@ Recent decisions affecting current work:
 - [Phase 03-wsl2-support]: Windows package managers detected via command -v + /mnt/c guard — never upgrade from WSL2 (UAC/permission implications)
 - [Phase 03-wsl2-support]: Upgrade commands for winget/scoop/choco appear only in prose blockquote, never in executable bash fences
 - [Phase 03-wsl2-support]: Step 5 upgrade table explicitly excludes winget/scoop/choco — audit-only note added before table for machine-checkable compliance
+- [Phase 04-update-skill-polish]: apt/dnf/pacman upgrade via case $PKG_MGR dispatch inside linux/wsl2 gate; sudo commands surfaced as Manual Steps prose only
+- [Phase 04-update-skill-polish]: snap/flatpak gated by command -v (not $OS_TYPE) to handle rare third-party macOS installs
+- [Phase 04-update-skill-polish]: mas/softwareupdate each show independent skip lines — removed combined single echo line
 
 ### Pending Todos
 
@@ -110,6 +114,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T15:49:18.443Z
-Stopped at: Completed 03-03-PLAN.md (Windows package manager audit added to update skill as WSL-01 + WSL-04)
+Last session: 2026-04-17T16:07:05.668Z
+Stopped at: Completed 04-01-PLAN.md (Linux upgrade paths + snap/flatpak + split mas/softwareupdate skip notes)
 Resume file: None

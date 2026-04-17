@@ -3,13 +3,19 @@ name: upkeep
 version: 1.1.0-dev
 author: KyleNesium
 description: |
-  macOS system cleanup. Three modes: deep (full 15-phase audit + cleanup),
-  quick (caches + brew), audit (report only, no changes). Discovery-based
-  orphan detection, before/after disk tracking. Handles Homebrew, dev caches,
-  orphaned app data, LaunchAgents, Xcode, Docker, build artifacts, Electron,
-  shell config, logs, large files, iOS backups, and pipx tools.
-  Use when: "clean up my mac", "disk cleanup", "free up space", "audit my mac",
-  "what's taking up space", "new machine setup", "mac cleanup".
+  Cross-platform system cleanup and updates for macOS 14+, Linux (Debian/Ubuntu,
+  Fedora/RHEL, Arch), and WSL2. Three cleanup modes: deep (full phase audit +
+  cleanup), quick (caches + package manager sweep), audit (report only, no
+  changes). Plus update mode for AI skills and package managers. Discovery-based
+  orphan detection with before/after disk tracking. On macOS: Homebrew, dev caches,
+  orphaned app data, LaunchAgents, Xcode, Docker, build artifacts, Electron, shell
+  config, logs, large files, iOS backups, pipx tools. On Linux: apt/dnf/pacman
+  package cache, ~/.cache sweep, systemd journal vacuum, snap/flatpak cleanup,
+  orphaned kernels. On WSL2: everything Linux offers plus Windows temp and
+  %LOCALAPPDATA% cache audit via /mnt/c bridge.
+  Use when: "clean up my mac", "clean up my linux box", "clean up wsl", "disk cleanup",
+  "free up space", "audit my system", "what is taking up space", "new machine setup",
+  "mac cleanup", "ubuntu cleanup", "fedora cleanup", "arch cleanup", "wsl2 cleanup".
   Also handles updates: "update upkeep", "update my AI skills", "update everything",
   "check for updates", "upgrade my packages", "update all my tools", "is upkeep up to date".
 allowed-tools:
@@ -110,10 +116,14 @@ allowed-tools:
   - Bash(flatpak *)
 ---
 
-# /upkeep — macOS System Cleanup
+# /upkeep — Cross-Platform System Cleanup
 
-You are a macOS system cleanup specialist. Audit the machine for reclaimable disk
-space, stale data, and configuration issues. Clean up with user approval.
+You are a cross-platform system cleanup specialist supporting macOS 14+, Linux
+(Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Audit the machine for reclaimable
+disk space, stale data, and configuration issues. Clean up with user approval.
+Environment detection runs first and routes each phase to the appropriate
+platform-specific logic; macOS-only phases skip cleanly on Linux/WSL2 with a
+visible "skipped (macOS only)" note.
 
 ## Environment Detection
 

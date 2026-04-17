@@ -316,6 +316,54 @@ On "Yes", the actual upgrade requires root. Never run these from the skill — s
 >
 > After the user confirms completion, record the outcome in the Step 6 final report as `apt  ✓ upgraded  N packages` (or `↷ skipped`).
 
+### Snap packages (where installed)
+
+Only runs if `snap` is on `$PATH`. No sudo required for `snap refresh --list`; `snap refresh` itself may prompt for authentication via polkit on Linux — that prompt appears in the user's own terminal session.
+
+```bash
+if command -v snap >/dev/null 2>&1; then
+  echo "=== snap — pending refreshes ==="
+  snap refresh --list 2>/dev/null || echo "(no pending snap refreshes)"
+fi
+```
+
+Ask:
+> "Refresh snap packages? A) Yes  B) Skip snap"
+
+On "Yes", run:
+
+```bash
+if command -v snap >/dev/null 2>&1; then
+  snap refresh 2>&1
+fi
+```
+
+Report outcome in Step 6 as `snap  ✓ refreshed  N packages` (or `↷ skipped`). If `snap refresh` exits non-zero with a polkit/authentication error, surface the exact command for the user to run manually (`sudo snap refresh`) as a Manual Steps prose line — never re-run from the skill.
+
+### Flatpak applications (where installed)
+
+Only runs if `flatpak` is on `$PATH`. Flatpak updates do not require root when the flatpak runtime is user-scoped; system-scoped updates require root and are surfaced as Manual Steps only.
+
+```bash
+if command -v flatpak >/dev/null 2>&1; then
+  echo "=== flatpak — pending updates ==="
+  flatpak remote-ls --updates 2>/dev/null | head -20 || flatpak list --app 2>/dev/null | head -10
+fi
+```
+
+Ask:
+> "Update flatpak applications? A) Yes  B) Skip flatpak"
+
+On "Yes", run:
+
+```bash
+if command -v flatpak >/dev/null 2>&1; then
+  flatpak update -y 2>&1
+fi
+```
+
+Report outcome in Step 6 as `flatpak  ✓ updated  N apps` (or `↷ skipped`). For system-scoped installs requiring root, surface `sudo flatpak update -y` as a Manual Steps prose line — never run from the skill.
+
 | Tool | Audit command | Apply command | Extra warning |
 |------|--------------|---------------|---------------|
 | brew | `brew outdated` | `brew upgrade` | May affect pinned toolchains |
@@ -347,6 +395,9 @@ Apply? A) Yes  B) Skip macOS updates"
   bun      ✓ upgraded   1.1.0 → 1.2.0
   mise     ✓ upgraded   3 runtimes
   mas      ✓ upgraded   1 app
+  apt      ✓ upgraded   N packages     (Linux only)
+  snap     ✓ refreshed  N packages     (where installed)
+  flatpak  ✓ updated    N apps         (where installed)
 ── Informational ────────────────────────────────
   Claude plugins  9  (managed by Claude Code)
   Codex skills   12  (manual update required)
@@ -357,6 +408,7 @@ Apply? A) Yes  B) Skip macOS updates"
 ```
 Omit rows for tools not installed on this machine.
 On Linux or WSL2, show both `mas  ↷ skipped (macOS only)` and `macOS  ↷ skipped (macOS only)` rows in the report so the skip is visible rather than silent.
+On Linux/WSL2, show the apt/dnf/pacman row for the detected $PKG_MGR (omit the other two). Show snap and flatpak rows only when those tools were detected via command -v in Step 5. Omit all three on macOS unless snap or flatpak is installed there via third-party means.
 
 Omit the entire "Windows Packages" group on macOS or plain Linux. In WSL2, omit any row whose tool was not detected by command -v in Step 2.
 

@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: unknown
 stopped_at: Completed 01-01-PLAN.md (router skill OS detection + Linux allowed-tools + macOS guards)
-last_updated: "2026-04-17T08:58:13.736Z"
+last_updated: "2026-04-17T09:01:22.338Z"
 progress:
   total_phases: 4
   completed_phases: 1

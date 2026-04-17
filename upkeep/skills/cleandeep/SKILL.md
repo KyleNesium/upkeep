@@ -849,6 +849,8 @@ Batch removals by phase — don't ask per-file unless ambiguous.
 | 14| iOS backups | ... | ...GB | Cleaned / Skipped |
 | 15| pipx tools | ... | — | Cleaned / Skipped |
 | 16| Snap & Flatpak | ... | ...MB | Cleaned / Skipped |
+| 17| Windows Temp (WSL2) | ... | ...MB | Cleaned / Skipped |
+| 18| Windows npm/pip (WSL2) | ... | ...MB | Cleaned / Skipped |
 | **Total** | | | **...GB** | |
 ```
 

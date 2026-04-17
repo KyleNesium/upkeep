@@ -228,6 +228,15 @@ If the nudge fires, display it once at the top before phase output. Then continu
 
 ## Phase 2: Homebrew Audit (all modes)
 
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 2: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select`/`mas`/`softwareupdate` commands below.
+
 Run this check first:
 ```bash
 command -v brew >/dev/null 2>&1 && echo "OK" || echo "Phase 2 skipped — brew not installed"
@@ -284,6 +293,15 @@ command and just offer `rm -rf` on the directory instead.
 Present the total and ask for approval before clearing.
 
 ## Phase 4: Orphaned Application Data (Deep + Audit)
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 4: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select`/`mas`/`softwareupdate` commands below.
 
 **Discovery-based.** Cross-reference what's installed against what has leftover data.
 
@@ -396,6 +414,15 @@ before running — these reports may be needed for diagnosis.
 
 ## Phase 5: LaunchAgents (Deep + Audit)
 
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 5: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select`/`mas`/`softwareupdate` commands below.
+
 Audit `~/Library/LaunchAgents/`:
 
 ```bash
@@ -444,6 +471,15 @@ The label-based form is the modern target specifier. Fall back to the
 plist-path form for agents that didn't load cleanly.
 
 ## Phase 6: Xcode & Developer Tools (Deep + Audit)
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 6: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select`/`mas`/`softwareupdate` commands below.
 
 Run this check first:
 ```bash
@@ -580,6 +616,15 @@ handles those).
 
 ## Phase 11: Electron App Caches (all modes)
 
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 11: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select`/`mas`/`softwareupdate` commands below.
+
 For INSTALLED Electron apps only, check for bloated caches:
 
 ```bash
@@ -625,6 +670,15 @@ Often gigabytes. Safe to empty. Offer:
 - `rm -rf ~/.Trash/*` or suggest the user empties via Finder (Cmd+Shift+Delete).
 
 ## Phase 14: iPhone / iOS Backups (Deep + Audit)
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 14: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select`/`mas`/`softwareupdate` commands below.
 
 ```bash
 du -sh ~/Library/Application\ Support/MobileSync/Backup/ 2>/dev/null
@@ -699,8 +753,12 @@ command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
 command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
 command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
 command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
-mas outdated 2>/dev/null                                     # App Store
-softwareupdate -l 2>/dev/null | grep -E "^\s*\*"             # macOS updates
+if [ "$OS_TYPE" = "macos" ]; then
+  mas outdated 2>/dev/null                                   # App Store
+  softwareupdate -l 2>/dev/null | grep -E "^\s*\*"           # macOS updates
+else
+  echo "mas + softwareupdate: skipped (macOS only)"
+fi
 ```
 
 ### Step 3: Overview Table
@@ -749,6 +807,8 @@ On success: read `plugin.json` / `VERSION` for old → new version string.
 ### Step 5: Apply Package Updates
 
 Each category has its own gate. Skipping one does NOT cancel others.
+
+On Linux and WSL2, skip the `mas` and `macOS` rows in the table below — they are macOS-only. Display `mas  ↷ skipped (macOS only)` and `macOS  ↷ skipped (macOS only)` in the final report instead.
 
 | Tool | Audit command | Apply command | Extra warning |
 |------|--------------|---------------|---------------|

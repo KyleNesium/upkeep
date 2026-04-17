@@ -1,6 +1,6 @@
 ---
 name: upkeep:update
-version: 1.0.6
+version: 1.1.0-dev
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep. Discovers what's outdated
@@ -22,6 +22,11 @@ allowed-tools:
   - Bash(wc *)
   - Bash(grep *)
   - Bash(cut *)
+  # OS detection (cross-platform)
+  - Bash(uname *)
+  - Bash(lsb_release *)
+  - Bash(lsblk *)
+  - Bash(cat *)
   # Package manager audit commands
   - Bash(brew *)
   - Bash(npm *)
@@ -46,6 +51,15 @@ allowed-tools:
   - Bash(git -C * symbolic-ref *)
   - Read
   - Glob
+  # Linux system tools
+  - Bash(systemctl *)
+  - Bash(journalctl *)
+  # Linux package managers (Phase 4 of roadmap adds upgrade commands)
+  - Bash(apt *)
+  - Bash(dnf *)
+  - Bash(pacman *)
+  - Bash(snap *)
+  - Bash(flatpak *)
 ---
 
 # /upkeep:update — Update AI Skills & Package Managers

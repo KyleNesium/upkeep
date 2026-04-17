@@ -276,6 +276,46 @@ On Linux or WSL2, skip the `mas` and `macOS` rows below — do not run `mas upgr
 
 On WSL2, the Step 2 "Windows package managers" block is audit-only — this Step 5 table does NOT include winget, scoop, or choco. Upgrades for those require a Windows PowerShell session and are intentionally out of scope for update. The Step 6 final report lists each detected Windows package manager under "Windows Packages" with status "audit only" so the skip is visible rather than silent.
 
+### Linux system packages (apt / dnf / pacman)
+
+Only runs on `$OS_TYPE` of `linux` or `wsl2`. Skipped silently on macOS. Each package manager has its own dry-run preview and approval gate — skipping one never affects the snap/flatpak gates that follow.
+
+```bash
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  case "$PKG_MGR" in
+    apt)
+      echo "=== apt — pending upgrades ==="
+      _APT_COUNT=$(apt-get upgrade --dry-run 2>/dev/null | grep -c "^Inst")
+      echo "$_APT_COUNT package(s) to upgrade"
+      apt-get upgrade --dry-run 2>/dev/null | grep "^Inst" | head -20
+      ;;
+    dnf)
+      echo "=== dnf — pending upgrades ==="
+      dnf check-update 2>/dev/null | grep -vE "^(Last metadata|$)" | head -20
+      ;;
+    pacman)
+      echo "=== pacman — pending upgrades ==="
+      pacman -Qu 2>/dev/null | head -20
+      ;;
+    *)
+      echo "Linux system packages: unsupported distro ($OS_DISTRO) — skipping"
+      ;;
+  esac
+fi
+```
+
+After the preview, ask per-manager:
+> "Upgrade system packages via $PKG_MGR? A) Yes  B) Skip $PKG_MGR"
+
+On "Yes", the actual upgrade requires root. Never run these from the skill — surface them as Manual Steps prose for the user to run in their own shell:
+
+> To apply the upgrade, run in your own terminal:
+> - apt: `sudo apt-get update && sudo apt-get upgrade -y`
+> - dnf: `sudo dnf upgrade -y`
+> - pacman: `sudo pacman -Syu --noconfirm`
+>
+> After the user confirms completion, record the outcome in the Step 6 final report as `apt  ✓ upgraded  N packages` (or `↷ skipped`).
+
 | Tool | Audit command | Apply command | Extra warning |
 |------|--------------|---------------|---------------|
 | brew | `brew outdated` | `brew upgrade` | May affect pinned toolchains |

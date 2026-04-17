@@ -182,6 +182,40 @@ else
 fi
 ```
 
+### Windows package managers (WSL2 only — audit only)
+
+```bash
+if [ "$OS_TYPE" = "wsl2" ]; then
+  if [ ! -d "/mnt/c" ]; then
+    echo "Windows package managers: /mnt/c not mounted — skipping."
+  else
+    echo "=== Windows package managers (audit — no upgrades run) ==="
+    if command -v winget >/dev/null 2>&1; then
+      echo "--- winget ---"
+      winget list 2>/dev/null | head -5 || echo "(winget accessible but list failed)"
+    else
+      echo "winget: not on PATH"
+    fi
+    if command -v scoop >/dev/null 2>&1; then
+      echo "--- scoop ---"
+      scoop list 2>/dev/null | head -5 || echo "(scoop accessible but list failed)"
+    else
+      echo "scoop: not on PATH"
+    fi
+    if command -v choco >/dev/null 2>&1; then
+      echo "--- choco ---"
+      choco list 2>/dev/null | head -5 || echo "(choco accessible but list failed)"
+    else
+      echo "choco: not on PATH"
+    fi
+  fi
+fi
+```
+
+> Audit only. This block NEVER runs `winget upgrade`, `scoop update`, or `choco upgrade`. Those require a Windows shell (PowerShell or CMD) — running them from WSL2 has permission and UAC implications that `update` intentionally avoids. When one or more Windows package managers are detected, display this exact guidance after the Windows package manager output:
+>
+> "To upgrade these, open a Windows PowerShell (as administrator if needed) and run `winget upgrade --all`, `scoop update *`, or `choco upgrade all -y` respectively."
+
 ## Step 3: Overview Table
 
 Always present before touching anything:

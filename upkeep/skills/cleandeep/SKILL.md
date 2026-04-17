@@ -147,21 +147,36 @@ If `$OS_TYPE` is `unknown`, run Phase 1 (Baseline) only and skip every subsequen
 Record starting disk state for before/after comparison.
 
 ```bash
-echo "=== Disk ===" && diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
-echo "=== macOS ===" && sw_vers
-echo "=== Homebrew ===" && brew --version 2>/dev/null || echo "not installed"
+if [ "$OS_TYPE" = "macos" ]; then
+  echo "=== Disk ===" && diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
+  echo "=== macOS ===" && sw_vers
+  echo "=== Homebrew ===" && brew --version 2>/dev/null || echo "not installed"
+elif [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== Disk ===" && df -h / | tail -1
+  echo "=== OS ===" && (cat /etc/os-release 2>/dev/null | grep -E "^(NAME|VERSION|ID)=" || echo "unknown")
+  echo "=== Kernel ===" && uname -r
+  echo "=== Package Manager ===" && echo "Detected: $PKG_MGR"
+  case "$PKG_MGR" in
+    apt)    apt-cache stats 2>/dev/null | head -3 || echo "apt-cache not available" ;;
+    dnf)    dnf --version 2>/dev/null | head -1 || echo "dnf not available" ;;
+    pacman) pacman --version 2>/dev/null | head -1 || echo "pacman not available" ;;
+    *) echo "No supported package manager detected" ;;
+  esac
+fi
 ```
 
 Capture "Available" and "Purgeable" from `diskutil info`. APFS volumes have
 purgeable space that `df` doesn't distinguish — use `diskutil` for accurate
 before/after. Fall back to `df` if unavailable.
 
+> On Linux/WSL2, before/after comparison uses `df -h /` only — there is no APFS purgeable space to track.
+
 Then run a passive update check (at most once per 24h, silent on all failures):
 
 ```bash
 if [ "${UPKEEP_SKIP_UPDATE_CHECK:-}" != "1" ] && command -v git >/dev/null 2>&1; then
   _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../../.last-update-check"
-  _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || echo 0)
+  _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || stat -c %Y "$_CHECK_FILE" 2>/dev/null || echo 0)
   if [ $(( $(date +%s) - $_LAST )) -gt 86400 ]; then
     git -C "${CLAUDE_SKILL_DIR}/../../.." fetch --tags --quiet origin main 2>/dev/null
     touch "$_CHECK_FILE" 2>/dev/null

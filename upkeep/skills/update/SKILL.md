@@ -60,6 +60,10 @@ allowed-tools:
   - Bash(pacman *)
   - Bash(snap *)
   - Bash(flatpak *)
+  # Windows package managers (WSL2 audit only — never invoke upgrade commands)
+  - Bash(winget *)
+  - Bash(scoop *)
+  - Bash(choco *)
 ---
 
 # /upkeep:update — Update AI Skills & Package Managers
@@ -122,6 +126,13 @@ case "$_KERNEL" in
 esac
 export OS_TYPE OS_DISTRO PKG_MGR
 echo "Environment: $OS_TYPE / $OS_DISTRO${PKG_MGR:+ (pkg: $PKG_MGR)}"
+```
+
+```bash
+# ── WSL2 banner (fires only on wsl2) ─────────────────────────────
+if [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== Running in WSL2 on Windows ==="
+fi
 ```
 
 If `$OS_TYPE` is `unknown`, report "Update skill requires macOS, Linux, or WSL2. Detected: $(uname -s)" and stop.

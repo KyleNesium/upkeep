@@ -14,12 +14,12 @@
 
 ### Linux Cleanup
 
-- [ ] **LNX-01**: cleandeep adds Linux baseline phase (df, /etc/os-release, kernel version, package manager)
-- [ ] **LNX-02**: cleandeep adds Linux package cache cleanup (apt clean/autoclean/autoremove, dnf clean, pacman -Sc equivalent)
+- [x] **LNX-01**: cleandeep adds Linux baseline phase (df, /etc/os-release, kernel version, package manager)
+- [x] **LNX-02**: cleandeep adds Linux package cache cleanup (apt clean/autoclean/autoremove, dnf clean, pacman -Sc equivalent)
 - [ ] **LNX-03**: cleandeep adds Linux user cache cleanup (~/.cache/ — size audit + selective removal with approval)
 - [ ] **LNX-04**: cleandeep adds Linux systemd journal cleanup (journalctl --disk-usage, vacuum with approval)
 - [ ] **LNX-05**: cleandeep adds Snap/Flatpak cleanup (snap list, flatpak uninstall --unused) where installed
-- [ ] **LNX-06**: cleandeep adds orphaned .deb/.rpm files and old kernel cleanup (approval-gated)
+- [x] **LNX-06**: cleandeep adds orphaned .deb/.rpm files and old kernel cleanup (approval-gated)
 - [ ] **LNX-07**: cleanquick includes Linux equivalents (package cache, user cache) alongside existing dev cache phases
 - [ ] **LNX-08**: audit skill reports Linux-specific disk usage and package manager state
 
@@ -76,12 +76,12 @@
 | OS-03 | Phase 1: OS Detection & Config | Complete |
 | OS-04 | Phase 1: OS Detection & Config | Complete |
 | CFG-01 | Phase 1: OS Detection & Config | Complete |
-| LNX-01 | Phase 2: Linux Cleanup | Pending |
-| LNX-02 | Phase 2: Linux Cleanup | Pending |
+| LNX-01 | Phase 2: Linux Cleanup | Complete |
+| LNX-02 | Phase 2: Linux Cleanup | Complete |
 | LNX-03 | Phase 2: Linux Cleanup | Pending |
 | LNX-04 | Phase 2: Linux Cleanup | Pending |
 | LNX-05 | Phase 2: Linux Cleanup | Pending |
-| LNX-06 | Phase 2: Linux Cleanup | Pending |
+| LNX-06 | Phase 2: Linux Cleanup | Complete |
 | LNX-07 | Phase 2: Linux Cleanup | Pending |
 | LNX-08 | Phase 2: Linux Cleanup | Pending |
 | WSL-01 | Phase 3: WSL2 Support | Pending |

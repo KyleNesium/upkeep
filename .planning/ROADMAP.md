@@ -48,7 +48,13 @@ Plans:
   4. cleandeep on Linux offers journald vacuum and Snap/Flatpak orphan removal where those tools are installed
   5. cleanquick on Linux runs the package cache and user cache phases alongside existing dev-cache phases
   6. audit on Linux reports disk usage and package manager state without making any changes
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 02-01-PLAN.md — cleandeep: Linux baseline + package cache + orphan cleanup (LNX-01, LNX-02, LNX-06)
+- [ ] 02-02-PLAN.md — cleandeep: Linux user cache + systemd journal vacuum (LNX-03, LNX-04)
+- [ ] 02-03-PLAN.md — cleandeep: Snap + Flatpak cleanup phase (LNX-05)
+- [ ] 02-04-PLAN.md — cleanquick: Linux lightweight package cache + age-based ~/.cache sweep (LNX-07)
+- [ ] 02-05-PLAN.md — audit: Linux read-only reporting across baseline/packages/cache/journal/snap+flatpak (LNX-08)
 
 ### Phase 3: WSL2 Support
 **Goal**: All skills detect WSL2 and cleandeep adds Windows-side bonus cleanup phases
@@ -81,6 +87,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. OS Detection & Config | 5/5 | Complete    | 2026-04-17 |
-| 2. Linux Cleanup | 0/TBD | Not started | - |
+| 2. Linux Cleanup | 2/5 | In Progress|  |
 | 3. WSL2 Support | 0/TBD | Not started | - |
 | 4. Update Skill & Polish | 0/TBD | Not started | - |

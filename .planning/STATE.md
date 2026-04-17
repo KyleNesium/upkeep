@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 01-01-PLAN.md (router skill OS detection + Linux allowed-tools + macOS guards)
-last_updated: "2026-04-17T09:01:22.338Z"
+stopped_at: Completed 02-04-PLAN.md (cleanquick Linux Phase 2 pkg cache + Phase 3 age sweep)
+last_updated: "2026-04-17T12:30:07.723Z"
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 10
+  completed_plans: 7
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-17)
 
 **Core value:** Every upkeep command gracefully handles macOS, Linux, and WSL2 without errors
-**Current focus:** Phase 1 — OS Detection & Config
+**Current focus:** Phase 02 — linux-cleanup
 
 ## Current Position
 
-Phase: 1 (OS Detection & Config) — EXECUTING
-Plan: 4 of 5
+Phase: 02 (linux-cleanup) — EXECUTING
+Plan: 2 of 5
 
 ## Performance Metrics
 
@@ -50,6 +50,8 @@ Plan: 4 of 5
 | Phase 01-os-detection-config P02 | 13 | 3 tasks | 1 files |
 | Phase 01 P01 | 2 | 3 tasks | 1 files |
 | Phase 01 P05 | 15 | 3 tasks | 1 files |
+| Phase 02 P01 | 2 | 2 tasks | 1 files |
+| Phase 02-linux-cleanup P04 | 2 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -71,6 +73,11 @@ Recent decisions affecting current work:
 - [Phase 01-os-detection-config]: cleandeep version bumped to 1.1.0-dev to signal cross-platform work in progress
 - [Phase 01]: Linux allowed-tools slots pre-populated in update skill so Phase 4 can add upgrade commands without re-editing frontmatter
 - [Phase 01]: Version bumped to 1.1.0-dev in router skill to mark in-progress cross-platform work
+- [Phase 02]: Phase 1 uses if/elif OS branching so macOS and Linux run separate commands
+- [Phase 02]: stat fallback chain (stat -f %m || stat -c %Y || echo 0) makes update check cross-platform
+- [Phase 02]: Phase 2 approval gate documented as markdown prose outside bash fence, not shell code
+- [Phase 02-linux-cleanup]: cleanquick Phase 2 quick mode: apt-get autoclean (not clean), dnf clean packages (not clean all) — lighter footprint for monthly cadence, no autoremove
+- [Phase 02-linux-cleanup]: cleanquick Phase 3 Step 3: find -mtime +30 -mindepth 1 -maxdepth 2 bounds to avoid ~/.cache itself and hot sub-paths; warn-list for mesa_shader_cache/fontconfig/nvidia
 
 ### Pending Todos
 
@@ -82,6 +89,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T08:58:02.405Z
-Stopped at: Completed 01-01-PLAN.md (router skill OS detection + Linux allowed-tools + macOS guards)
+Last session: 2026-04-17T12:30:07.721Z
+Stopped at: Completed 02-04-PLAN.md (cleanquick Linux Phase 2 pkg cache + Phase 3 age sweep)
 Resume file: None

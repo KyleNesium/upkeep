@@ -2,11 +2,13 @@
 
 # upkeep
 
-**macOS system cleanup and updater Skill for Claude Code**
+**Cross-platform system cleanup and updater Skill for Claude Code**
 
-Discovery-based disk audit, cleanup, and one-command updates. Finds orphaned app data, stale caches, dead LaunchAgents, and configuration drift. Also updates AI skills (upkeep, gstack, etc.) and package managers (brew, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep.
+Discovery-based disk audit, cleanup, and one-command updates for macOS 14+, Linux (Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Finds orphaned app data, stale caches, dead LaunchAgents, Linux package cruft, systemd journal bloat, and configuration drift. Also updates AI skills (upkeep, gstack, etc.) and package managers (brew, apt/dnf/pacman, snap, flatpak, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep.
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
+[![Linux](https://img.shields.io/badge/Linux-Debian%20%7C%20Fedora%20%7C%20Arch-FCC624?logo=linux&logoColor=black)](https://www.kernel.org/)
+[![WSL2](https://img.shields.io/badge/WSL2-supported-4EAA25?logo=windowsterminal&logoColor=white)](https://learn.microsoft.com/windows/wsl/)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-skill-7C3AED?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgMkw0IDdWMTdMMTIgMjJMMjAgMTdWN0wxMiAyWiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
 [![Version](https://img.shields.io/github/v/release/KyleNesium/upkeep?color=green)](https://github.com/KyleNesium/upkeep/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -51,9 +53,21 @@ First deep clean on a migrated Mac typically recovers **10–50GB**. Monthly qui
 
 ## Prerequisites
 
-- **macOS 14+** (Sonoma or later)
+### Supported platforms
+
+- **macOS 14+** (Sonoma or later) — full 15-phase coverage
+- **Linux** — Debian/Ubuntu (apt), Fedora/RHEL (dnf), Arch (pacman). Optional: snap, flatpak.
+- **WSL2** on Windows 10/11 — Ubuntu, Debian, Fedora, or Arch distro. /mnt/c bridge required for Windows-side bonus phases.
+
+### Required
+
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (for `/upkeep` slash command)
-- **Homebrew** (optional — Phase 2 is skipped if not installed)
+
+### Optional (detected at runtime — skipped gracefully if absent)
+
+- **macOS:** Homebrew, Xcode Command Line Tools, Docker
+- **Linux/WSL2:** apt / dnf / pacman, snap, flatpak, systemd (for journalctl vacuum)
+- **Both:** git (for skill updates), node/npm/bun/pipx/uv/cargo/etc. for their respective cache cleanups
 
 ---
 

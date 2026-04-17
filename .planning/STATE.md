@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 02-03-PLAN.md (Snap & Flatpak cleanup added to cleandeep as Phase 16, Linux/WSL2)
-last_updated: "2026-04-17T12:41:39.744Z"
+stopped_at: Completed 03-01-PLAN.md (WSL2 banner added to cleanquick, audit, and upkeep router)
+last_updated: "2026-04-17T15:53:00.000Z"
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 10
+  total_plans: 13
   completed_plans: 10
 ---
 
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-17)
 
 **Core value:** Every upkeep command gracefully handles macOS, Linux, and WSL2 without errors
-**Current focus:** Phase 02 — linux-cleanup
+**Current focus:** Phase 03 — wsl2-support
 
 ## Current Position
 
-Phase: 02 (linux-cleanup) — EXECUTING
-Plan: 2 of 5
+Phase: 03 (wsl2-support) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Plan: 2 of 5
 | Phase 02-linux-cleanup P05 | 3 | 3 tasks | 1 files |
 | Phase 02-linux-cleanup P02 | 1 | 2 tasks | 1 files |
 | Phase 02-linux-cleanup P03 | 1 | 2 tasks | 1 files |
+| Phase 03-wsl2-support P01 | 8 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,8 @@ Recent decisions affecting current work:
 - [Phase 02-linux-cleanup]: User journal vacuumed at 200M; system journal sudo command surfaced as manual step only — never in executable fence
 - [Phase 02-linux-cleanup]: Phase 16 placed after Phase 15 (pipx) and before Reporting — mirrors macOS optional-tool tail pattern
 - [Phase 02-linux-cleanup]: sudo snap remove and sudo flatpak uninstall shown in fenced blocks with comment noting Manual Steps context, matching Phase 2/7/9 pattern throughout cleandeep skill
+- [Phase 03-wsl2-support]: WSL2 banner is a separate bash fence after OS Detection block — not inlined — for clean diffs and visual distinction
+- [Phase 03-wsl2-support]: Banner position: after OS Detection closing fence, before "If $OS_TYPE is unknown" paragraph — consistent across all five skills
 
 ### Pending Todos
 
@@ -100,6 +103,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T12:37:29.774Z
-Stopped at: Completed 02-03-PLAN.md (Snap & Flatpak cleanup added to cleandeep as Phase 16, Linux/WSL2)
+Last session: 2026-04-17T15:53:00.000Z
+Stopped at: Completed 03-01-PLAN.md (WSL2 banner added to cleanquick, audit, and upkeep router)
 Resume file: None

@@ -774,7 +774,8 @@ if [ "$OS_TYPE" = "macos" ]; then
   mas outdated 2>/dev/null                                   # App Store
   softwareupdate -l 2>/dev/null | grep -E "^\s*\*"           # macOS updates
 else
-  echo "mas + softwareupdate: skipped (macOS only)"
+  echo "mas: skipped (macOS only)"
+  echo "softwareupdate: skipped (macOS only)"
 fi
 ```
 

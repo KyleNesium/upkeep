@@ -7,10 +7,10 @@
 
 ### OS Detection
 
-- [ ] **OS-01**: All skills detect current OS (macOS / Linux / WSL2) at runtime using `uname`/`/etc/os-release`
-- [ ] **OS-02**: macOS-only phases are guarded and skip gracefully on Linux/WSL2 with a clear "skipped (macOS only)" note
-- [ ] **OS-03**: WSL2 is detected separately from plain Linux (via `uname -r | grep -qi microsoft`)
-- [ ] **OS-04**: Linux distro family is detected (Debian/Ubuntu → apt, Fedora/RHEL → dnf, Arch → pacman) for package manager routing
+- [x] **OS-01**: All skills detect current OS (macOS / Linux / WSL2) at runtime using `uname`/`/etc/os-release`
+- [x] **OS-02**: macOS-only phases are guarded and skip gracefully on Linux/WSL2 with a clear "skipped (macOS only)" note
+- [x] **OS-03**: WSL2 is detected separately from plain Linux (via `uname -r | grep -qi microsoft`)
+- [x] **OS-04**: Linux distro family is detected (Debian/Ubuntu → apt, Fedora/RHEL → dnf, Arch → pacman) for package manager routing
 
 ### Linux Cleanup
 
@@ -39,7 +39,7 @@
 
 ### Tooling & Config
 
-- [ ] **CFG-01**: All SKILL.md allowed-tools frontmatter updated with Linux commands (uname, lsb_release, lsblk, apt, dnf, pacman, snap, flatpak, systemctl, journalctl)
+- [x] **CFG-01**: All SKILL.md allowed-tools frontmatter updated with Linux commands (uname, lsb_release, lsblk, apt, dnf, pacman, snap, flatpak, systemctl, journalctl)
 - [ ] **CFG-02**: upkeep SKILL.md description updated to reflect cross-platform support
 - [ ] **CFG-03**: README updated — prerequisites, badges, and platform section reflect macOS 14+ / Linux / WSL2
 
@@ -71,11 +71,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OS-01 | Phase 1: OS Detection & Config | Pending |
-| OS-02 | Phase 1: OS Detection & Config | Pending |
-| OS-03 | Phase 1: OS Detection & Config | Pending |
-| OS-04 | Phase 1: OS Detection & Config | Pending |
-| CFG-01 | Phase 1: OS Detection & Config | Pending |
+| OS-01 | Phase 1: OS Detection & Config | Complete |
+| OS-02 | Phase 1: OS Detection & Config | Complete |
+| OS-03 | Phase 1: OS Detection & Config | Complete |
+| OS-04 | Phase 1: OS Detection & Config | Complete |
+| CFG-01 | Phase 1: OS Detection & Config | Complete |
 | LNX-01 | Phase 2: Linux Cleanup | Pending |
 | LNX-02 | Phase 2: Linux Cleanup | Pending |
 | LNX-03 | Phase 2: Linux Cleanup | Pending |

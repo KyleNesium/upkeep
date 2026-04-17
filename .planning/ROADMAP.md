@@ -80,7 +80,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. OS Detection & Config | 0/5 | Not started | - |
+| 1. OS Detection & Config | 1/5 | In Progress|  |
 | 2. Linux Cleanup | 0/TBD | Not started | - |
 | 3. WSL2 Support | 0/TBD | Not started | - |
 | 4. Update Skill & Polish | 0/TBD | Not started | - |

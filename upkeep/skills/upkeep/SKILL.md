@@ -158,6 +158,13 @@ export OS_TYPE OS_DISTRO PKG_MGR
 echo "Environment: $OS_TYPE / $OS_DISTRO${PKG_MGR:+ (pkg: $PKG_MGR)}"
 ```
 
+```bash
+# ── WSL2 banner (fires only on wsl2) ─────────────────────────────
+if [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== Running in WSL2 on Windows ==="
+fi
+```
+
 If `$OS_TYPE` is `unknown`, continue running Phase 1 (Baseline) but skip every subsequent phase that is not cross-platform, with the note "skipped (unsupported OS: $(uname -s))".
 
 ## Mode Selection

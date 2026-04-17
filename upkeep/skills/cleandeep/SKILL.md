@@ -745,6 +745,42 @@ Never use sudo — flatpak operates on the user's install by default. For system
 sudo flatpak uninstall --unused --assumeyes --system
 ```
 
+## Phase 17: Windows Temp Cleanup (WSL2 only)
+
+```bash
+if [ "$OS_TYPE" != "wsl2" ]; then
+  echo "Phase 17: skipped (WSL2 only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to Phase 18.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to Phase 18. Do not execute any of the /mnt/c/ commands below.
+
+```bash
+if [ ! -d "/mnt/c" ]; then
+  echo "Phase 17: /mnt/c not mounted — Windows drive unavailable. Skipping."
+else
+  _WIN_TEMP="/mnt/c/Users/$USER/AppData/Local/Temp"
+  if [ ! -d "$_WIN_TEMP" ]; then
+    echo "Phase 17: Windows Temp path not found at $_WIN_TEMP"
+    echo "(User may have a different Windows username — skipping)"
+  else
+    echo "=== Windows Temp size ==="
+    du -sh "$_WIN_TEMP" 2>/dev/null || echo "(unable to stat — permission or I/O issue)"
+    echo "=== Largest entries inside Windows Temp (top 10) ==="
+    du -sh "$_WIN_TEMP"/*/ 2>/dev/null | sort -rh | head -10
+  fi
+fi
+```
+
+> **Windows Temp — approval gate.** If the size is non-trivial (>100MB), prompt: "Clear Windows Temp at /mnt/c/Users/$USER/AppData/Local/Temp/? (yes / no)". On `yes`, run:
+>
+> ```bash
+> rm -rf /mnt/c/Users/"$USER"/AppData/Local/Temp/* 2>/dev/null || true
+> ```
+>
+> This removes only the contents of the Temp directory, not the directory itself — Windows recreates files as needed. Some files may be locked by running Windows processes; the `|| true` swallows those specific failures so the phase keeps going. Never use sudo on /mnt/c/ paths — if a file cannot be removed, surface the path as a findings line and move on. On `no`, skip to Phase 18.
+
 ## Reporting
 
 ### Per-phase

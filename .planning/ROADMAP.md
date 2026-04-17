@@ -65,7 +65,11 @@ Plans:
   2. cleandeep in WSL2 offers to clean Windows temp files at /mnt/c/Users/$USER/AppData/Local/Temp/ — gated behind user approval
   3. cleandeep in WSL2 reports the size of Windows npm/pip caches via the /mnt/c/ bridge and offers optional cleanup
   4. update in WSL2 detects accessible Windows package managers (winget, scoop, chocolatey) and reports their status — no auto-upgrade, audit only
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 03-01-PLAN.md — WSL2 banner in cleanquick / audit / upkeep router (WSL-01)
+- [ ] 03-02-PLAN.md — cleandeep: WSL2 banner + Phase 17 Windows Temp + Phase 18 Windows npm/pip cache audit (WSL-01, WSL-02, WSL-03)
+- [ ] 03-03-PLAN.md — update: WSL2 banner + Windows package manager detection (winget/scoop/choco, audit only) (WSL-01, WSL-04)
 
 ### Phase 4: Update Skill & Polish
 **Goal**: update skill supports Linux package managers and all documentation reflects cross-platform reality
@@ -88,5 +92,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. OS Detection & Config | 5/5 | Complete    | 2026-04-17 |
 | 2. Linux Cleanup | 5/5 | Complete   | 2026-04-17 |
-| 3. WSL2 Support | 0/TBD | Not started | - |
+| 3. WSL2 Support | 0/3 | Not started | - |
 | 4. Update Skill & Polish | 0/TBD | Not started | - |

@@ -531,20 +531,50 @@ Report totals. Offer to remove with user approval — all are rebuildable via
 ## Phase 9: Stale Logs
 
 ```bash
-ls ~/Library/Logs/ 2>/dev/null
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== systemd journal disk usage ==="
+  journalctl --disk-usage 2>/dev/null || echo "journalctl not available"
+  echo "=== user journal (no sudo) ==="
+  journalctl --user --disk-usage 2>/dev/null || echo "user journal not configured"
+fi
+```
+
+> **Journal vacuum — approval gate (Linux/WSL2 only).** If `journalctl --disk-usage` reports more than 500MB, prompt: "Vacuum the user journal to 200MB? (yes / no)". On yes, run:
+>
+> ```bash
+> journalctl --user --vacuum-size=200M 2>/dev/null || echo "user journal vacuum unavailable"
+> ```
+>
+> The system journal requires sudo — never execute it. If the system journal disk usage is over 500MB, surface this exact command under ## Manual Steps:
+>
+> ```bash
+> # Vacuum system journal to 500MB (requires sudo)
+> sudo journalctl --vacuum-size=500M
+> ```
+>
+> After the Linux journal block, fall through to the macOS log scans below only when `$OS_TYPE = "macos"`. On Linux/WSL2 the existing `~/Library/Logs` scans will naturally return empty and can run — but to avoid noise, wrap the rest of Phase 9 in an `if [ "$OS_TYPE" = "macos" ]; then ... fi` guard.
+
+```bash
+if [ "$OS_TYPE" = "macos" ]; then
+  ls ~/Library/Logs/ 2>/dev/null
+fi
 ```
 
 Cross-reference against installed apps. Flag:
 1. Log directories from uninstalled apps
 2. Rotated log files — scan for them:
 ```bash
-find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
-  -exec du -sh {} + 2>/dev/null | sort -rh
+if [ "$OS_TYPE" = "macos" ]; then
+  find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
+    -exec du -sh {} + 2>/dev/null | sort -rh
+fi
 ```
 3. Any single log file over 10MB:
 ```bash
-find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
-  -exec du -sh {} + 2>/dev/null | sort -rh
+if [ "$OS_TYPE" = "macos" ]; then
+  find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
+    -exec du -sh {} + 2>/dev/null | sort -rh
+fi
 ```
 
 ## Phase 10: Shell Config Audit

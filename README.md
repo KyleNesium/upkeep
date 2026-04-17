@@ -71,6 +71,24 @@ First deep clean on a migrated Mac typically recovers **10–50GB**. Monthly qui
 
 ---
 
+## Platform Support
+
+upkeep routes each phase based on detected OS. Phases skip cleanly on platforms where they don't apply (e.g., Homebrew on Linux, systemd journal on macOS) with a visible "skipped" note — never errors.
+
+| Platform       | Package managers                                                  | Platform-specific phases                                                                     |
+|----------------|-------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| macOS 14+      | brew, mas                                                         | Homebrew, LaunchAgents, Xcode, iOS backups, Electron caches, orphaned app data (mdfind)      |
+| Ubuntu/Debian  | apt, snap (opt), flatpak (opt)                                    | apt clean, ~/.cache sweep, journalctl vacuum, snap/flatpak cleanup, orphaned kernels + .deb  |
+| Fedora/RHEL    | dnf, flatpak (opt)                                                | dnf clean, ~/.cache sweep, journalctl vacuum, flatpak cleanup, orphaned .rpm + kernels       |
+| Arch           | pacman, flatpak (opt)                                             | pacman -Sc, ~/.cache sweep, journalctl vacuum, flatpak cleanup, orphaned packages            |
+| WSL2 (Windows) | Linux pkg mgr + Windows audit (winget, scoop, choco — audit only) | Everything Linux offers + Windows %TEMP% and %LOCALAPPDATA% npm/pip cache audit via /mnt/c   |
+
+Detection runs once at the top of every skill invocation via `uname -s`, `/etc/os-release`, and `uname -r | grep -qi microsoft` (for WSL2). The result is exported as `$OS_TYPE`, `$OS_DISTRO`, and `$PKG_MGR` for every downstream phase.
+
+Cross-platform phases that run everywhere: disk baseline (Phase 1), dev tool caches (Phase 3), Docker (Phase 7), project build artifacts (Phase 8), stale logs (Phase 9), shell config audit (Phase 10), large files (Phase 12), trash (Phase 13), pipx tools (Phase 15).
+
+---
+
 ## Install
 
 ```bash
@@ -143,23 +161,25 @@ This catches cleanup targets that a hardcoded list would miss — new tools, ren
 
 ## Cleanup Categories
 
-| # | Category | Deep | Quick | Audit | What it finds | Typical savings |
-|---|----------|:----:|:-----:|:-----:|---------------|----------------|
-| 1 | Baseline | ✓ | ✓ | ✓ | Disk state snapshot for before/after comparison | — |
-| 2 | Homebrew | ✓ | ✓ | ✓ | Outdated packages, stale downloads, orphan deps, deprecated formulae | 500MB – 5GB |
-| 3 | Dev caches | ✓ | ✓ | ✓ | npm, bun, yarn, pnpm, uv, pip, Playwright, Go, cargo, CocoaPods, Gradle, Maven, Dart/Flutter, Swift PM, Terraform, asdf, volta, mise, Deno, Bundler, Bazel, and more | 1 – 10GB |
-| 4 | Orphaned app data | ✓ | | ✓ | Application Support, Containers, dotfiles, Saved State, Crash Reports | 0 – 20GB |
-| 5 | LaunchAgents | ✓ | | ✓ | Stale or unloaded agents from removed apps | < 100MB |
-| 6 | Xcode & dev tools | ✓ | | ✓ | DerivedData, Archives, iOS DeviceSupport, Simulators | 1 – 20GB |
-| 7 | Docker | ✓ | | ✓ | Unused images/containers, orphaned Docker.app data | 0 – 30GB |
-| 8 | Build artifacts | ✓ | report | ✓ | node_modules, .venv, .next, dist, \_\_pycache\_\_, target, Pods, .build, out, coverage, .nx across repos | 0 – 10GB |
-| 9 | Stale logs | ✓ | | ✓ | `~/Library/Logs/` from removed apps, rotated log files | 100MB – 2GB |
-| 10 | Shell config | ✓ | | ✓ | Dead PATH entries, aliases to missing binaries, broken sources | report only |
-| 11 | Electron caches | ✓ | ✓ | ✓ | Slack, Spotify, VS Code, Discord cache bloat | 200MB – 3GB |
-| 12 | Large files | ✓ | | ✓ | Leftover .dmg, .pkg, .iso, .zip installers | 0 – 10GB |
-| 13 | Trash | ✓ | ✓ | ✓ | `~/.Trash/` contents | varies |
-| 14 | iOS backups | ✓ | | ✓ | Local iPhone/iPad backups (can be 50-100GB+) | 10 – 100GB |
-| 15 | pipx tools | ✓ | | ✓ | Unused CLI tools installed via pipx | 100MB – 2GB |
+| # | Category | Platform | Deep | Quick | Audit | What it finds | Typical savings |
+|---|----------|----------|:----:|:-----:|:-----:|---------------|----------------|
+| 1 | Baseline | all | ✓ | ✓ | ✓ | Disk state snapshot for before/after comparison | — |
+| 2 | Homebrew | macOS | ✓ | ✓ | ✓ | Outdated packages, stale downloads, orphan deps, deprecated formulae | 500MB – 5GB |
+| 3 | Dev caches | all | ✓ | ✓ | ✓ | npm, bun, yarn, pnpm, uv, pip, Playwright, Go, cargo, CocoaPods, Gradle, Maven, Dart/Flutter, Swift PM, Terraform, asdf, volta, mise, Deno, Bundler, Bazel, and more | 1 – 10GB |
+| 4 | Orphaned app data | macOS | ✓ | | ✓ | Application Support, Containers, dotfiles, Saved State, Crash Reports | 0 – 20GB |
+| 5 | LaunchAgents | macOS | ✓ | | ✓ | Stale or unloaded agents from removed apps | < 100MB |
+| 6 | Xcode & dev tools | macOS | ✓ | | ✓ | DerivedData, Archives, iOS DeviceSupport, Simulators | 1 – 20GB |
+| 7 | Docker | all | ✓ | | ✓ | Unused images/containers, orphaned Docker.app data | 0 – 30GB |
+| 8 | Build artifacts | all | ✓ | report | ✓ | node_modules, .venv, .next, dist, \_\_pycache\_\_, target, Pods, .build, out, coverage, .nx across repos | 0 – 10GB |
+| 9 | Stale logs | all | ✓ | | ✓ | `~/Library/Logs/` from removed apps, rotated log files | 100MB – 2GB |
+| 10 | Shell config | all | ✓ | | ✓ | Dead PATH entries, aliases to missing binaries, broken sources | report only |
+| 11 | Electron caches | macOS | ✓ | ✓ | ✓ | Slack, Spotify, VS Code, Discord cache bloat | 200MB – 3GB |
+| 12 | Large files | all | ✓ | | ✓ | Leftover .dmg, .pkg, .iso, .zip installers | 0 – 10GB |
+| 13 | Trash | all | ✓ | ✓ | ✓ | `~/.Trash/` contents | varies |
+| 14 | iOS backups | macOS | ✓ | | ✓ | Local iPhone/iPad backups (can be 50-100GB+) | 10 – 100GB |
+| 15 | pipx tools | all | ✓ | | ✓ | Unused CLI tools installed via pipx | 100MB – 2GB |
+
+Platform column: `all` = runs on macOS/Linux/WSL2. `macOS` = skipped with a "skipped (macOS only)" note on Linux/WSL2. Linux adds its own phases (package cache, ~/.cache sweep, journalctl, snap/flatpak, orphaned kernels) documented in the [Platform Support](#platform-support) section. WSL2 adds Windows %TEMP% and %LOCALAPPDATA% bonus phases on top of Linux coverage.
 
 ---
 

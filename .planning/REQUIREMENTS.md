@@ -40,8 +40,8 @@
 ### Tooling & Config
 
 - [x] **CFG-01**: All SKILL.md allowed-tools frontmatter updated with Linux commands (uname, lsb_release, lsblk, apt, dnf, pacman, snap, flatpak, systemctl, journalctl)
-- [ ] **CFG-02**: upkeep SKILL.md description updated to reflect cross-platform support
-- [ ] **CFG-03**: README updated — prerequisites, badges, and platform section reflect macOS 14+ / Linux / WSL2
+- [x] **CFG-02**: upkeep SKILL.md description updated to reflect cross-platform support
+- [x] **CFG-03**: README updated — prerequisites, badges, and platform section reflect macOS 14+ / Linux / WSL2
 
 ## v2 Requirements
 
@@ -92,8 +92,8 @@
 | UPD-02 | Phase 4: Update Skill & Polish | Complete |
 | UPD-03 | Phase 4: Update Skill & Polish | Complete |
 | UPD-04 | Phase 4: Update Skill & Polish | Complete |
-| CFG-02 | Phase 4: Update Skill & Polish | Pending |
-| CFG-03 | Phase 4: Update Skill & Polish | Pending |
+| CFG-02 | Phase 4: Update Skill & Polish | Complete |
+| CFG-03 | Phase 4: Update Skill & Polish | Complete |
 
 **Coverage:**
 - v1 requirements: 23 total

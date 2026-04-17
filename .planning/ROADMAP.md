@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: OS Detection & Config** - Add OS/distro detection to all skills and update allowed-tools frontmatter (completed 2026-04-17)
 - [x] **Phase 2: Linux Cleanup** - Add Linux-specific phases to cleandeep, cleanquick, and audit skills (completed 2026-04-17)
 - [x] **Phase 3: WSL2 Support** - Add WSL2 detection, banner, and Windows-side bonus cleanup phases (completed 2026-04-17)
-- [ ] **Phase 4: Update Skill & Polish** - Add Linux/WSL2 package upgrade paths; update skill descriptions and README
+- [x] **Phase 4: Update Skill & Polish** - Add Linux/WSL2 package upgrade paths; update skill descriptions and README (completed 2026-04-17)
 
 ## Phase Details
 
@@ -96,4 +96,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. OS Detection & Config | 5/5 | Complete    | 2026-04-17 |
 | 2. Linux Cleanup | 5/5 | Complete   | 2026-04-17 |
 | 3. WSL2 Support | 3/3 | Complete   | 2026-04-17 |
-| 4. Update Skill & Polish | 1/2 | In Progress|  |
+| 4. Update Skill & Polish | 2/2 | Complete   | 2026-04-17 |

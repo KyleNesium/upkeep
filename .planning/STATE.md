@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 04-01-PLAN.md (Linux upgrade paths + snap/flatpak + split mas/softwareupdate skip notes)
-last_updated: "2026-04-17T16:07:05.670Z"
+stopped_at: "Completed 04-02-PLAN.md (SKILL.md router + README updated for cross-platform: Linux/WSL2 badges, Platform Support table, Prerequisites overhaul)"
+last_updated: "2026-04-17T16:08:32.029Z"
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
@@ -59,6 +59,7 @@ Plan: 1 of 2
 | Phase 03 P02 | 2 | 4 tasks | 1 files |
 | Phase 03-wsl2-support P03 | 3 | 3 tasks | 1 files |
 | Phase 04-update-skill-polish P01 | 2 | 3 tasks | 1 files |
+| Phase 04 P02 | 3 | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,9 @@ Recent decisions affecting current work:
 - [Phase 04-update-skill-polish]: apt/dnf/pacman upgrade via case $PKG_MGR dispatch inside linux/wsl2 gate; sudo commands surfaced as Manual Steps prose only
 - [Phase 04-update-skill-polish]: snap/flatpak gated by command -v (not $OS_TYPE) to handle rare third-party macOS installs
 - [Phase 04-update-skill-polish]: mas/softwareupdate each show independent skip lines — removed combined single echo line
+- [Phase 04]: SKILL.md description lists distros explicitly (Debian/Ubuntu, Fedora/RHEL, Arch) for better skill discovery
+- [Phase 04]: Platform Support section placed between Prerequisites and Install for logical user flow
+- [Phase 04]: Cleanup Categories Platform column uses 'all'/'macOS' for scan-friendly brevity
 
 ### Pending Todos
 
@@ -114,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T16:07:05.668Z
-Stopped at: Completed 04-01-PLAN.md (Linux upgrade paths + snap/flatpak + split mas/softwareupdate skip notes)
+Last session: 2026-04-17T16:08:32.027Z
+Stopped at: Completed 04-02-PLAN.md (SKILL.md router + README updated for cross-platform: Linux/WSL2 badges, Platform Support table, Prerequisites overhaul)
 Resume file: None

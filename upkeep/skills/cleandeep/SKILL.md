@@ -667,6 +667,77 @@ pipx list --short 2>/dev/null
 
 Ask if any unused tools can be removed with `pipx uninstall <tool>`.
 
+## Phase 16: Snap & Flatpak Cleanup (Linux/WSL2)
+
+```bash
+if [ "$OS_TYPE" != "linux" ] && [ "$OS_TYPE" != "wsl2" ]; then
+  echo "Phase 16: skipped (Linux/WSL2 only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to Reporting.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to Reporting. Do not execute any of the snap/flatpak commands below.
+
+### Step 1: Snap
+
+```bash
+if command -v snap >/dev/null 2>&1; then
+  echo "=== Snap installed packages ==="
+  snap list 2>/dev/null | tail -n +2 | wc -l
+  echo "=== Snap total disk usage ==="
+  du -sh /var/lib/snapd/snaps/ 2>/dev/null || echo "(unable to read)"
+  echo "=== Snap disabled revisions (reclaimable) ==="
+  snap list --all 2>/dev/null | awk '/disabled/ {print $1, $3}'
+else
+  echo "Phase 16 Step 1: snap not installed — skipping"
+fi
+```
+
+**Approval gate (Snap).** If `snap list --all` prints any disabled revisions, show them as a numbered table (index, package name, revision number). Prompt: "Remove which disabled revisions? (space-separated indices, 'all', or 'none')". For each approved `<pkg> <rev>` pair, run:
+
+```bash
+snap remove --revision=<rev> <pkg>
+```
+
+Never use sudo with snap commands — modern snapd policy allows user removal of disabled revisions on most distros. If snap refuses with a permission error, surface the sudo'd command under ## Manual Steps and move on:
+
+```bash
+# Remove snap disabled revision (if user space fails)
+sudo snap remove --revision=<rev> <pkg>
+```
+
+### Step 2: Flatpak
+
+```bash
+if command -v flatpak >/dev/null 2>&1; then
+  echo "=== Flatpak installed apps ==="
+  flatpak list --app 2>/dev/null | wc -l
+  echo "=== Flatpak installed runtimes ==="
+  flatpak list --runtime 2>/dev/null | wc -l
+  echo "=== Flatpak total disk usage ==="
+  du -sh ~/.local/share/flatpak/ /var/lib/flatpak/ 2>/dev/null || echo "(paths unavailable)"
+  echo "=== Installed runtimes (each may or may not be unused) ==="
+  flatpak list --runtime --columns=application,branch,size 2>/dev/null
+else
+  echo "Phase 16 Step 2: flatpak not installed — skipping"
+fi
+```
+
+**Approval gate (Flatpak).** If `flatpak list --runtime` shows any runtimes, prompt: "Remove unused flatpak runtimes? (yes / no)". On `yes`, run:
+
+```bash
+flatpak uninstall --unused --assumeyes
+```
+
+This removes only runtimes that no installed app depends on — safe by definition. If the user says `no`, skip to Reporting.
+
+Never use sudo — flatpak operates on the user's install by default. For system-wide flatpak installs, surface the sudo command under ## Manual Steps:
+
+```bash
+# Remove unused system-wide flatpak runtimes
+sudo flatpak uninstall --unused --assumeyes --system
+```
+
 ## Reporting
 
 ### Per-phase

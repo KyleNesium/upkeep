@@ -29,7 +29,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. WSL2 is identified separately from plain Linux — the skill knows it is inside a Windows host
   4. The distro family (Debian/Ubuntu, Fedora/RHEL, Arch) is resolved so the correct package manager is used downstream
   5. All SKILL.md files list Linux commands (uname, lsb_release, apt, dnf, pacman, systemctl, journalctl, etc.) in their allowed-tools frontmatter
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 01-01-PLAN.md — upkeep router: OS detection + macOS-only phase guards + Linux allowed-tools
+- [ ] 01-02-PLAN.md — cleandeep: OS detection + guards for Phases 2/4/5/6/11/14 + Linux allowed-tools
+- [ ] 01-03-PLAN.md — cleanquick: OS detection + guards for Phases 2/11 + Linux allowed-tools
+- [ ] 01-04-PLAN.md — audit: OS detection + guards for Phases 2/4/5/6/11/14 + Linux allowed-tools
+- [ ] 01-05-PLAN.md — update: OS detection + mas/softwareupdate gating in Steps 2/3/5/6 + Linux allowed-tools
 
 ### Phase 2: Linux Cleanup
 **Goal**: cleandeep, cleanquick, and audit deliver a complete Linux cleanup and reporting experience
@@ -74,7 +80,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. OS Detection & Config | 0/TBD | Not started | - |
+| 1. OS Detection & Config | 0/5 | Not started | - |
 | 2. Linux Cleanup | 0/TBD | Not started | - |
 | 3. WSL2 Support | 0/TBD | Not started | - |
 | 4. Update Skill & Polish | 0/TBD | Not started | - |

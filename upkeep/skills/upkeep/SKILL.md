@@ -206,7 +206,7 @@ If no keyword matches, ask:
 > C) Audit -- full scan, report only, no changes
 > D) Update -- update AI skills and/or packages
 
-**Quick phases:** 1, 2, 3, 8, 11, 13. **Deep/Audit phases:** All 15.
+**Quick phases:** 1, 2, 3, 8, 11, 13. **Deep/Audit phases:** All 15 (plus phases 16–18 on Linux/WSL2).
 Audit never offers removal — report findings and sizes only.
 Tag each phase header with `(Deep)`, `(Quick)`, or `(Audit)`.
 
@@ -812,6 +812,152 @@ pipx list --short 2>/dev/null
 If pipx is installed, list tools. Ask user if any are unused and can be removed
 with `pipx uninstall <tool>`.
 
+## Phase 16: Snap & Flatpak Cleanup (Linux/WSL2)
+
+```bash
+if [ "$OS_TYPE" != "linux" ] && [ "$OS_TYPE" != "wsl2" ]; then
+  echo "Phase 16: skipped (Linux/WSL2 only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to Reporting.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to Reporting. Do not execute any of the snap/flatpak commands below.
+
+### Step 1: Snap
+
+```bash
+if command -v snap >/dev/null 2>&1; then
+  echo "=== Snap installed packages ==="
+  snap list 2>/dev/null | tail -n +2 | wc -l
+  echo "=== Snap total disk usage ==="
+  du -sh /var/lib/snapd/snaps/ 2>/dev/null || echo "(unable to read)"
+  echo "=== Snap disabled revisions (reclaimable) ==="
+  snap list --all 2>/dev/null | awk '/disabled/ {print $1, $3}'
+else
+  echo "Phase 16 Step 1: snap not installed — skipping"
+fi
+```
+
+**Approval gate (Snap).** If `snap list --all` prints any disabled revisions, show them as a numbered table (index, package name, revision number). Prompt: "Remove which disabled revisions? (space-separated indices, 'all', or 'none')". For each approved `<pkg> <rev>` pair, run:
+
+```bash
+snap remove --revision=<rev> <pkg>
+```
+
+Never use sudo with snap commands — modern snapd policy allows user removal of disabled revisions on most distros. If snap refuses with a permission error, surface the sudo'd command under ## Manual Steps and move on:
+
+```bash
+# Remove snap disabled revision (if user space fails)
+sudo snap remove --revision=<rev> <pkg>
+```
+
+### Step 2: Flatpak
+
+```bash
+if command -v flatpak >/dev/null 2>&1; then
+  echo "=== Flatpak installed apps ==="
+  flatpak list --app 2>/dev/null | wc -l
+  echo "=== Flatpak installed runtimes ==="
+  flatpak list --runtime 2>/dev/null | wc -l
+  echo "=== Flatpak total disk usage ==="
+  du -sh ~/.local/share/flatpak/ /var/lib/flatpak/ 2>/dev/null || echo "(paths unavailable)"
+  echo "=== Installed runtimes (each may or may not be unused) ==="
+  flatpak list --runtime --columns=application,branch,size 2>/dev/null
+else
+  echo "Phase 16 Step 2: flatpak not installed — skipping"
+fi
+```
+
+**Approval gate (Flatpak).** If `flatpak list --runtime` shows any runtimes, prompt: "Remove unused flatpak runtimes? (yes / no)". On `yes`, run:
+
+```bash
+flatpak uninstall --unused --assumeyes
+```
+
+This removes only runtimes that no installed app depends on — safe by definition. If the user says `no`, skip to Reporting.
+
+Never use sudo — flatpak operates on the user's install by default. For system-wide flatpak installs, surface the sudo command under ## Manual Steps:
+
+```bash
+# Remove unused system-wide flatpak runtimes
+sudo flatpak uninstall --unused --assumeyes --system
+```
+
+## Phase 17: Windows Temp Cleanup (WSL2 only)
+
+```bash
+if [ "$OS_TYPE" != "wsl2" ]; then
+  echo "Phase 17: skipped (WSL2 only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to Phase 18.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to Phase 18. Do not execute any of the /mnt/c/ commands below.
+
+```bash
+if [ ! -d "/mnt/c" ]; then
+  echo "Phase 17: /mnt/c not mounted — Windows drive unavailable. Skipping."
+else
+  _WIN_TEMP="/mnt/c/Users/$USER/AppData/Local/Temp"
+  if [ ! -d "$_WIN_TEMP" ]; then
+    echo "Phase 17: Windows Temp path not found at $_WIN_TEMP"
+    echo "(User may have a different Windows username — skipping)"
+  else
+    echo "=== Windows Temp size ==="
+    du -sh "$_WIN_TEMP" 2>/dev/null || echo "(unable to stat — permission or I/O issue)"
+    echo "=== Largest entries inside Windows Temp (top 10) ==="
+    du -sh "$_WIN_TEMP"/*/ 2>/dev/null | sort -rh | head -10
+  fi
+fi
+```
+
+> **Windows Temp — approval gate.** If the size is non-trivial (>100MB), prompt: "Clear Windows Temp at /mnt/c/Users/$USER/AppData/Local/Temp/? (yes / no)". On `yes`, run:
+>
+> ```bash
+> rm -rf /mnt/c/Users/"$USER"/AppData/Local/Temp/* 2>/dev/null || true
+> ```
+>
+> This removes only the contents of the Temp directory, not the directory itself — Windows recreates files as needed. Some files may be locked by running Windows processes; the `|| true` swallows those specific failures so the phase keeps going. Never use sudo on /mnt/c/ paths — if a file cannot be removed, surface the path as a findings line and move on. On `no`, skip to Phase 18.
+
+## Phase 18: Windows npm/pip Cache Audit (WSL2 only)
+
+```bash
+if [ "$OS_TYPE" != "wsl2" ]; then
+  echo "Phase 18: skipped (WSL2 only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to Reporting.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to Reporting.
+
+```bash
+if [ ! -d "/mnt/c" ]; then
+  echo "Phase 18: /mnt/c not mounted — Windows drive unavailable. Skipping."
+else
+  _WIN_NPM="/mnt/c/Users/$USER/AppData/Roaming/npm-cache"
+  _WIN_PIP="/mnt/c/Users/$USER/AppData/Local/pip/Cache"
+  echo "=== Windows npm-cache ==="
+  if [ -d "$_WIN_NPM" ]; then
+    du -sh "$_WIN_NPM" 2>/dev/null || echo "(unable to stat)"
+  else
+    echo "(not present at $_WIN_NPM)"
+  fi
+  echo "=== Windows pip Cache ==="
+  if [ -d "$_WIN_PIP" ]; then
+    du -sh "$_WIN_PIP" 2>/dev/null || echo "(unable to stat)"
+  else
+    echo "(not present at $_WIN_PIP)"
+  fi
+fi
+```
+
+> **Windows package caches — approval gate.** For each cache that is present and non-trivial (>100MB), prompt individually:
+>
+> - npm-cache: "Clear Windows npm-cache at /mnt/c/Users/$USER/AppData/Roaming/npm-cache/? (yes / no)" → on yes: `rm -rf /mnt/c/Users/"$USER"/AppData/Roaming/npm-cache/* 2>/dev/null || true`
+> - pip Cache: "Clear Windows pip Cache at /mnt/c/Users/$USER/AppData/Local/pip/Cache/? (yes / no)" → on yes: `rm -rf /mnt/c/Users/"$USER"/AppData/Local/pip/Cache/* 2>/dev/null || true`
+>
+> These caches rebuild on next `npm install` / `pip install` invoked from the Windows side. Never use sudo on /mnt/c/ paths — if any file resists removal, surface it as a findings line and move on. Skipping one prompt never skips the other.
+
 ## Update Mode
 
 Do not run any cleanup phases. Detect sub-mode: **audit** (check only) | **skills**
@@ -981,6 +1127,9 @@ After all phases complete, present the cumulative report:
 | 13| Trash | ... | ...GB | Cleaned / Skipped |
 | 14| iOS backups | ... | ...GB | Cleaned / Skipped |
 | 15| pipx tools | ... | — | Cleaned / Skipped |
+| 16| Snap & Flatpak | ... | ...MB | Cleaned / Skipped |
+| 17| Windows Temp (WSL2) | ... | ...MB | Cleaned / Skipped |
+| 18| Windows npm/pip (WSL2) | ... | ...MB | Cleaned / Skipped |
 | **Total** | | | **...GB** | |
 ```
 

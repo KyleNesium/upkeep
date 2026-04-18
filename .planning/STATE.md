@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: "Completed 04-02-PLAN.md (SKILL.md router + README updated for cross-platform: Linux/WSL2 badges, Platform Support table, Prerequisites overhaul)"
-last_updated: "2026-04-17T16:13:48.353Z"
+stopped_at: "Completed 05-01-PLAN.md (port Linux/WSL2 cleanup phases 1/2/9/16-18 to umbrella router)"
+last_updated: "2026-04-18T21:48:12Z"
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 16
+  completed_plans: 16
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-04-17)
 
 ## Current Position
 
-Phase: 04 (update-skill-polish) — EXECUTING
-Plan: 1 of 2
+Phase: 05 (umbrella-cleanup-parity) — EXECUTING
+Plan: 1 of 1 (completed)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Plan: 1 of 2
 | Phase 03-wsl2-support P03 | 3 | 3 tasks | 1 files |
 | Phase 04-update-skill-polish P01 | 2 | 3 tasks | 1 files |
 | Phase 04 P02 | 3 | 3 tasks | 2 files |
+| Phase 05-umbrella-cleanup-parity P01 | 15 | 4 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,10 @@ Recent decisions affecting current work:
 - [Phase 04]: SKILL.md description lists distros explicitly (Debian/Ubuntu, Fedora/RHEL, Arch) for better skill discovery
 - [Phase 04]: Platform Support section placed between Prerequisites and Install for logical user flow
 - [Phase 04]: Cleanup Categories Platform column uses 'all'/'macOS' for scan-friendly brevity
+- [Phase 05]: Umbrella router Phase 1 OS-branched — macOS gets diskutil+sw_vers, Linux/WSL2 gets df+os-release+kernel+PKG_MGR
+- [Phase 05]: stat fallback chain extended to umbrella router (matches cleandeep/SKILL.md)
+- [Phase 05]: Phase 2 approval gate prose uses "Linux/WSL2" qualifier to distinguish from macOS brew gate
+- [Phase 05]: Phases 16–18 ported verbatim from cleandeep to umbrella — self-contained, no sub-skill calls
 
 ### Pending Todos
 
@@ -118,6 +123,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-17T16:08:32.027Z
-Stopped at: Completed 04-02-PLAN.md (SKILL.md router + README updated for cross-platform: Linux/WSL2 badges, Platform Support table, Prerequisites overhaul)
+Last session: 2026-04-18T21:48:12Z
+Stopped at: Completed 05-01-PLAN.md (port Linux/WSL2 cleanup phases 1/2/9/16-18 to umbrella router)
 Resume file: None

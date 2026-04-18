@@ -71,26 +71,26 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OS-01 | Phase 1: OS Detection & Config | Complete |
+| OS-01 | Phase 1 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
 | OS-02 | Phase 1: OS Detection & Config | Complete |
 | OS-03 | Phase 1: OS Detection & Config | Complete |
 | OS-04 | Phase 1: OS Detection & Config | Complete |
 | CFG-01 | Phase 1: OS Detection & Config | Complete |
-| LNX-01 | Phase 2: Linux Cleanup | Complete |
-| LNX-02 | Phase 2: Linux Cleanup | Complete |
+| LNX-01 | Phase 2 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
+| LNX-02 | Phase 2 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
 | LNX-03 | Phase 2: Linux Cleanup | Complete |
-| LNX-04 | Phase 2: Linux Cleanup | Complete |
-| LNX-05 | Phase 2: Linux Cleanup | Complete |
-| LNX-06 | Phase 2: Linux Cleanup | Complete |
+| LNX-04 | Phase 2 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
+| LNX-05 | Phase 2 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
+| LNX-06 | Phase 2 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
 | LNX-07 | Phase 2: Linux Cleanup | Complete |
 | LNX-08 | Phase 2: Linux Cleanup | Complete |
 | WSL-01 | Phase 3: WSL2 Support | Complete |
-| WSL-02 | Phase 3: WSL2 Support | Complete |
-| WSL-03 | Phase 3: WSL2 Support | Complete |
-| WSL-04 | Phase 3: WSL2 Support | Complete |
-| UPD-01 | Phase 4: Update Skill & Polish | Complete |
-| UPD-02 | Phase 4: Update Skill & Polish | Complete |
-| UPD-03 | Phase 4: Update Skill & Polish | Complete |
+| WSL-02 | Phase 3 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
+| WSL-03 | Phase 3 (sub-skills) + Phase 5 (umbrella router) | Complete (umbrella: Pending) |
+| WSL-04 | Phase 3 (sub-skills) + Phase 6 (umbrella router) | Complete (umbrella: Pending) |
+| UPD-01 | Phase 4 (sub-skills) + Phase 6 (umbrella router) | Complete (umbrella: Pending) |
+| UPD-02 | Phase 4 (sub-skills) + Phase 6 (umbrella router) | Complete (umbrella: Pending) |
+| UPD-03 | Phase 4 (sub-skills) + Phase 6 (umbrella router) | Complete (umbrella: Pending) |
 | UPD-04 | Phase 4: Update Skill & Polish | Complete |
 | CFG-02 | Phase 4: Update Skill & Polish | Complete |
 | CFG-03 | Phase 4: Update Skill & Polish | Complete |
@@ -99,6 +99,7 @@
 - v1 requirements: 23 total
 - Mapped to phases: 23
 - Unmapped: 0 ✓
+- Umbrella gap closures pending: Phase 5 (MISS-1–4), Phase 6 (MISS-5)
 
 ---
 *Requirements defined: 2026-04-17*

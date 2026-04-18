@@ -86,10 +86,34 @@ Plans:
 - [ ] 04-01-PLAN.md — update/SKILL.md: Linux upgrade paths (apt/dnf/pacman) + snap + flatpak + per-tool mas/softwareupdate skip visibility (UPD-01, UPD-02, UPD-03, UPD-04)
 - [ ] 04-02-PLAN.md — Docs polish: upkeep router SKILL.md description + README badges, Prerequisites, and Platform Support section (CFG-02, CFG-03)
 
+### Phase 5: Umbrella Router — Linux Cleanup Phase Parity
+**Goal**: upkeep/skills/upkeep/SKILL.md delivers the same Linux/WSL2 cleanup experience as the dedicated sub-skills for all cleanup phases
+**Depends on**: Phase 4
+**Requirements**: OS-01, LNX-01, LNX-02, LNX-04, LNX-05, LNX-06, WSL-02, WSL-03
+**Gap Closure**: Closes MISS-1, MISS-2, MISS-3, MISS-4 from v1.0 audit
+**Success Criteria** (what must be TRUE):
+  1. Phase 1 Baseline outputs OS-branched info: macOS gets `sw_vers`; Linux/WSL2 gets `/etc/os-release`, `uname -r`, `$PKG_MGR`
+  2. Phase 2 on Linux/WSL2 runs the `$PKG_MGR` package cache sweep (apt autoclean / dnf clean / pacman -Sc), approval-gated — not "skipped (macOS only)"
+  3. Phase 9 on Linux/WSL2 runs `journalctl --disk-usage` + vacuum approval gate; macOS path is guarded
+  4. Phase 16 (Snap & Flatpak), Phase 17 (WSL2 Windows Temp), Phase 18 (WSL2 Windows npm/pip) are present in the umbrella and match cleandeep sub-skill content
+**Plans**: 1 plan
+
+### Phase 6: Umbrella Router — Update Mode Linux Parity
+**Goal**: upkeep/skills/upkeep/SKILL.md Update Mode Step 5 routes to Linux package managers, snap, flatpak, and WSL2 Windows pkg detection
+**Depends on**: Phase 5
+**Requirements**: UPD-01, UPD-02, UPD-03, WSL-04
+**Gap Closure**: Closes MISS-5 from v1.0 audit
+**Success Criteria** (what must be TRUE):
+  1. Update Mode Step 5 on Linux/WSL2 routes to `$PKG_MGR` case dispatch (apt/dnf/pacman upgrades) with approval gate — not table-only output
+  2. Update Mode Step 5 detects snap via `command -v snap` and runs `snap refresh --list` → approval → `snap refresh`
+  3. Update Mode Step 5 detects flatpak via `command -v flatpak` and runs list preview → approval → `flatpak update -y`
+  4. Update Mode Step 2 on WSL2 detects Windows package managers (winget/scoop/choco) via `/mnt/c/` guard — audit only, no upgrade
+**Plans**: 1 plan
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -97,3 +121,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 2. Linux Cleanup | 5/5 | Complete   | 2026-04-17 |
 | 3. WSL2 Support | 3/3 | Complete   | 2026-04-17 |
 | 4. Update Skill & Polish | 2/2 | Complete   | 2026-04-17 |
+| 5. Umbrella Router — Linux Cleanup Phase Parity | 0/1 | Not Started | — |
+| 6. Umbrella Router — Update Mode Linux Parity | 0/1 | Not Started | — |

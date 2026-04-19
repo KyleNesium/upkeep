@@ -121,5 +121,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Linux Cleanup | 5/5 | Complete   | 2026-04-17 |
 | 3. WSL2 Support | 3/3 | Complete   | 2026-04-17 |
 | 4. Update Skill & Polish | 2/2 | Complete   | 2026-04-17 |
-| 5. Umbrella Router — Linux Cleanup Phase Parity | 0/1 | Not Started | — |
-| 6. Umbrella Router — Update Mode Linux Parity | 0/1 | Not Started | — |
+| 5. Umbrella Router — Linux Cleanup Phase Parity | 1/1 | Complete   | 2026-04-18 |
+| 6. Umbrella Router — Update Mode Linux Parity | 1/1 | Complete   | 2026-04-19 |

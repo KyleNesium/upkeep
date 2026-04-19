@@ -1099,7 +1099,99 @@ On success: read `plugin.json` / `VERSION` for old → new version string.
 
 Each category has its own gate. Skipping one does NOT cancel others.
 
-On Linux and WSL2, skip the `mas` and `macOS` rows in the table below — they are macOS-only. Display `mas  ↷ skipped (macOS only)` and `macOS  ↷ skipped (macOS only)` in the final report instead.
+On Linux or WSL2, skip the `mas` and `macOS` rows below — do not run `mas upgrade` or `softwareupdate -ia`. Mark both as `skipped (macOS only)` in the Step 6 final report.
+
+On WSL2, the Step 2 "Windows package managers" block is audit-only — this Step 5 does NOT include winget, scoop, or choco. Upgrades for those require a Windows PowerShell session.
+
+### Linux system packages (apt / dnf / pacman)
+
+Only runs on `$OS_TYPE` of `linux` or `wsl2`. Skipped silently on macOS. Each package manager has its own dry-run preview and approval gate.
+
+```bash
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  case "$PKG_MGR" in
+    apt)
+      echo "=== apt — pending upgrades ==="
+      _APT_COUNT=$(apt-get upgrade --dry-run 2>/dev/null | grep -c "^Inst")
+      echo "$_APT_COUNT package(s) to upgrade"
+      apt-get upgrade --dry-run 2>/dev/null | grep "^Inst" | head -20
+      ;;
+    dnf)
+      echo "=== dnf — pending upgrades ==="
+      dnf check-update 2>/dev/null | grep -vE "^(Last metadata|$)" | head -20
+      ;;
+    pacman)
+      echo "=== pacman — pending upgrades ==="
+      pacman -Qu 2>/dev/null | head -20
+      ;;
+    *)
+      echo "Linux system packages: unsupported distro ($OS_DISTRO) — skipping"
+      ;;
+  esac
+fi
+```
+
+After the preview, ask per-manager:
+> "Upgrade system packages via $PKG_MGR? A) Yes  B) Skip $PKG_MGR"
+
+On "Yes", the actual upgrade requires root. Never run these from the skill — surface them as Manual Steps prose for the user to run in their own shell:
+
+> To apply the upgrade, run in your own terminal:
+> - apt: `sudo apt-get update && sudo apt-get upgrade -y`
+> - dnf: `sudo dnf upgrade -y`
+> - pacman: `sudo pacman -Syu --noconfirm`
+>
+> After the user confirms completion, record the outcome in the Step 6 final report as `apt  ✓ upgraded  N packages` (or `↷ skipped`).
+
+### Snap packages (where installed)
+
+Only runs if `snap` is on `$PATH`. No sudo required for `snap refresh --list`.
+
+```bash
+if command -v snap >/dev/null 2>&1; then
+  echo "=== snap — pending refreshes ==="
+  snap refresh --list 2>/dev/null || echo "(no pending snap refreshes)"
+fi
+```
+
+Ask:
+> "Refresh snap packages? A) Yes  B) Skip snap"
+
+On "Yes", run:
+
+```bash
+if command -v snap >/dev/null 2>&1; then
+  snap refresh 2>&1
+fi
+```
+
+Report outcome in Step 6 as `snap  ✓ refreshed  N packages` (or `↷ skipped`). If `snap refresh` exits non-zero with a polkit/authentication error, surface `sudo snap refresh` as a Manual Steps prose line — never re-run from the skill.
+
+### Flatpak applications (where installed)
+
+Only runs if `flatpak` is on `$PATH`. User-scoped flatpak updates do not require root.
+
+```bash
+if command -v flatpak >/dev/null 2>&1; then
+  echo "=== flatpak — pending updates ==="
+  flatpak remote-ls --updates 2>/dev/null | head -20 || flatpak list --app 2>/dev/null | head -10
+fi
+```
+
+Ask:
+> "Update flatpak applications? A) Yes  B) Skip flatpak"
+
+On "Yes", run:
+
+```bash
+if command -v flatpak >/dev/null 2>&1; then
+  flatpak update -y 2>&1
+fi
+```
+
+Report outcome in Step 6 as `flatpak  ✓ updated  N apps` (or `↷ skipped`). For system-scoped installs requiring root, surface `sudo flatpak update -y` as a Manual Steps prose line — never run from the skill.
+
+### macOS and cross-platform package managers
 
 | Tool | Audit command | Apply command | Extra warning |
 |------|--------------|---------------|---------------|
@@ -1132,6 +1224,9 @@ Apply? A) Yes  B) Skip macOS updates"
   bun      ✓ upgraded   1.1.0 → 1.2.0
   mise     ✓ upgraded   3 runtimes
   mas      ✓ upgraded   1 app
+  apt      ✓ upgraded   N packages   (Linux/WSL2 only)
+  snap     ✓ refreshed  N packages   (if installed)
+  flatpak  ✓ updated    N apps       (if installed)
 ── Informational ────────────────────────────────
   Claude plugins  9  (managed by Claude Code)
   Codex skills   12  (manual update required)

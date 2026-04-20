@@ -1,6 +1,6 @@
 ---
 name: upkeep:audit
-version: 1.0.6
+version: 1.1.0-dev
 author: KyleNesium
 description: |
   Full 15-phase macOS disk audit — report only, no changes made.
@@ -31,6 +31,11 @@ allowed-tools:
   - Bash(mdutil *)
   - Bash(defaults *)
   - Bash(/usr/libexec/PlistBuddy *)
+  # OS detection (cross-platform)
+  - Bash(uname *)
+  - Bash(lsb_release *)
+  - Bash(lsblk *)
+  - Bash(cat *)
   # Text processing for pipelines
   - Bash(sort *)
   - Bash(head *)
@@ -60,6 +65,15 @@ allowed-tools:
   - Read
   - Glob
   - Grep
+  # Linux system tools
+  - Bash(systemctl *)
+  - Bash(journalctl *)
+  # Linux package managers
+  - Bash(apt *)
+  - Bash(dnf *)
+  - Bash(pacman *)
+  - Bash(snap *)
+  - Bash(flatpak *)
 ---
 
 # /upkeep:audit — Full macOS Disk Audit
@@ -68,22 +82,89 @@ You are a macOS system auditor. Run all 15 phases. **Report findings and sizes
 only — never offer to remove, clean, modify, or take any action.** This is a
 read-only scan. The goal is a complete picture of what's reclaimable.
 
+## Environment Detection
+
+Run this FIRST, before Phase 1. It sets `$OS_TYPE` (macos / linux / wsl2), `$OS_DISTRO`, and `$PKG_MGR` — Phases 2, 4, 5, 6, 11, 14 gate on `$OS_TYPE = "macos"`.
+
+```bash
+# ── OS Detection (run once, export for all phases) ────────────────
+_KERNEL=$(uname -s 2>/dev/null || echo "unknown")
+_KREL=$(uname -r 2>/dev/null || echo "")
+case "$_KERNEL" in
+  Darwin)
+    OS_TYPE="macos"
+    OS_DISTRO="macos"
+    ;;
+  Linux)
+    if echo "$_KREL" | grep -qi "microsoft"; then
+      OS_TYPE="wsl2"
+    else
+      OS_TYPE="linux"
+    fi
+    if [ -r /etc/os-release ]; then
+      OS_DISTRO=$(. /etc/os-release 2>/dev/null; echo "${ID_LIKE:-$ID}" | awk '{print $1}')
+    elif command -v lsb_release >/dev/null 2>&1; then
+      OS_DISTRO=$(lsb_release -si 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    else
+      OS_DISTRO="unknown"
+    fi
+    case "$OS_DISTRO" in
+      debian|ubuntu) PKG_MGR="apt" ;;
+      fedora|rhel|centos|rocky|almalinux) PKG_MGR="dnf" ;;
+      arch|manjaro|endeavouros) PKG_MGR="pacman" ;;
+      *) PKG_MGR="unknown" ;;
+    esac
+    ;;
+  *)
+    OS_TYPE="unknown"
+    OS_DISTRO="unknown"
+    PKG_MGR="unknown"
+    ;;
+esac
+export OS_TYPE OS_DISTRO PKG_MGR
+echo "Environment: $OS_TYPE / $OS_DISTRO${PKG_MGR:+ (pkg: $PKG_MGR)}"
+```
+
+```bash
+# ── WSL2 banner (fires only on wsl2) ─────────────────────────────
+if [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== Running in WSL2 on Windows ==="
+fi
+```
+
+If `$OS_TYPE` is `unknown`, run Phase 1 Baseline only and skip remaining phases with the note "skipped (unsupported OS: $(uname -s))".
+
 ## Phase 1: Baseline
 
 ```bash
-echo "=== Disk ===" && diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
-echo "=== macOS ===" && sw_vers
-echo "=== Homebrew ===" && brew --version 2>/dev/null || echo "not installed"
+if [ "$OS_TYPE" = "macos" ]; then
+  echo "=== Disk ===" && diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
+  echo "=== macOS ===" && sw_vers
+  echo "=== Homebrew ===" && brew --version 2>/dev/null || echo "not installed"
+elif [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== Disk ===" && df -h / | tail -1
+  echo "=== OS ===" && (cat /etc/os-release 2>/dev/null | grep -E "^(NAME|VERSION|ID)=" || echo "unknown")
+  echo "=== Kernel ===" && uname -r
+  echo "=== Package Manager ===" && echo "Detected: $PKG_MGR"
+  case "$PKG_MGR" in
+    apt)    apt-cache stats 2>/dev/null | head -3 || echo "apt-cache not available" ;;
+    dnf)    dnf --version 2>/dev/null | head -1 || echo "dnf not available" ;;
+    pacman) pacman --version 2>/dev/null | head -1 || echo "pacman not available" ;;
+    *) echo "No supported package manager detected" ;;
+  esac
+fi
 ```
 
 Capture "Available" and "Purgeable" from `diskutil info`.
+
+On Linux/WSL2, the baseline uses `df -h /` only — there is no APFS purgeable space.
 
 Then run a passive update check (at most once per 24h, silent on all failures):
 
 ```bash
 if [ "${UPKEEP_SKIP_UPDATE_CHECK:-}" != "1" ] && command -v git >/dev/null 2>&1; then
   _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../../.last-update-check"
-  _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || echo 0)
+  _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || stat -c %Y "$_CHECK_FILE" 2>/dev/null || echo 0)
   if [ $(( $(date +%s) - $_LAST )) -gt 86400 ]; then
     git -C "${CLAUDE_SKILL_DIR}/../../.." fetch --tags --quiet origin main 2>/dev/null
     touch "$_CHECK_FILE" 2>/dev/null
@@ -96,6 +177,47 @@ fi
 ```
 
 ## Phase 2: Homebrew Audit
+
+```bash
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "Phase 2: Linux package state (read-only — pkg: $PKG_MGR)"
+  case "$PKG_MGR" in
+    apt)
+      echo "=== Installed packages (count) ==="
+      dpkg -l 2>/dev/null | grep -c '^ii' || echo "dpkg not available"
+      echo "=== apt cache size ==="
+      du -sh /var/cache/apt/archives/ 2>/dev/null || echo "(unable to read)"
+      echo "=== Orphan packages (autoremove preview) ==="
+      apt-get autoremove --dry-run 2>/dev/null | grep -E "^(Remv|The following)" | head -20 || echo "none"
+      ;;
+    dnf)
+      echo "=== Installed packages (count) ==="
+      dnf list installed 2>/dev/null | wc -l
+      echo "=== dnf cache size ==="
+      du -sh /var/cache/dnf/ 2>/dev/null || echo "(unable to read)"
+      echo "=== Orphan packages (autoremove preview) ==="
+      dnf autoremove --assumeno 2>/dev/null | grep -E "^(Remove|Removing)" | head -20 || echo "none"
+      ;;
+    pacman)
+      echo "=== Installed packages (count) ==="
+      pacman -Q 2>/dev/null | wc -l
+      echo "=== pacman cache size ==="
+      du -sh /var/cache/pacman/pkg/ 2>/dev/null || echo "(unable to read)"
+      echo "=== Orphan packages (pacman -Qtdq) ==="
+      pacman -Qtdq 2>/dev/null || echo "none"
+      ;;
+    *)
+      echo "Phase 2: no supported package manager detected"
+      ;;
+  esac
+  # End of Linux branch — stop Phase 2, continue to Phase 3. Do NOT run brew commands below.
+elif [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 2: skipped (unsupported OS: $OS_TYPE)"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ```bash
 command -v brew >/dev/null 2>&1 && echo "OK" || echo "Phase 2 skipped — brew not installed"
@@ -126,7 +248,29 @@ du -sh ~/Library/Caches/*/ 2>/dev/null | sort -rh | head -15
 
 Report anything over 50MB not in the known list.
 
+### Step 3: Linux cache report (Linux/WSL2 only)
+
+```bash
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== ~/.cache total ==="
+  du -sh ~/.cache/ 2>/dev/null || echo "~/.cache/ not present"
+  echo "=== Top 15 ~/.cache subdirectories ==="
+  du -sh ~/.cache/*/ 2>/dev/null | sort -rh | head -15
+fi
+```
+
+Report only — audit never removes cache entries. For removal, run `/upkeep:cleandeep`.
+
 ## Phase 4: Orphaned Application Data
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 4: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ### Step 1: Build the installed app set
 
@@ -199,6 +343,15 @@ Report size.
 ## Phase 5: LaunchAgents
 
 ```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 5: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
+
+```bash
 _BREW_FORMULA=$(brew list --formula 2>/dev/null)
 for plist in ~/Library/LaunchAgents/*.plist; do
   [ -f "$plist" ] || continue
@@ -221,6 +374,15 @@ Present a table: plist label, load state (LOADED / NOT LOADED), target state
 (OK / TARGET MISSING / UNKNOWN / ORPHANED HOMEBREW SERVICE). Report only — do not offer removal.
 
 ## Phase 6: Xcode & Developer Tools
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 6: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ```bash
 command -v xcode-select >/dev/null 2>&1 && echo "OK" || echo "Phase 6 skipped — Xcode not installed"
@@ -278,20 +440,39 @@ Report totals only.
 ## Phase 9: Stale Logs
 
 ```bash
-ls ~/Library/Logs/ 2>/dev/null
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== systemd journal disk usage ==="
+  journalctl --disk-usage 2>/dev/null || echo "journalctl not available"
+  echo "=== user journal ==="
+  journalctl --user --disk-usage 2>/dev/null || echo "user journal not configured"
+fi
+```
+
+Note: audit-mode reports disk usage but NEVER vacuums.
+
+The remainder of Phase 9 (Library/Logs scan) runs on macOS only:
+
+```bash
+if [ "$OS_TYPE" = "macos" ]; then
+  ls ~/Library/Logs/ 2>/dev/null
+fi
 ```
 
 Cross-reference against installed apps. Flag:
 1. Log directories from uninstalled apps
-2. Rotated log files — scan for them:
+2. Rotated log files — scan for them (macOS only):
 ```bash
-find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
-  -exec du -sh {} + 2>/dev/null | sort -rh
+if [ "$OS_TYPE" = "macos" ]; then
+  find ~/Library/Logs -maxdepth 3 \( -name "*.old" -o -name "*.old.*" -o -name "*.log.old" -o -name "*.log.[0-9]*" \) \
+    -exec du -sh {} + 2>/dev/null | sort -rh
+fi
 ```
-3. Any single log file over 10MB:
+3. Any single log file over 10MB (macOS only):
 ```bash
-find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
-  -exec du -sh {} + 2>/dev/null | sort -rh
+if [ "$OS_TYPE" = "macos" ]; then
+  find ~/Library/Logs -maxdepth 3 -name "*.log" -size +10M \
+    -exec du -sh {} + 2>/dev/null | sort -rh
+fi
 ```
 
 ## Phase 10: Shell Config Audit
@@ -310,6 +491,15 @@ as findings only. These gate on env/hostname/OS.
 Report all findings. No edits in audit mode.
 
 ## Phase 11: Electron App Caches
+
+```bash
+if [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 11: skipped (macOS only) — detected $OS_TYPE"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ```bash
 find ~/Library/Application\ Support -maxdepth 5 \
@@ -336,7 +526,39 @@ du -sh ~/.Trash/ 2>/dev/null
 
 Report size.
 
-## Phase 14: iPhone / iOS Backups
+## Phase 14: iOS Backups (macOS) / Snap + Flatpak (Linux)
+
+```bash
+if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "Phase 14: Linux snap + flatpak state (read-only)"
+  if command -v snap >/dev/null 2>&1; then
+    echo "=== Snap: installed packages ==="
+    snap list 2>/dev/null | tail -n +2 | wc -l
+    echo "=== Snap: disabled revisions ==="
+    snap list --all 2>/dev/null | awk '/disabled/ {print $1, $3}' | wc -l
+    echo "=== Snap total disk usage ==="
+    du -sh /var/lib/snapd/snaps/ 2>/dev/null || echo "(unable to read)"
+  else
+    echo "Snap: not installed"
+  fi
+  if command -v flatpak >/dev/null 2>&1; then
+    echo "=== Flatpak: installed apps ==="
+    flatpak list --app 2>/dev/null | wc -l
+    echo "=== Flatpak: installed runtimes ==="
+    flatpak list --runtime 2>/dev/null | wc -l
+    echo "=== Flatpak total disk usage ==="
+    du -sh ~/.local/share/flatpak/ /var/lib/flatpak/ 2>/dev/null || echo "(paths unavailable)"
+  else
+    echo "Flatpak: not installed"
+  fi
+  # End of Linux branch — stop Phase 14, continue to Phase 15.
+elif [ "$OS_TYPE" != "macos" ]; then
+  echo "Phase 14: skipped (unsupported OS: $OS_TYPE)"
+  # Stop this phase here. Continue to the next phase.
+fi
+```
+
+If the guard prints the skip line, stop this phase and move to the next. Do not execute any subsequent `mdfind`/`defaults`/`launchctl`/`xcode-select` commands below.
 
 ```bash
 du -sh ~/Library/Application\ Support/MobileSync/Backup/ 2>/dev/null

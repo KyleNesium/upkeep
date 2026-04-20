@@ -129,14 +129,23 @@ If `$OS_TYPE` is `unknown`, run Phase 1 (Baseline) only and skip remaining phase
 Record starting disk state for before/after comparison.
 
 ```bash
-echo "=== Disk ===" && diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
-echo "=== macOS ===" && sw_vers
-echo "=== Homebrew ===" && brew --version 2>/dev/null || echo "not installed"
+if [ "$OS_TYPE" = "macos" ]; then
+  echo "=== Disk ===" && diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
+  echo "=== macOS ===" && sw_vers
+  echo "=== Homebrew ===" && brew --version 2>/dev/null || echo "not installed"
+elif [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
+  echo "=== Disk ===" && df -h / | tail -1
+  echo "=== OS ===" && (cat /etc/os-release 2>/dev/null | grep -E "^(NAME|VERSION|ID)=" || echo "unknown")
+  echo "=== Kernel ===" && uname -r
+  echo "=== Package Manager ===" && echo "Detected: $PKG_MGR"
+fi
 ```
 
 Capture "Available" and "Purgeable" from `diskutil info`. APFS volumes have
 purgeable space that `df` doesn't distinguish — use `diskutil` for accurate
 before/after. Fall back to `df` if unavailable.
+
+> On Linux/WSL2, before/after comparison uses `df -h /` only — there is no APFS purgeable space to track.
 
 Then run a passive update check (at most once per 24h, silent on all failures):
 

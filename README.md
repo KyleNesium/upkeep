@@ -253,7 +253,7 @@ To disable the daily check: `export UPKEEP_SKIP_UPDATE_CHECK=1`
 ## Privacy
 
 - **Fully local** — no network calls, no telemetry, no data collection
-- All operations run on your machine using standard macOS and Homebrew commands
+- All operations run on your machine using standard system commands (rm, brew, apt/dnf/pacman, launchctl, systemctl, etc.)
 - The skill only reads filesystem metadata (directory sizes, file lists) and presents findings to you
 - Nothing is removed without explicit approval
 
@@ -265,11 +265,11 @@ upkeep is a Claude Code plugin that runs entirely on your local machine. This po
 
 **Data collection:** None. upkeep makes zero network requests. No telemetry, analytics, crash reports, or usage data are collected or transmitted.
 
-**Data access:** The plugin reads filesystem metadata (directory names, file sizes, modification dates) in standard macOS locations (`~/Library/`, `~/.cache/`, `/Applications/`, `~/Library/LaunchAgents/`, and project workspace directories). This metadata is used solely to identify cleanup candidates and calculate reclaimable disk space. File contents are never read.
+**Data access:** The plugin reads filesystem metadata (directory names, file sizes, modification dates) in standard system locations (`~/Library/` and `/Applications/` on macOS; `~/.cache/` and package manager metadata on Linux/WSL2; and project workspace directories on all platforms). This metadata is used solely to identify cleanup candidates and calculate reclaimable disk space. File contents are never read.
 
 **Data storage:** upkeep stores no data. It produces no log files, databases, or caches of its own. All findings are presented in the Claude Code conversation and exist only in that session.
 
-**Data deletion:** When upkeep removes files (with your explicit approval), it uses standard macOS commands (`rm`, `brew cleanup`, `launchctl`). No copies are made. Deleted files go to Trash where applicable, or are permanently removed where noted.
+**Data deletion:** When upkeep removes files (with your explicit approval), it uses standard system commands (`rm`, `brew cleanup` on macOS, `apt/dnf/pacman autoremove` on Linux, `launchctl` for macOS agents). No copies are made. Deleted files go to Trash where applicable, or are permanently removed where noted.
 
 **Third parties:** No data is shared with Anthropic, the plugin author, or any third party. The plugin has no server component.
 

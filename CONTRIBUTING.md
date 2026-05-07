@@ -10,14 +10,14 @@ step, no test runner. Changes take effect immediately.
 
 | Command | File |
 |---------|------|
-| `/upkeep` | `plugin/skills/upkeep/SKILL.md` |
-| `/upkeep:cleandeep` | `plugin/skills/cleandeep/SKILL.md` |
-| `/upkeep:cleanquick` | `plugin/skills/cleanquick/SKILL.md` |
-| `/upkeep:audit` | `plugin/skills/audit/SKILL.md` |
-| `/upkeep:update` | `plugin/skills/update/SKILL.md` |
+| `/upkeep` | `upkeep/skills/upkeep/SKILL.md` |
+| `/upkeep:cleandeep` | `upkeep/skills/cleandeep/SKILL.md` |
+| `/upkeep:cleanquick` | `upkeep/skills/cleanquick/SKILL.md` |
+| `/upkeep:audit` | `upkeep/skills/audit/SKILL.md` |
+| `/upkeep:update` | `upkeep/skills/update/SKILL.md` |
 
 Reference tables (cache paths, system dirs, CLI dotdirs) live in
-`plugin/skills/upkeep/reference/` and are read by the skill at runtime.
+`upkeep/skills/upkeep/reference/` and are read by the skill at runtime.
 
 ## Making a change
 
@@ -34,7 +34,7 @@ Reference tables (cache paths, system dirs, CLI dotdirs) live in
 - [ ] Safety rules are enforced (no sudo, no silent deletion, sizes shown first)
 - [ ] Update check nudge fires correctly (test with a behind commit)
 - [ ] Reference file paths resolve (use `${CLAUDE_SKILL_DIR}/` prefix correctly)
-- [ ] Sub-skill path depth: all skills use `../../..` for repo root (3 levels up from their `plugin/skills/<name>/` dir)
+- [ ] Sub-skill path depth: all skills use `../../..` for repo root (3 levels up from their `upkeep/skills/<name>/` dir)
 
 ## Path depth reference
 
@@ -42,11 +42,11 @@ Reference tables (cache paths, system dirs, CLI dotdirs) live in
 
 | Skill file | CLAUDE_SKILL_DIR | Repo root | Reference dir |
 |-----------|-----------------|-----------|---------------|
-| `plugin/skills/upkeep/SKILL.md` | `plugin/skills/upkeep/` | `../../..` | `./reference/` |
-| `plugin/skills/cleandeep/SKILL.md` | `plugin/skills/cleandeep/` | `../../..` | `../upkeep/reference/` |
-| `plugin/skills/audit/SKILL.md` | `plugin/skills/audit/` | `../../..` | `../upkeep/reference/` |
-| `plugin/skills/cleanquick/SKILL.md` | `plugin/skills/cleanquick/` | `../../..` | `../upkeep/reference/` |
-| `plugin/skills/update/SKILL.md` | `plugin/skills/update/` | `../../..` | `n/a` |
+| `upkeep/skills/upkeep/SKILL.md` | `upkeep/skills/upkeep/` | `../../..` | `./reference/` |
+| `upkeep/skills/cleandeep/SKILL.md` | `upkeep/skills/cleandeep/` | `../../..` | `../upkeep/reference/` |
+| `upkeep/skills/audit/SKILL.md` | `upkeep/skills/audit/` | `../../..` | `../upkeep/reference/` |
+| `upkeep/skills/cleanquick/SKILL.md` | `upkeep/skills/cleanquick/` | `../../..` | `../upkeep/reference/` |
+| `upkeep/skills/update/SKILL.md` | `upkeep/skills/update/` | `../../..` | `n/a` |
 
 ## Ideas for contributions
 

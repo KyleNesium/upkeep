@@ -22,11 +22,13 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 </details>
 
 <details open>
-<summary>🚧 v1.1 Update Skill Overhaul (Phases 7–9) — Mac-only, awaiting audit</summary>
+<summary>🚧 v1.1 Update Skill Overhaul (Phases 7–11) — Mac-only, gap closure in progress</summary>
 
 - [x] Phase 7: Parallel Discovery Agents (1/1 plan) — verified 2026-05-07
 - [x] Phase 8: Compatibility Synthesizer (1/1 plan) — verified 2026-05-07
 - [x] Phase 9: Single-Gate Apply + Post-Flight (1/1 plan) — verified 2026-05-07
+- [ ] Phase 10: Synthesizer Prompt & Context Fixes (gap closure for R5/R10/G5)
+- [ ] Phase 11: Apply Orchestrator Wiring (gap closure for R7/G4)
 
 Full details: `.planning/milestones/v1.1-ROADMAP.md`
 
@@ -45,3 +47,5 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 | 7. Parallel Discovery Agents | v1.1 | 1/1 | Complete (verified static) | 2026-05-07 |
 | 8. Compatibility Synthesizer | v1.1 | 1/1 | Complete (verified static) | 2026-05-07 |
 | 9. Single-Gate Apply + Post-Flight | v1.1 | 1/1 | Complete (verified static) | 2026-05-07 |
+| 10. Synthesizer Prompt & Context Fixes | v1.1 | 0/1 | Pending (gap closure) | — |
+| 11. Apply Orchestrator Wiring | v1.1 | 0/1 | Pending (gap closure) | — |

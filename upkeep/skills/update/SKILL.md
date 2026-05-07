@@ -508,7 +508,10 @@ PATH-shadow and resolution-recheck loops:
 ```bash
 UPGRADED_FORMULAS_FILE=$(mktemp)
 UPGRADED_TOOLS_FILE=$(mktemp)
-trap "rm -f $UPGRADED_FORMULAS_FILE $UPGRADED_TOOLS_FILE" EXIT
+# Single-quoted body so variable expansion happens at trap-fire time, not
+# trap-set time. Quoted vars + `--` so paths with spaces or leading dashes
+# can't break out of the rm.
+trap 'rm -f -- "$UPGRADED_FORMULAS_FILE" "$UPGRADED_TOOLS_FILE"' EXIT
 ```
 
 Iterate `plan.ordered_groups`:
@@ -630,20 +633,40 @@ fi
 
 ### History write
 
+Writes are guarded against concurrent `/upkeep:update` runs by an `flock`
+on a sibling lockfile, and the temp file uses `mktemp` (not a predictable
+`$HIST_FILE.tmp` that another user-writable process could pre-symlink).
+
 ```bash
 HIST_DIR="$HOME/.claude/data"
 HIST_FILE="$HIST_DIR/upkeep-history.json"
+HIST_LOCK="$HIST_DIR/upkeep-history.lock"
 mkdir -p "$HIST_DIR" 2>/dev/null
 
 if command -v jq >/dev/null 2>&1; then
   ENTRY=$(jq -n --arg ts "$(date -u +%FT%TZ)" \
     --argjson minutes "$MINUTES_JSON" \
     '{ts: $ts, minutes: $minutes}')
-  if [ -f "$HIST_FILE" ]; then
-    jq --argjson entry "$ENTRY" '.runs += [$entry]' "$HIST_FILE" > "$HIST_FILE.tmp" \
-      && mv "$HIST_FILE.tmp" "$HIST_FILE"
+
+  _write_history() {
+    local tmp
+    tmp=$(mktemp "${HIST_DIR}/.upkeep-history.XXXXXX") || return 1
+    if [ -f "$HIST_FILE" ]; then
+      jq --argjson entry "$ENTRY" '.runs += [$entry]' "$HIST_FILE" > "$tmp" \
+        && mv -- "$tmp" "$HIST_FILE"
+    else
+      jq -n --argjson entry "$ENTRY" '{schema_version:"1", runs:[$entry]}' > "$tmp" \
+        && mv -- "$tmp" "$HIST_FILE"
+    fi
+  }
+
+  if command -v flock >/dev/null 2>&1; then
+    # Linux / WSL2 / Homebrew flock: serialize concurrent writers.
+    ( flock -x 9; _write_history ) 9>"$HIST_LOCK"
   else
-    jq -n --argjson entry "$ENTRY" '{schema_version:"1", runs:[$entry]}' > "$HIST_FILE"
+    # macOS without coreutils: fall back to atomic mktemp+mv. Concurrent runs
+    # may lose one entry on a race but cannot clobber the file via symlink.
+    _write_history
   fi
 else
   echo "ⓘ Install jq to enable ETA self-tuning across runs"

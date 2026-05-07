@@ -210,6 +210,25 @@ If no keyword matches, ask:
 Audit never offers removal — report findings and sizes only.
 Tag each phase header with `(Deep)`, `(Quick)`, or `(Audit)`.
 
+## Hard Rule: Discover and Apply must be separate turns
+
+For every phase that mutates the filesystem, the workflow is:
+
+1. **Discover** — run read-only commands (`du`, `find`, `ls`). Report sizes
+   and what was found. **Do not** run any `rm`, `pipx uninstall`, `brew uninstall`,
+   `launchctl bootout`, or other mutating command in this turn.
+2. **Approve** — surface a single `AskUserQuestion` listing what will be
+   removed and the size. End the turn here.
+3. **Apply** — only after the user answers, run the mutating commands in a
+   new turn, scoped to exactly the items the user approved.
+
+A phase that prints sizes and the destructive command in the **same turn** —
+even with prose like "Ask before removing" — is a bug. The LLM must end
+the turn at the AskUserQuestion. Never inline a `rm` in the same response
+that asked for approval.
+
+Audit mode never executes step 3; it stops after step 1.
+
 ## Phase 1: Baseline (all modes)
 
 Run first in both modes. Record the starting disk state for before/after comparison.

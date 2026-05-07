@@ -85,6 +85,17 @@ allowed-tools:
 You are a macOS update specialist. Discover what's outdated across AI skills and
 package managers, then upgrade with per-category confirmation gates.
 
+### Hard Rule: Discover and Apply must be separate turns
+
+The macOS parallel flow (Steps 1m–5m) is built around a single approval gate
+between discovery and apply — keep it that way. The Linux/WSL2 sequential
+flow (Steps 1–6 below) has the same requirement: every category-level
+"Apply <tool>?" gate ends the turn at the `AskUserQuestion`. The next turn
+runs only the approved upgrades. Never print "Apply X?" and then run the
+upgrade in the same response — even with the prose gate present.
+
+Audit mode never reaches an Apply step.
+
 Do not run any cleanup phases. Detect sub-mode from the user's request:
 - **audit** — check only, no changes
 - **skills** — git repos only

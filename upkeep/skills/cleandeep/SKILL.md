@@ -149,6 +149,23 @@ fi
 
 If `$OS_TYPE` is `unknown`, run Phase 1 (Baseline) only and skip every subsequent phase with the note "skipped (unsupported OS: $(uname -s))".
 
+## Hard Rule: Discover and Apply must be separate turns
+
+For every phase that mutates the filesystem, the workflow is:
+
+1. **Discover** — run read-only commands (`du`, `find`, `ls`). Report sizes
+   and what was found. **Do not** run any `rm`, `pipx uninstall`, `brew uninstall`,
+   `launchctl bootout`, `snap remove`, `flatpak uninstall`, or other mutating
+   command in this turn.
+2. **Approve** — surface a single `AskUserQuestion` listing what will be
+   removed and the size. End the turn here.
+3. **Apply** — only after the user answers, run the mutating commands in a
+   new turn, scoped to exactly the items the user approved.
+
+A phase that prints sizes and the destructive command in the **same turn** —
+even with prose like "Ask before removing" — is a bug. End the turn at the
+`AskUserQuestion`; never inline a `rm` in the same response that asked.
+
 ## Phase 1: Baseline
 
 Record starting disk state for before/after comparison.

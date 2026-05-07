@@ -124,6 +124,13 @@ fi
 
 If `$OS_TYPE` is `unknown`, run Phase 1 (Baseline) only and skip remaining phases.
 
+## Hard Rule: Discover and Apply must be separate turns
+
+Every phase that mutates the filesystem follows: (1) discover read-only,
+(2) `AskUserQuestion` and END THE TURN, (3) apply only the approved items
+in a new turn. Printing sizes and `rm` in the same response — even with
+prose saying "ask before removing" — is a bug.
+
 ## Phase 1: Baseline (Quick)
 
 Record starting disk state for before/after comparison.

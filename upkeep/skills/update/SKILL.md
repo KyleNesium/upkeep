@@ -85,6 +85,17 @@ allowed-tools:
 You are a macOS update specialist. Discover what's outdated across AI skills and
 package managers, then upgrade with per-category confirmation gates.
 
+### Hard Rule: Discover and Apply must be separate turns
+
+The macOS parallel flow (Steps 1m–5m) is built around a single approval gate
+between discovery and apply — keep it that way. The Linux/WSL2 sequential
+flow (Steps 1–6 below) has the same requirement: every category-level
+"Apply <tool>?" gate ends the turn at the `AskUserQuestion`. The next turn
+runs only the approved upgrades. Never print "Apply X?" and then run the
+upgrade in the same response — even with the prose gate present.
+
+Audit mode never reaches an Apply step.
+
 Do not run any cleanup phases. Detect sub-mode from the user's request:
 - **audit** — check only, no changes
 - **skills** — git repos only
@@ -383,8 +394,10 @@ the same way — paste the values you've gathered.
 >    semver: same-major-different-minor → minor; same-minor-different-patch
 >    → patch; otherwise major.
 > 3. If `language.gems.system_ruby` is `true`, set
->    `tool_specs.gems.command` to `gem update --user-install` and add
+>    `tool_specs.gems.user_install` to `true` and add
 >    `rationale_for_flag: "system Ruby ${ruby_version} detected; --user-install avoids sudo"`.
+>    Do NOT emit `tool_specs.gems.command` — the apply step uses a hardcoded
+>    command table and only reads the `user_install` boolean flag.
 > 4. If `disk.free_gb < 5`, set
 >    `warnings: [{"severity": "high", "message": "Refusing to run: only ${free_gb} GB free"}]`
 >    and emit empty `ordered_groups`.
@@ -397,10 +410,15 @@ the same way — paste the values you've gathered.
 >    `/plugin update <name>`), PATH shadows, codex skills without `.git`.
 > 8. If `native.softwareupdate.restart_required` is `true`, include a
 >    `macos` entry under `tool_specs` with
->    `{kind: "store", command: "softwareupdate -ia", restart_required: true, preconditions: []}`
->    and ensure the `stores` `ordered_groups` entry lists `macos`. The
+>    `{kind: "store", restart_required: true}` (no `command` field) and
+>    ensure the `stores` `ordered_groups` entry lists `macos`. The
 >    `restart_required` field gates Step 3m's separate restart-warning
 >    `AskUserQuestion`.
+> 9. **Never emit a `command` field anywhere in `tool_specs`.** Apply
+>    commands are hardcoded in Step 3m's dispatcher, keyed by tool id.
+>    Any `command` field present in your output will be stripped before
+>    apply runs. Likewise, do not emit a `preconditions` field as a shell
+>    string — preconditions are also hardcoded.
 >
 > **Bake-in ETA defaults (seconds per item):**
 > - brew: 25, npm: 30, pipx: 20, gems: 15, uv: 5 total, bun: 5 total,
@@ -508,7 +526,10 @@ PATH-shadow and resolution-recheck loops:
 ```bash
 UPGRADED_FORMULAS_FILE=$(mktemp)
 UPGRADED_TOOLS_FILE=$(mktemp)
-trap "rm -f $UPGRADED_FORMULAS_FILE $UPGRADED_TOOLS_FILE" EXIT
+# Single-quoted body so variable expansion happens at trap-fire time, not
+# trap-set time. Quoted vars + `--` so paths with spaces or leading dashes
+# can't break out of the rm.
+trap 'rm -f -- "$UPGRADED_FORMULAS_FILE" "$UPGRADED_TOOLS_FILE"' EXIT
 ```
 
 Iterate `plan.ordered_groups`:
@@ -518,16 +539,84 @@ Iterate `plan.ordered_groups`:
 - `parallelism: parallel` → fan out via `Bash` `run_in_background`, cap 4
   concurrent, await all via Monitor or `wait`
 
+### Hardcoded command dispatcher (never `eval` synthesizer output)
+
+Apply commands are NOT taken from the synthesizer's plan JSON. They are
+hardcoded here, keyed by tool id. The synthesizer can only choose which
+tools run and surface metadata flags (e.g. `gems.user_install`) — it
+cannot author shell strings. This closes the prior `eval "$CMD"` primitive
+where a compromised upstream could inject commands via the LLM.
+
+Before iterating `plan.ordered_groups`, validate the tool ids:
+
+```bash
+ALLOWED_TOOLS="skills brew npm pipx gems uv bun mas macos"
+for TOOL in $(jq -r '.ordered_groups[].tools[]' <<<"$PLAN_JSON" 2>/dev/null); do
+  case " $ALLOWED_TOOLS " in
+    *" $TOOL "*) ;;
+    *) echo "Refusing to run unknown tool id: $TOOL"; exit 1 ;;
+  esac
+done
+```
+
 Each tool command:
-1. Run `tool_specs[tool].preconditions` first (e.g., `brew update >/dev/null`)
-2. Capture wall time with `time` or `$SECONDS` deltas
-3. Wrap with isolation:
+
+1. Look up the canonical command and preconditions from the table below.
+   **Never** read `tool_specs[tool].command` or `tool_specs[tool].preconditions`
+   from the plan — those fields are stripped if present.
+2. Capture wall time with `time` or `$SECONDS` deltas.
+3. Run the command directly (no `eval`, no string concatenation):
+
    ```bash
-   if eval "$CMD" >>"$LOG" 2>&1; then
+   case "$TOOL" in
+     brew)
+       brew update >/dev/null 2>&1
+       brew upgrade >>"$LOG" 2>&1; RC=$?
+       ;;
+     npm)
+       npm update -g >>"$LOG" 2>&1; RC=$?
+       ;;
+     pipx)
+       pipx upgrade-all >>"$LOG" 2>&1; RC=$?
+       ;;
+     gems)
+       # The only synthesizer-chosen flag; treated as a boolean, not a string.
+       USER_INSTALL=$(jq -r ".tool_specs.gems.user_install // false" <<<"$PLAN_JSON")
+       if [ "$USER_INSTALL" = "true" ]; then
+         gem update --user-install >>"$LOG" 2>&1; RC=$?
+       else
+         gem update >>"$LOG" 2>&1; RC=$?
+       fi
+       ;;
+     uv)
+       uv self update >>"$LOG" 2>&1; RC=$?
+       ;;
+     bun)
+       bun upgrade >>"$LOG" 2>&1; RC=$?
+       ;;
+     mas)
+       mas upgrade >>"$LOG" 2>&1; RC=$?
+       ;;
+     macos)
+       # Restart warning has its own AskUserQuestion in Step 3m above.
+       softwareupdate -ia >>"$LOG" 2>&1; RC=$?
+       ;;
+     skills)
+       # Per-skill git pull is handled in Step 4 (Apply Skill Updates).
+       # That code path validates the remote URL per HIGH-3 first and
+       # only fast-forwards trusted repos.
+       RC=0
+       ;;
+     *)
+       echo "Refusing to run unknown tool id: $TOOL" >>"$LOG"
+       RC=1
+       ;;
+   esac
+
+   if [ "$RC" = "0" ]; then
      RESULT="ok"
      case "$TOOL" in
        brew)
-         # Append every formula brew upgraded this run
          grep -E "^==> Upgrading" "$LOG" | awk '{print $3}' | cut -d/ -f1 \
            >> "$UPGRADED_FORMULAS_FILE"
          ;;
@@ -536,12 +625,37 @@ Each tool command:
          ;;
      esac
    else
-     RESULT="fail:$?"
+     RESULT="fail:$RC"
    fi
    ```
+
 4. Pipe stdout through deprecation collector:
    `tee -a "$DEPRECATION_LOG" >/dev/null` for any line matching
    `(deprecated|deprecation|warning|WARN)`
+
+### Discovery-input sanitization (defense in depth)
+
+Before the discovery JSON is pasted into the synthesizer prompt at Step 2m,
+strip free-text fields that come from upstream and could carry
+prompt-injection payloads. Even though the dispatcher above ignores any
+synthesizer-emitted command strings, sanitizing the input also prevents
+the synthesizer from emitting attacker-influenced `manual_steps`,
+`warnings`, or category orderings.
+
+```bash
+if command -v jq >/dev/null 2>&1; then
+  DISCOVERY_JSON=$(jq '
+    walk(if type == "object" then
+      del(.newest_commit_subjects, .breaking_lines, .description,
+          .release_notes, .commit_messages, .changelog)
+    else . end)
+  ' <<<"$DISCOVERY_JSON_RAW")
+fi
+```
+
+The stripped fields are still surfaced to the user verbatim in Step 4
+(Apply Skill Updates) where they belong — as a changelog the human reads
+before approving a `git pull`. They are kept out of the LLM-authored plan.
 
 After all groups complete, populate the env vars Step 4m consumes:
 
@@ -630,20 +744,40 @@ fi
 
 ### History write
 
+Writes are guarded against concurrent `/upkeep:update` runs by an `flock`
+on a sibling lockfile, and the temp file uses `mktemp` (not a predictable
+`$HIST_FILE.tmp` that another user-writable process could pre-symlink).
+
 ```bash
 HIST_DIR="$HOME/.claude/data"
 HIST_FILE="$HIST_DIR/upkeep-history.json"
+HIST_LOCK="$HIST_DIR/upkeep-history.lock"
 mkdir -p "$HIST_DIR" 2>/dev/null
 
 if command -v jq >/dev/null 2>&1; then
   ENTRY=$(jq -n --arg ts "$(date -u +%FT%TZ)" \
     --argjson minutes "$MINUTES_JSON" \
     '{ts: $ts, minutes: $minutes}')
-  if [ -f "$HIST_FILE" ]; then
-    jq --argjson entry "$ENTRY" '.runs += [$entry]' "$HIST_FILE" > "$HIST_FILE.tmp" \
-      && mv "$HIST_FILE.tmp" "$HIST_FILE"
+
+  _write_history() {
+    local tmp
+    tmp=$(mktemp "${HIST_DIR}/.upkeep-history.XXXXXX") || return 1
+    if [ -f "$HIST_FILE" ]; then
+      jq --argjson entry "$ENTRY" '.runs += [$entry]' "$HIST_FILE" > "$tmp" \
+        && mv -- "$tmp" "$HIST_FILE"
+    else
+      jq -n --argjson entry "$ENTRY" '{schema_version:"1", runs:[$entry]}' > "$tmp" \
+        && mv -- "$tmp" "$HIST_FILE"
+    fi
+  }
+
+  if command -v flock >/dev/null 2>&1; then
+    # Linux / WSL2 / Homebrew flock: serialize concurrent writers.
+    ( flock -x 9; _write_history ) 9>"$HIST_LOCK"
   else
-    jq -n --argjson entry "$ENTRY" '{schema_version:"1", runs:[$entry]}' > "$HIST_FILE"
+    # macOS without coreutils: fall back to atomic mktemp+mv. Concurrent runs
+    # may lose one entry on a race but cannot clobber the file via symlink.
+    _write_history
   fi
 else
   echo "ⓘ Install jq to enable ETA self-tuning across runs"
@@ -667,14 +801,44 @@ note: "Install git: `xcode-select --install`"
 **upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
 - Fails → check for `plugin.json`: if present, "managed by plugin manager";
   otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
-- Succeeds → verify remote: `git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin`
-  must contain `KyleNesium/upkeep` or skip with "unexpected remote URL".
+- Succeeds → verify remote with an exact host+path match (substring match
+  was previously vulnerable to URLs like `https://evil.example/?KyleNesium/upkeep`):
+  ```bash
+  ORIGIN_URL=$(git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin 2>/dev/null)
+  case "$ORIGIN_URL" in
+    https://github.com/KyleNesium/upkeep|\
+    https://github.com/KyleNesium/upkeep.git|\
+    git@github.com:KyleNesium/upkeep|\
+    git@github.com:KyleNesium/upkeep.git)
+      ;;
+    *)
+      echo "Skipping upkeep: unexpected remote URL: $ORIGIN_URL"
+      ;;
+  esac
+  ```
+  Only the four canonical forms above are accepted. Anything else skips.
 
 **Other Claude skills (discovery-based):**
 ```bash
 for d in ~/.claude/skills/*/; do [ -d "$d/.git" ] && echo "$d"; done
 ```
-For each: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
+
+**First-encounter approval for third-party skill repos.** Before fetching,
+build a per-skill record showing the remote URL and (if available) the most
+recent tagged version. Read `~/.claude/data/upkeep-skill-trust.json` for
+prior approvals; for any new remote URL, surface it via `AskUserQuestion`:
+
+> Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
+> A) Trust this remote (remember for future runs)
+> B) Skip this skill
+> C) Show recent commits from origin first
+
+On A, append to `upkeep-skill-trust.json` keyed by the absolute repo path.
+Do not fetch from a remote that has not been explicitly trusted. This makes
+the supply-chain trust decision visible and reversible (delete the entry to
+re-prompt) instead of implicit.
+
+For each trusted skill: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
 `git -C "$d" log HEAD..origin/$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null || echo main) --oneline 2>/dev/null`
 
 **Report only (no git):**

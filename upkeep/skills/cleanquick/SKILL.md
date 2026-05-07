@@ -124,6 +124,13 @@ fi
 
 If `$OS_TYPE` is `unknown`, run Phase 1 (Baseline) only and skip remaining phases.
 
+## Hard Rule: Discover and Apply must be separate turns
+
+Every phase that mutates the filesystem follows: (1) discover read-only,
+(2) `AskUserQuestion` and END THE TURN, (3) apply only the approved items
+in a new turn. Printing sizes and `rm` in the same response — even with
+prose saying "ask before removing" — is a bug.
+
 ## Phase 1: Baseline (Quick)
 
 Record starting disk state for before/after comparison.
@@ -377,3 +384,16 @@ space immediately because it reclaims on demand.
 - Never execute sudo — surface the exact command in a fenced bash block
 - Build artifacts (Phase 8): report only — never offer removal in Quick mode
 - Track cumulative space reclaimed, report total at the end
+
+### Hard Rule: Path substitution must be quoted with `--`
+
+Discovered filenames can contain spaces, leading dashes, or glob characters.
+Every removal must carry the exact path through an index→object map and
+emit the quoted form:
+
+```bash
+rm -rf -- "$path"
+```
+
+Never let users free-type names; never reconstruct a path by joining a dir
+and a name. Use the absolute path captured at discovery time.

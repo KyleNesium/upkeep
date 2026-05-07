@@ -210,6 +210,25 @@ If no keyword matches, ask:
 Audit never offers removal — report findings and sizes only.
 Tag each phase header with `(Deep)`, `(Quick)`, or `(Audit)`.
 
+## Hard Rule: Discover and Apply must be separate turns
+
+For every phase that mutates the filesystem, the workflow is:
+
+1. **Discover** — run read-only commands (`du`, `find`, `ls`). Report sizes
+   and what was found. **Do not** run any `rm`, `pipx uninstall`, `brew uninstall`,
+   `launchctl bootout`, or other mutating command in this turn.
+2. **Approve** — surface a single `AskUserQuestion` listing what will be
+   removed and the size. End the turn here.
+3. **Apply** — only after the user answers, run the mutating commands in a
+   new turn, scoped to exactly the items the user approved.
+
+A phase that prints sizes and the destructive command in the **same turn** —
+even with prose like "Ask before removing" — is a bug. The LLM must end
+the turn at the AskUserQuestion. Never inline a `rm` in the same response
+that asked for approval.
+
+Audit mode never executes step 3; it stops after step 1.
+
 ## Phase 1: Baseline (all modes)
 
 Run first in both modes. Record the starting disk state for before/after comparison.
@@ -533,11 +552,14 @@ confirmation is required, no batch removal.
 background services (VPNs, updaters, dev tools) may be critical. When uncertain,
 present the plist label and ask -- do not assume safe to remove.
 
-To remove (use label-based target — works on macOS 14+ and older):
+To remove (use label-based target — works on macOS 14+ and older). Carry
+the absolute plist path through the index→object map per the
+"Path substitution must be quoted with `--`" rule; substitute `$plist_path`
+and `$label` from the entry the user approved:
 ```bash
-launchctl bootout gui/$(id -u)/<label> 2>/dev/null || \
-  launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<plist>
-rm -f ~/Library/LaunchAgents/<plist>
+launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || \
+  launchctl bootout "gui/$(id -u)" -- "$plist_path"
+rm -f -- "$plist_path"
 ```
 The label-based form is the modern target specifier. Fall back to the
 plist-path form for agents that didn't load cleanly.
@@ -972,14 +994,39 @@ note: "Install git: `xcode-select --install`"
 **upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
 - Fails → check for `plugin.json`: if present, "managed by plugin manager";
   otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
-- Succeeds → verify remote: `git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin`
-  must contain `KyleNesium/upkeep` or skip with "unexpected remote URL".
+- Succeeds → verify remote with an exact host+path match (substring match
+  was previously vulnerable to URLs like `https://evil.example/?KyleNesium/upkeep`):
+  ```bash
+  ORIGIN_URL=$(git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin 2>/dev/null)
+  case "$ORIGIN_URL" in
+    https://github.com/KyleNesium/upkeep|\
+    https://github.com/KyleNesium/upkeep.git|\
+    git@github.com:KyleNesium/upkeep|\
+    git@github.com:KyleNesium/upkeep.git)
+      ;;
+    *)
+      echo "Skipping upkeep: unexpected remote URL: $ORIGIN_URL"
+      ;;
+  esac
+  ```
+  Only the four canonical forms above are accepted. Anything else skips.
 
 **Other Claude skills (discovery-based):**
 ```bash
 for d in ~/.claude/skills/*/; do [ -d "$d/.git" ] && echo "$d"; done
 ```
-For each: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
+
+**First-encounter approval for third-party skill repos.** Before fetching,
+read `~/.claude/data/upkeep-skill-trust.json` for prior approvals. For any
+remote URL not on the trust list, surface it via `AskUserQuestion`:
+
+> Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
+> A) Trust this remote (remember for future runs)
+> B) Skip this skill
+
+Do not fetch from a remote that has not been explicitly trusted.
+
+For each trusted skill: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
 `git -C "$d" log HEAD..origin/$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null || echo main) --oneline 2>/dev/null`
 
 **Report only (no git):**
@@ -1305,3 +1352,25 @@ macOS keeps recently deleted data as "purgeable" — Finder may not show freed s
 - Track cumulative space reclaimed and report the total at the end
 - In Quick mode, skip non-Quick phases — get in and out fast
 - In Audit mode, never offer removal — report findings and sizes only
+
+### Hard Rule: Path substitution must be quoted with `--`
+
+Whenever a phase template contains a placeholder like `<plist>`, `<subdir>`,
+`<tool>`, `<rev>`, or `<pkg>`, the substituted value comes from a discovered
+filesystem entry. Filenames can contain spaces, leading dashes, glob
+characters, or control characters. Naive interpolation turns
+`~/Library/LaunchAgents/a b.plist` into two shell words and targets the
+wrong file.
+
+Every concrete invocation must:
+
+1. Carry the exact path through an index→object map built from the discovery
+   listing. Users pick indices; never let users free-type names.
+2. Pass the path as a single quoted argument with `--`:
+   ```bash
+   rm -rf -- "$path"
+   rm -f -- "$plist_path"
+   pipx uninstall -- "$tool_name"
+   ```
+3. Never reconstruct paths by concatenating a directory and a name — use the
+   absolute path captured at discovery time.

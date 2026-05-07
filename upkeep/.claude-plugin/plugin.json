@@ -1,7 +1,7 @@
 {
   "name": "upkeep",
-  "version": "1.0.6",
-  "description": "macOS system cleanup and updater. Finds orphaned app data, stale caches, dead LaunchAgents, and configuration drift. Also updates AI skills and package managers (brew, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep. Four modes: deep, quick, audit, update.",
+  "version": "1.1.0",
+  "description": "macOS system cleanup and updater. v1.1 reworks /upkeep:update on macOS with parallel discovery scouts, a compatibility synthesizer that flags cross-manager risks (brew:node ⇒ npm globals, brew:openssl ⇒ ruby native gems, system Ruby ⇒ --user-install), single approval gate, parallel apply across independent ecosystems, PATH-shadow detection, and history-tuned ETA. Linux/WSL2 paths unchanged. Cleanup unchanged. Five entry points: deep, quick, audit, update, upkeep.",
   "author": {
     "name": "KyleNesium",
     "url": "https://github.com/KyleNesium"

@@ -6,16 +6,16 @@
   },
   "metadata": {
     "description": "Claude Code plugins by KyleNesium",
-    "version": "1.0.6"
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "upkeep",
       "source": "./upkeep",
-      "description": "macOS system cleanup and updater. Finds orphaned app data, stale caches, dead LaunchAgents, and configuration drift. Also updates AI skills and package managers (brew, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep. Four modes: deep, quick, audit, update.",
-      "version": "1.0.6",
+      "description": "macOS system cleanup and updater. v1.1 reworks /upkeep:update on macOS with parallel discovery scouts, a compatibility synthesizer that flags cross-manager risks (brew:node ⇒ npm globals, brew:openssl ⇒ ruby native gems, system Ruby ⇒ --user-install), single approval gate, parallel apply across independent ecosystems, PATH-shadow detection, and history-tuned ETA. Linux/WSL2 paths unchanged.",
+      "version": "1.1.0",
       "category": "developer tools",
-      "keywords": ["macos", "cleanup", "disk-space", "system-maintenance", "homebrew", "cache-cleanup", "orphan-detection", "updater", "package-manager"],
+      "keywords": ["macos", "cleanup", "disk-space", "system-maintenance", "homebrew", "cache-cleanup", "orphan-detection", "updater", "package-manager", "parallel-agents", "compatibility-analysis"],
       "skills": [
         "./skills/upkeep",
         "./skills/audit",

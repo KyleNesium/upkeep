@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 Linux & WSL2 Cross-Platform Support** — Phases 1–6 (shipped 2026-04-19)
-- 🚧 **v1.1 Update Skill Overhaul** — Phases 7–9 (in progress — Mac-only)
+- ✅ **v1.1 Update Skill Overhaul (macOS-only)** — Phases 7–11 (shipped 2026-05-07)
 
 ## Phases
 
@@ -21,14 +21,14 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 
 </details>
 
-<details open>
-<summary>🚧 v1.1 Update Skill Overhaul (Phases 7–11) — Mac-only, gap closure in progress</summary>
+<details>
+<summary>✅ v1.1 Update Skill Overhaul (Phases 7–11) — SHIPPED 2026-05-07</summary>
 
-- [x] Phase 7: Parallel Discovery Agents (1/1 plan) — verified 2026-05-07
-- [x] Phase 8: Compatibility Synthesizer (1/1 plan) — verified 2026-05-07
-- [x] Phase 9: Single-Gate Apply + Post-Flight (1/1 plan) — verified 2026-05-07
-- [x] Phase 10: Synthesizer Prompt & Context Fixes (gap closure for R5/R10/G5) — verified 2026-05-07
-- [x] Phase 11: Apply Orchestrator Wiring (gap closure for R7/G4) — verified 2026-05-07
+- [x] Phase 7: Parallel Discovery Agents (1/1 plan) — completed 2026-05-07
+- [x] Phase 8: Compatibility Synthesizer (1/1 plan) — completed 2026-05-07
+- [x] Phase 9: Single-Gate Apply + Post-Flight (1/1 plan) — completed 2026-05-07
+- [x] Phase 10: Synthesizer Prompt & Context Fixes (R5/R10/G5 gap closure) — completed 2026-05-07
+- [x] Phase 11: Apply Orchestrator Wiring (R7/G4 gap closure) — completed 2026-05-07
 
 Full details: `.planning/milestones/v1.1-ROADMAP.md`
 

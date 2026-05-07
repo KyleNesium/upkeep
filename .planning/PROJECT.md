@@ -24,10 +24,30 @@ Every upkeep command gracefully handles macOS, Linux, and WSL2 without errors, s
 - ✓ Linux package manager support in update skill (apt, dnf, pacman, snap, flatpak) — v1.0
 - ✓ README, badges, and SKILL.md descriptions reflect cross-platform support — v1.0
 - ✓ Umbrella router `/upkeep` delivers same Linux/WSL2 experience as dedicated sub-skills — v1.0
+- ✓ Parallel discovery via four scout agents (skills, native, language, shadow) on macOS — v1.1
+- ✓ Compatibility synthesizer agent + `compatibility.json` matrix flags cross-manager risks — v1.1
+- ✓ Single approval gate replaces per-category Y/N fatigue on macOS — v1.1
+- ✓ Apply orchestrator parallelizes independent ecosystems (4-job cap), brew exclusive, mas/macOS last — v1.1
+- ✓ macOS system-Ruby auto-detection forces `gem update --user-install` — v1.1
+- ✓ PATH shadow detection + brew doctor + deprecation aggregator in post-flight — v1.1
+- ✓ Disk-space pre-flight (refuse < 5 GB, warn < 10 GB) — v1.1
+- ✓ Codex `~/.codex/skills/*/.git` repos auto-update like Claude skills — v1.1
+- ✓ History-tuned ETA self-tunes from `~/.claude/data/upkeep-history.json` median — v1.1
+- ✓ Schema-version refusal gate routes mismatched plans to fallback — v1.1
 
 ### Active
 
 (No active requirements — planning next milestone)
+
+#### Runtime verification queue (carried into next milestone)
+
+These v1.1 claims are wired in source but require live macOS validation:
+- R1 — discovery wall time ≤ 50% of v1.0 sequential
+- R8 — `gem update --user-install` actual auto-injection on Ruby 2.x machine
+- N4 — partial-failure resilience under synthetic mid-run brew failure
+- G1 runtime — ETA self-tuning measurable difference on second run
+- G3 runtime — restart gate fires when a real macOS update is pending
+- G4 runtime — schema-mismatch payload routes to fallback as designed
 
 ### Out of Scope
 
@@ -51,7 +71,9 @@ upkeep skills are markdown files consumed by Claude Code. The "code" is Claude's
 
 **Shipped v1.0:** 5 skill files, 64 files changed, ~10,950 lines across 6 phases.
 
-**Tech stack:** Pure markdown SKILL.md instruction files. No build step, no runtime. Consumed by Claude Code `allowed-tools` frontmatter.
+**Shipped v1.1:** macOS update flow rewritten — 4 parallel scout agents + 1 compatibility synthesizer agent + single-gate apply + post-flight health check. 30 files changed, +2,680 LOC across 5 phases (single-day milestone, 11 commits, 2 PRs). Linux/WSL2 paths preserved unchanged. New sibling data file: `compatibility.json` (9 cross-manager dependency edges).
+
+**Tech stack:** Pure markdown SKILL.md instruction files plus optional sibling JSON data files. No build step, no runtime. Consumed by Claude Code `allowed-tools` frontmatter. v1.1 introduces inline `Agent` invocations from within the skill — first time the project uses sub-agent fan-out.
 
 ## Key Decisions
 
@@ -65,6 +87,12 @@ upkeep skills are markdown files consumed by Claude Code. The "code" is Claude's
 | snap/flatpak gated by `command -v`, not `$OS_TYPE` | Handles rare non-Linux installs (Homebrew Linuxbrew, etc.) | ✓ Good — more robust |
 | Umbrella router phases embedded inline (not sub-skill calls) | Claude Code skills are standalone; can't delegate to other skills mid-execution | ✓ Good — no runtime coupling |
 | Gap closure phases 5+6 added after initial audit | Initial 4 phases targeted sub-skills only; umbrella needed separate pass | ✓ Good — audit caught the gap; gap closure closed it |
+| v1.1 Mac-only first; Linux/WSL2 port deferred | New parallel-agent architecture worth proving on the test machine before porting | ✓ Good — v1.0 sequential paths preserved unchanged; v1.1.x can port |
+| Four parallel scouts vs single big bash with `&` | Scouts get domain-specific reasoning; bash background jobs don't compose with Claude Code tool calls | ✓ Good — parallel fan-out lands in single tool-use block |
+| Inline `Agent` invocations from a skill | First project use; fits Claude Code's skill model and reduces orchestrator context | ✓ Good — discovery + synthesis agents both work cleanly |
+| Static `compatibility.json` matrix vs LLM-proposed edges | LLM hallucination risk on dependency edges is too high; matrix is hand-curated | ✓ Good — 9 seed edges cover the common Mac dev stack |
+| Gap closure as new phases 10–11 vs amending phases 7–9 | Audit-traceability — keep verified phases sealed, add new phases for new work | ✓ Good — clean PR diff (PR #9), preserved verification of #7–9 |
+| Single-day milestone delivery | All work was tightly coupled (scouts → synthesizer → apply); splitting would have created false phase boundaries | ✓ Good — 4h25m delivery for 5 phases via 2 PRs |
 
 ## Constraints
 
@@ -74,4 +102,4 @@ upkeep skills are markdown files consumed by Claude Code. The "code" is Claude's
 - **Approval gates**: Any removal operations still require user confirmation (existing pattern)
 
 ---
-*Last updated: 2026-04-19 after v1.0 milestone — Linux & WSL2 Cross-Platform Support shipped*
+*Last updated: 2026-05-07 after v1.1 milestone — Update Skill Overhaul (macOS parallel flow) shipped*

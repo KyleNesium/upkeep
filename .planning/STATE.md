@@ -1,10 +1,10 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: Update Skill Overhaul (Parallel Discovery + Compatibility)
-status: phases_complete_pending_audit
-stopped_at: All v1.1 phases verified static — awaiting milestone audit and PR #8 runtime testing
-last_updated: "2026-05-07T11:30:00.000Z"
+milestone_name: Update Skill Overhaul (macOS Parallel Flow)
+status: complete
+stopped_at: Milestone v1.1 shipped 2026-05-07 — runtime checks queued for next milestone
+last_updated: "2026-05-07T14:15:00.000Z"
 progress:
   total_phases: 5
   completed_phases: 5
@@ -24,11 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-07)
 ## Current Position
 
 Milestone v1.0 complete (Linux & WSL2 cross-platform support shipped 2026-04-19).
-Milestone v1.1 — all three phases verified static on branch
-`feat/v1.1-update-skill-overhaul` (commit `5413154`). PR #8 open as draft.
-Runtime verification (live macOS run, synthetic failure injection,
-schema-mismatch refusal, history accumulation) deferred to PR test plan
-execution. Awaiting milestone audit + complete-milestone after PR review.
+Milestone v1.1 complete (Update Skill Overhaul shipped 2026-05-07) — all 5
+phases verified, 5/5 audit gaps closed, audit re-run passed clean. Six
+runtime claims (R1, R8, N4, G1, G3, G4 runtime) carried forward to next
+milestone for live macOS box validation. Planning next milestone.
 
 ## Accumulated Context
 

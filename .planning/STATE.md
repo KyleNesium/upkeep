@@ -1,39 +1,55 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: Linux & WSL2 Cross-Platform Support
-status: complete
-stopped_at: Milestone v1.0 complete — shipped 2026-04-19
-last_updated: "2026-04-19T00:00:00.000Z"
+milestone: v1.1
+milestone_name: Update Skill Overhaul (Parallel Discovery + Compatibility)
+status: in_progress
+stopped_at: v1.1 milestone bootstrap — branch feat/v1.1-update-skill-overhaul
+last_updated: "2026-05-07T00:00:00.000Z"
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 17
-  completed_plans: 17
+  total_phases: 3
+  completed_phases: 0
+  total_plans: 3
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-19)
+See: .planning/PROJECT.md (updated 2026-05-07)
 
 **Core value:** Every upkeep command gracefully handles macOS, Linux, and WSL2 without errors
-**Current focus:** v1.0 shipped — planning next milestone
+**Current focus:** v1.1 — make `update` the best-in-class macOS update skill on GitHub
 
 ## Current Position
 
-Milestone v1.0 complete. All 6 phases, 17 plans shipped and verified.
+Milestone v1.0 complete (Linux & WSL2 cross-platform support shipped 2026-04-19).
+Milestone v1.1 in progress — overhauling the `update` skill to use parallel
+discovery agents, cross-manager compatibility analysis, and a single approval
+gate. Mac-only changes; Linux/WSL2 paths preserved for v1.1.x follow-up.
 
 ## Accumulated Context
 
 ### Key Decisions
 
-Logged in PROJECT.md Key Decisions table.
+- **Mac-only first.** Linux/WSL2 logic in current `update` skill is preserved
+  unchanged. v1.1.x can port the new architecture to those OSes once macOS
+  proves the approach.
+- **Parallel discovery via specialized agents.** Discovery is the slowest part
+  of the current flow (~30s of sequential bash). Four parallel scouts
+  (skills, native, language, shadow) drop wall time and let each scout own a
+  domain rather than blending all calls into one prompt.
+- **Compatibility synthesizer is a separate agent.** Takes JSON from the
+  scouts, emits a typed plan with risk flags. Keeps cross-cutting logic out of
+  the orchestrator and makes the plan auditable.
+- **Single approval gate.** Per-category Y/N gates create a babysitting UX. New
+  flow shows the full plan once and asks once.
+- **Parallel apply for independent ecosystems.** brew is serial (touches
+  everything); npm + pipx + gems can run in parallel; mas + macOS run last.
 
 ### Pending Todos
 
-None.
+See task list (TaskList tool) — milestone scaffold + 3 phase plans + impl + PR.
 
 ### Blockers/Concerns
 
@@ -41,6 +57,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-19
-Stopped at: Milestone v1.0 complete
+Last session: 2026-05-07
+Stopped at: bootstrapping v1.1 scaffold
 Resume file: None

@@ -362,6 +362,11 @@ else
 fi
 ```
 
+When constructing the synthesizer prompt below, substitute `${HISTORY_JSON}`
+in the History input fence with the value computed above. The other two
+input fences (discovery JSON, compatibility matrix) are filled in
+the same way — paste the values you've gathered.
+
 ### Synthesizer prompt
 
 > You are the upkeep compatibility synthesizer. Read the discovery JSON and

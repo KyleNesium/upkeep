@@ -106,11 +106,21 @@ Plus: a static compatibility matrix file at
         "command": "gem update --user-install",
         "preconditions": [],
         "rationale_for_flag": "system Ruby 2.6 detected; --user-install avoids sudo"
+      },
+      "macos": {
+        "kind": "store",
+        "command": "softwareupdate -ia",
+        "preconditions": [],
+        "restart_required": true
       }
     }
   }
 }
 ```
+
+`tool_specs.macos` is set only when `native.softwareupdate.restart_required`
+is `true` in the discovery JSON. Phase 9 reads `restart_required` to gate
+its separate restart-warning `AskUserQuestion`.
 
 ## Constraints
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v1.1 milestone (Update Skill Overhaul, macOS-only)
 
+### Fixed (gap closure from v1.1 milestone audit)
+
+- **R10 ETA self-tuning** (G1): synthesizer's history input was a literal placeholder; now reads `~/.claude/data/upkeep-history.json` into `$HISTORY_JSON` before invocation. Median-of-5 ETA heuristic is load-bearing on the second run onward.
+- **R5 macOS restart gate** (G3): added Hard Rule #8 — synthesizer now propagates `native.softwareupdate.restart_required` into `tool_specs.macos.restart_required`. Step 3m's restart-warning gate has a field to read.
+- **R7 PATH shadow vars** (G2): apply orchestration now populates `$UPGRADED_FORMULAS` / `$UPGRADED_TOOLS` via temp-file accumulators (race-safe under POSIX atomic-write guarantees). Step 4m's existing post-flight loops have data to iterate.
+- Schema gate added before approval gate: rejects synthesizer plans with the wrong `schema_version` and routes to fallback (G4).
+- Compatibility synthesizer Hard Rule #1 extended to consume `severity_on_major` / `severity_on_minor` from `compatibility.json` and sort `plan.warnings[]` by severity (G5).
+
 ### Added
 
 - macOS Parallel Flow in `update/SKILL.md`: four parallel scout agents

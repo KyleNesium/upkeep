@@ -348,6 +348,25 @@ discovery — don't block the run.
 Single sequential `Agent` call. Inputs: combined discovery JSON + the contents
 of `compatibility.json` (read with `Read`). Output: ordered plan JSON.
 
+### Pre-call: load history file for ETA self-tuning
+
+Before invoking the synthesizer, read the history file into a shell
+variable so it can be injected into the prompt. If absent, use `{}`.
+
+```bash
+HIST_FILE="$HOME/.claude/data/upkeep-history.json"
+if [ -f "$HIST_FILE" ]; then
+  HISTORY_JSON=$(cat "$HIST_FILE")
+else
+  HISTORY_JSON='{}'
+fi
+```
+
+When constructing the synthesizer prompt below, substitute `${HISTORY_JSON}`
+in the History input fence with the value computed above. The other two
+input fences (discovery JSON, compatibility matrix) are filled in
+the same way — paste the values you've gathered.
+
 ### Synthesizer prompt
 
 > You are the upkeep compatibility synthesizer. Read the discovery JSON and
@@ -355,8 +374,11 @@ of `compatibility.json` (read with `Read`). Output: ordered plan JSON.
 > schema. **Emit JSON only — no prose, no markdown fences.**
 >
 > **Hard rules:**
-> 1. Only reference downstream effects that appear in `compatibility.json`.
->    Do not invent edges.
+> 1. Only reference downstream effects that appear in `compatibility.json` —
+>    do not invent edges. For each materialised edge, read
+>    `severity_on_major` and `severity_on_minor` and copy the matching
+>    value into the warning entry as `severity`. Sort `plan.warnings[]`
+>    by severity: `high` first, then `medium`, then `low`.
 > 2. Classify version delta as `major` / `minor` / `patch` strictly by
 >    semver: same-major-different-minor → minor; same-minor-different-patch
 >    → patch; otherwise major.
@@ -373,6 +395,12 @@ of `compatibility.json` (read with `Read`). Output: ordered plan JSON.
 >    use the bake-in defaults below.
 > 7. Output `manual_steps` for: plugin-cache-managed skills (surface
 >    `/plugin update <name>`), PATH shadows, codex skills without `.git`.
+> 8. If `native.softwareupdate.restart_required` is `true`, include a
+>    `macos` entry under `tool_specs` with
+>    `{kind: "store", command: "softwareupdate -ia", restart_required: true, preconditions: []}`
+>    and ensure the `stores` `ordered_groups` entry lists `macos`. The
+>    `restart_required` field gates Step 3m's separate restart-warning
+>    `AskUserQuestion`.
 >
 > **Bake-in ETA defaults (seconds per item):**
 > - brew: 25, npm: 30, pipx: 20, gems: 15, uv: 5 total, bun: 5 total,
@@ -393,7 +421,7 @@ of `compatibility.json` (read with `Read`). Output: ordered plan JSON.
 > ```
 > History (may be empty):
 > ```json
-> {{ paste ~/.claude/data/upkeep-history.json here, or {} if missing }}
+> ${HISTORY_JSON}
 > ```
 
 ### Plan output schema
@@ -412,6 +440,25 @@ fallback plan inline:
 - Surface in the report: `compatibility analysis unavailable — running in fallback mode`
 
 ## Step 3m (macOS): Approve & Apply
+
+### Schema gate (check first)
+
+Reject plans with the wrong `schema_version` and route to the fallback
+plan instead. Skipped silently when `jq` is not installed (matches the
+graceful degradation in Step 5m's history writer).
+
+```bash
+if command -v jq >/dev/null 2>&1; then
+  if ! jq -e '.schema_version == "1"' <<<"$PLAN_JSON" >/dev/null 2>&1; then
+    echo "compatibility analysis unavailable — running in fallback mode"
+    PLAN_JSON="$FALLBACK_PLAN_JSON"
+  fi
+fi
+```
+
+`$FALLBACK_PLAN_JSON` is the rule-based plan from `### Synthesizer fallback`
+above. The string `compatibility analysis unavailable — running in fallback mode`
+is reused verbatim — do not introduce a new variant.
 
 ### Audit-mode short-circuit (check first)
 
@@ -455,6 +502,15 @@ option per category in the plan.
 
 ### Apply orchestration
 
+Set up race-free accumulators for upgraded names. These feed Step 4m's
+PATH-shadow and resolution-recheck loops:
+
+```bash
+UPGRADED_FORMULAS_FILE=$(mktemp)
+UPGRADED_TOOLS_FILE=$(mktemp)
+trap "rm -f $UPGRADED_FORMULAS_FILE $UPGRADED_TOOLS_FILE" EXIT
+```
+
 Iterate `plan.ordered_groups`:
 
 - `parallelism: serial` → run each tool's command in order
@@ -465,10 +521,35 @@ Iterate `plan.ordered_groups`:
 Each tool command:
 1. Run `tool_specs[tool].preconditions` first (e.g., `brew update >/dev/null`)
 2. Capture wall time with `time` or `$SECONDS` deltas
-3. Wrap with isolation: `if ! eval "$CMD" >>"$LOG" 2>&1; then RESULT=fail:$?; else RESULT=ok; fi`
+3. Wrap with isolation:
+   ```bash
+   if eval "$CMD" >>"$LOG" 2>&1; then
+     RESULT="ok"
+     case "$TOOL" in
+       brew)
+         # Append every formula brew upgraded this run
+         grep -E "^==> Upgrading" "$LOG" | awk '{print $3}' | cut -d/ -f1 \
+           >> "$UPGRADED_FORMULAS_FILE"
+         ;;
+       *)
+         echo "$TOOL" >> "$UPGRADED_TOOLS_FILE"
+         ;;
+     esac
+   else
+     RESULT="fail:$?"
+   fi
+   ```
 4. Pipe stdout through deprecation collector:
    `tee -a "$DEPRECATION_LOG" >/dev/null` for any line matching
    `(deprecated|deprecation|warning|WARN)`
+
+After all groups complete, populate the env vars Step 4m consumes:
+
+```bash
+UPGRADED_FORMULAS=$(sort -u "$UPGRADED_FORMULAS_FILE" | tr '\n' ' ')
+UPGRADED_TOOLS=$(sort -u "$UPGRADED_TOOLS_FILE" | tr '\n' ' ')
+export UPGRADED_FORMULAS UPGRADED_TOOLS
+```
 
 A failure in one tool **never blocks others** in the same or later groups.
 

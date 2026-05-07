@@ -378,6 +378,10 @@ of `compatibility.json` (read with `Read`). Output: ordered plan JSON.
 > - brew: 25, npm: 30, pipx: 20, gems: 15, uv: 5 total, bun: 5 total,
 >   skills: 3, mas: 30, macOS: 300.
 >
+> Convert seconds → minutes when emitting `summary.eta_minutes_p50` /
+> `eta_minutes_p90`. Use `ceil(total_seconds / 60)` so an 89-second
+> estimate rounds to 2 minutes, not 1.
+>
 > **Input:**
 > Discovery JSON:
 > ```json
@@ -408,6 +412,12 @@ fallback plan inline:
 - Surface in the report: `compatibility analysis unavailable — running in fallback mode`
 
 ## Step 3m (macOS): Approve & Apply
+
+### Audit-mode short-circuit (check first)
+
+If sub-mode is `audit`, render the plan from Step 2m as the report and
+**stop here** — skip the approval gate, apply, post-flight, and history
+write entirely.
 
 ### Single approval gate
 
@@ -442,9 +452,6 @@ Single `AskUserQuestion`:
 
 If "Drop categories", emit a second multi-select `AskUserQuestion` with one
 option per category in the plan.
-
-If sub-mode is `audit`, **STOP HERE** — emit the plan as the report and skip
-apply + post-flight + history write.
 
 ### Apply orchestration
 

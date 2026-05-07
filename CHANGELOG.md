@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v1.2 Security Hardening
+
+### Fixed (security review findings)
+
+- **CRIT-1+2 — eval injection chain.** Removed `eval "$CMD"` from the macOS
+  apply orchestrator. Apply commands are now hardcoded in a case-statement
+  dispatcher keyed by tool id (`brew`/`npm`/`pipx`/`gems`/`uv`/`bun`/`mas`/
+  `macos`/`skills`); the synthesizer LLM cannot author shell strings. The
+  only synthesizer-chosen flag is `gems.user_install`, read as a boolean.
+  Discovery JSON is sanitized before being pasted into the synthesizer
+  prompt — `newest_commit_subjects`, `breaking_lines`, `description`,
+  `release_notes`, `commit_messages`, and `changelog` fields are stripped
+  to close the prompt-injection vector via upstream-controlled text. Plan
+  tool ids are allowlisted before iteration.
+- **HIGH-3 — supply-chain trust.** Replaced the substring-match remote URL
+  check (`must contain "KyleNesium/upkeep"`) with an exact case-statement
+  match against the four canonical forms; URLs like
+  `https://evil.example/?KyleNesium/upkeep` no longer pass. Added a
+  first-encounter trust gate for third-party Claude skill repos backed by
+  `~/.claude/data/upkeep-skill-trust.json`; unknown remotes surface an
+  `AskUserQuestion` before any `git fetch`.
+- **HIGH-4 — approval-gate enforcement.** Added a "Hard Rule: Discover and
+  Apply must be separate turns" near the top of `upkeep`/`cleandeep`/
+  `cleanquick`/`update`. Phases that mutate the filesystem must end
+  the turn at the `AskUserQuestion`; the next turn runs only the approved
+  items. Prose-only gates (size + `rm` in the same turn) are explicitly
+  banned.
+- **MED-5 — path-substitution quoting.** Added a "Hard Rule: Path
+  substitution must be quoted with `--`" to the rules section of all three
+  cleanup skills. Templates carry absolute paths through an index→object
+  map and emit `rm -rf -- "$path"` form. LaunchAgent removal template
+  rewritten to use `launchctl bootout ... -- "$plist_path"` and
+  `rm -f -- "$plist_path"` so plists with spaces or leading dashes target
+  the right file.
+- **MED-6 — temp-file safety.** Trap in apply orchestration switched to
+  single-quoted body so vars expand at fire time, with `rm -f --` to
+  resist path edge cases. History writer now uses `mktemp` (no
+  predictable `$HIST_FILE.tmp` path susceptible to symlink attack) and
+  serializes concurrent `/upkeep:update` runs behind `flock` on Linux/
+  WSL2/brew-flock; falls back to atomic mktemp+mv on vanilla macOS.
+
+### Fixed (documentation)
+
+- `CONTRIBUTING.md` referenced 12 paths under the obsolete `plugin/skills/`
+  prefix; corrected to current `upkeep/skills/` layout.
+
 ## [1.1.0] - 2026-05-07 — Update Skill Overhaul (macOS-only)
 
 ### Fixed (gap closure from v1.1 milestone audit)

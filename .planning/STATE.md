@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Update Skill Overhaul (Parallel Discovery + Compatibility)
-status: in_progress
-stopped_at: v1.1 milestone bootstrap — branch feat/v1.1-update-skill-overhaul
-last_updated: "2026-05-07T00:00:00.000Z"
+status: phases_complete_pending_audit
+stopped_at: All v1.1 phases verified static — awaiting milestone audit and PR #8 runtime testing
+last_updated: "2026-05-07T11:30:00.000Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 0
+  completed_plans: 3
 ---
 
 # Project State
@@ -24,9 +24,11 @@ See: .planning/PROJECT.md (updated 2026-05-07)
 ## Current Position
 
 Milestone v1.0 complete (Linux & WSL2 cross-platform support shipped 2026-04-19).
-Milestone v1.1 in progress — overhauling the `update` skill to use parallel
-discovery agents, cross-manager compatibility analysis, and a single approval
-gate. Mac-only changes; Linux/WSL2 paths preserved for v1.1.x follow-up.
+Milestone v1.1 — all three phases verified static on branch
+`feat/v1.1-update-skill-overhaul` (commit `5413154`). PR #8 open as draft.
+Runtime verification (live macOS run, synthetic failure injection,
+schema-mismatch refusal, history accumulation) deferred to PR test plan
+execution. Awaiting milestone audit + complete-milestone after PR review.
 
 ## Accumulated Context
 

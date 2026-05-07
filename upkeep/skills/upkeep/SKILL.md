@@ -972,14 +972,39 @@ note: "Install git: `xcode-select --install`"
 **upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
 - Fails → check for `plugin.json`: if present, "managed by plugin manager";
   otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
-- Succeeds → verify remote: `git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin`
-  must contain `KyleNesium/upkeep` or skip with "unexpected remote URL".
+- Succeeds → verify remote with an exact host+path match (substring match
+  was previously vulnerable to URLs like `https://evil.example/?KyleNesium/upkeep`):
+  ```bash
+  ORIGIN_URL=$(git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin 2>/dev/null)
+  case "$ORIGIN_URL" in
+    https://github.com/KyleNesium/upkeep|\
+    https://github.com/KyleNesium/upkeep.git|\
+    git@github.com:KyleNesium/upkeep|\
+    git@github.com:KyleNesium/upkeep.git)
+      ;;
+    *)
+      echo "Skipping upkeep: unexpected remote URL: $ORIGIN_URL"
+      ;;
+  esac
+  ```
+  Only the four canonical forms above are accepted. Anything else skips.
 
 **Other Claude skills (discovery-based):**
 ```bash
 for d in ~/.claude/skills/*/; do [ -d "$d/.git" ] && echo "$d"; done
 ```
-For each: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
+
+**First-encounter approval for third-party skill repos.** Before fetching,
+read `~/.claude/data/upkeep-skill-trust.json` for prior approvals. For any
+remote URL not on the trust list, surface it via `AskUserQuestion`:
+
+> Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
+> A) Trust this remote (remember for future runs)
+> B) Skip this skill
+
+Do not fetch from a remote that has not been explicitly trusted.
+
+For each trusted skill: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
 `git -C "$d" log HEAD..origin/$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null || echo main) --oneline 2>/dev/null`
 
 **Report only (no git):**

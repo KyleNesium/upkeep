@@ -690,14 +690,44 @@ note: "Install git: `xcode-select --install`"
 **upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
 - Fails → check for `plugin.json`: if present, "managed by plugin manager";
   otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
-- Succeeds → verify remote: `git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin`
-  must contain `KyleNesium/upkeep` or skip with "unexpected remote URL".
+- Succeeds → verify remote with an exact host+path match (substring match
+  was previously vulnerable to URLs like `https://evil.example/?KyleNesium/upkeep`):
+  ```bash
+  ORIGIN_URL=$(git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin 2>/dev/null)
+  case "$ORIGIN_URL" in
+    https://github.com/KyleNesium/upkeep|\
+    https://github.com/KyleNesium/upkeep.git|\
+    git@github.com:KyleNesium/upkeep|\
+    git@github.com:KyleNesium/upkeep.git)
+      ;;
+    *)
+      echo "Skipping upkeep: unexpected remote URL: $ORIGIN_URL"
+      ;;
+  esac
+  ```
+  Only the four canonical forms above are accepted. Anything else skips.
 
 **Other Claude skills (discovery-based):**
 ```bash
 for d in ~/.claude/skills/*/; do [ -d "$d/.git" ] && echo "$d"; done
 ```
-For each: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
+
+**First-encounter approval for third-party skill repos.** Before fetching,
+build a per-skill record showing the remote URL and (if available) the most
+recent tagged version. Read `~/.claude/data/upkeep-skill-trust.json` for
+prior approvals; for any new remote URL, surface it via `AskUserQuestion`:
+
+> Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
+> A) Trust this remote (remember for future runs)
+> B) Skip this skill
+> C) Show recent commits from origin first
+
+On A, append to `upkeep-skill-trust.json` keyed by the absolute repo path.
+Do not fetch from a remote that has not been explicitly trusted. This makes
+the supply-chain trust decision visible and reversible (delete the entry to
+re-prompt) instead of implicit.
+
+For each trusted skill: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
 `git -C "$d" log HEAD..origin/$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null || echo main) --oneline 2>/dev/null`
 
 **Report only (no git):**

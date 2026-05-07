@@ -450,11 +450,13 @@ Present a table: plist label, load state, target state. Then:
   SERVICE" — tell the user to run `brew services cleanup`.
 - Agents matching user's reverse-DNS domain: flag as "user-owned".
 
-To remove:
+To remove (carry the absolute plist path through the index→object map per
+the "Path substitution must be quoted with `--`" rule above; substitute
+`$plist_path` and `$label` from the entry the user approved):
 ```bash
-launchctl bootout gui/$(id -u)/<label> 2>/dev/null || \
-  launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<plist>
-rm -f ~/Library/LaunchAgents/<plist>
+launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || \
+  launchctl bootout "gui/$(id -u)" -- "$plist_path"
+rm -f -- "$plist_path"
 ```
 
 ## Phase 6: Xcode & Developer Tools
@@ -885,3 +887,28 @@ If any steps required sudo, list them under a **## Manual Steps** section.
 - Never execute sudo — surface the exact command in a fenced bash block with
   a one-line rationale comment. Display at the phase AND in final ## Manual Steps.
 - Track cumulative space reclaimed, report total at the end
+
+### Hard Rule: Path substitution must be quoted with `--`
+
+Whenever a phase template contains a placeholder like `<plist>`, `<subdir>`,
+`<tool>`, `<rev>`, or `<pkg>`, the substituted value comes from a discovered
+filesystem entry (LaunchAgents, cache subdirs, pipx tools, snap revisions).
+Filenames can contain spaces, leading dashes, glob characters, or control
+characters. Naive interpolation turns `~/Library/LaunchAgents/a b.plist`
+into two shell words and targets the wrong file.
+
+To prevent this, every concrete invocation **must**:
+
+1. Carry the exact path through an index→object map built from the discovery
+   listing. The user picks indices; never let the user free-type names.
+2. Pass the path as a single quoted argument with `--` to stop the option
+   parser:
+   ```bash
+   rm -rf -- "$path"
+   rm -f -- "$plist_path"
+   pipx uninstall -- "$tool_name"
+   ```
+3. Never reconstruct the path by concatenating a directory and a name. Use
+   the absolute path captured at discovery time.
+
+Failure to follow this rule has been classified as a security finding.

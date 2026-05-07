@@ -533,11 +533,14 @@ confirmation is required, no batch removal.
 background services (VPNs, updaters, dev tools) may be critical. When uncertain,
 present the plist label and ask -- do not assume safe to remove.
 
-To remove (use label-based target — works on macOS 14+ and older):
+To remove (use label-based target — works on macOS 14+ and older). Carry
+the absolute plist path through the index→object map per the
+"Path substitution must be quoted with `--`" rule; substitute `$plist_path`
+and `$label` from the entry the user approved:
 ```bash
-launchctl bootout gui/$(id -u)/<label> 2>/dev/null || \
-  launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<plist>
-rm -f ~/Library/LaunchAgents/<plist>
+launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || \
+  launchctl bootout "gui/$(id -u)" -- "$plist_path"
+rm -f -- "$plist_path"
 ```
 The label-based form is the modern target specifier. Fall back to the
 plist-path form for agents that didn't load cleanly.
@@ -1330,3 +1333,25 @@ macOS keeps recently deleted data as "purgeable" — Finder may not show freed s
 - Track cumulative space reclaimed and report the total at the end
 - In Quick mode, skip non-Quick phases — get in and out fast
 - In Audit mode, never offer removal — report findings and sizes only
+
+### Hard Rule: Path substitution must be quoted with `--`
+
+Whenever a phase template contains a placeholder like `<plist>`, `<subdir>`,
+`<tool>`, `<rev>`, or `<pkg>`, the substituted value comes from a discovered
+filesystem entry. Filenames can contain spaces, leading dashes, glob
+characters, or control characters. Naive interpolation turns
+`~/Library/LaunchAgents/a b.plist` into two shell words and targets the
+wrong file.
+
+Every concrete invocation must:
+
+1. Carry the exact path through an index→object map built from the discovery
+   listing. Users pick indices; never let users free-type names.
+2. Pass the path as a single quoted argument with `--`:
+   ```bash
+   rm -rf -- "$path"
+   rm -f -- "$plist_path"
+   pipx uninstall -- "$tool_name"
+   ```
+3. Never reconstruct paths by concatenating a directory and a name — use the
+   absolute path captured at discovery time.

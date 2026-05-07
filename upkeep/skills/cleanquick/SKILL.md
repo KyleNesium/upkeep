@@ -377,3 +377,16 @@ space immediately because it reclaims on demand.
 - Never execute sudo — surface the exact command in a fenced bash block
 - Build artifacts (Phase 8): report only — never offer removal in Quick mode
 - Track cumulative space reclaimed, report total at the end
+
+### Hard Rule: Path substitution must be quoted with `--`
+
+Discovered filenames can contain spaces, leading dashes, or glob characters.
+Every removal must carry the exact path through an index→object map and
+emit the quoted form:
+
+```bash
+rm -rf -- "$path"
+```
+
+Never let users free-type names; never reconstruct a path by joining a dir
+and a name. Use the absolute path captured at discovery time.

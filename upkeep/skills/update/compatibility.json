@@ -1,0 +1,76 @@
+{
+  "schema_version": "1",
+  "platform": "macos",
+  "edges": [
+    {
+      "from": "brew:node",
+      "to": "npm-globals",
+      "reason": "Native modules built against node ABI may need rebuild after a node upgrade.",
+      "severity_on_major": "high",
+      "severity_on_minor": "low"
+    },
+    {
+      "from": "brew:node",
+      "to": "bun-globals",
+      "reason": "Bun reads from the same npm-globals tree; recompile of native modules may be required.",
+      "severity_on_major": "medium",
+      "severity_on_minor": "low"
+    },
+    {
+      "from": "brew:python@*",
+      "to": "pipx",
+      "reason": "pipx venvs are pinned to the brew python interpreter; upgrade may invalidate venvs.",
+      "severity_on_major": "high",
+      "severity_on_minor": "low"
+    },
+    {
+      "from": "brew:python@*",
+      "to": "uv",
+      "reason": "uv-managed installs may target the brew python; brew upgrade can break uv-installed tools.",
+      "severity_on_major": "medium",
+      "severity_on_minor": "low"
+    },
+    {
+      "from": "brew:openssl@*",
+      "to": "gems-native",
+      "formulas": ["nokogiri", "openssl", "sassc", "eventmachine"],
+      "reason": "Ruby gems with native extensions linked against openssl require rebuild on openssl ABI change.",
+      "severity_on_major": "high",
+      "severity_on_minor": "medium"
+    },
+    {
+      "from": "brew:ruby",
+      "to": "gems-user",
+      "reason": "User gems live under the brew ruby gem dir; ruby upgrade invalidates the gem environment.",
+      "severity_on_major": "high",
+      "severity_on_minor": "medium"
+    },
+    {
+      "from": "brew:icu4c",
+      "to": "gems-native",
+      "formulas": ["charlock_holmes"],
+      "reason": "Linked against icu4c; ABI change can break the gem.",
+      "severity_on_major": "high",
+      "severity_on_minor": "medium"
+    },
+    {
+      "from": "brew:postgresql@*",
+      "to": "gems-native",
+      "formulas": ["pg"],
+      "reason": "pg gem links against postgres client libs.",
+      "severity_on_major": "high",
+      "severity_on_minor": "low"
+    },
+    {
+      "from": "brew:mysql@*",
+      "to": "gems-native",
+      "formulas": ["mysql2"],
+      "reason": "mysql2 gem links against mysql client libs.",
+      "severity_on_major": "high",
+      "severity_on_minor": "low"
+    }
+  ],
+  "system_ruby_paths": ["/usr/bin/ruby"],
+  "system_ruby_versions": ["2.6"],
+  "disk_thresholds_gb": {"refuse": 5, "warn": 10}
+}

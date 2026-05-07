@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v1.1 milestone (Update Skill Overhaul, macOS-only)
+
+### Added
+
+- macOS Parallel Flow in `update/SKILL.md`: four parallel scout agents
+  (`skills-scout`, `native-scout`, `language-scout`, `shadow-scout`)
+  replace the v1.0 sequential discovery on macOS.
+- Compatibility synthesizer agent reads scout JSON + a new
+  `update/compatibility.json` matrix and emits an ordered apply plan with
+  cross-manager risk flags (brew:node ⇒ npm-globals rebuild, brew:openssl
+  ⇒ ruby native gems, brew:python ⇒ pipx + uv, etc.).
+- Single approval gate replaces per-category Y/N prompts on macOS. Optional
+  multi-select drop-categories follow-up keeps user opt-out flexibility.
+- Parallel apply for independent ecosystems (npm + pipx + gems + uv + bun
+  run concurrently with a 4-job cap; brew runs alone; mas/macOS last).
+- Disk-space pre-flight (refuse < 5 GB, warn < 10 GB).
+- System Ruby auto-detection (Ruby 2.x at `/usr/bin/ruby`) → `gem update`
+  uses `--user-install` automatically, avoiding the silent sudo-required
+  failure mode.
+- PATH shadow detection: post-flight `which -a` for every upgraded brew
+  formula's binaries; surfaces shadowed entries (e.g. brew `gemini` masked
+  by another path entry).
+- Codex skill auto-update: `~/.codex/skills/*/.git` repos now treated like
+  Claude skills — git-pull rather than "manual update required."
+- Plugin-managed self-update hint: when upkeep is plugin-managed, the
+  report surfaces `/plugin update upkeep` rather than dead-ending.
+- ETA in approval gate, with self-tuning history file at
+  `~/.claude/data/upkeep-history.json`.
+- Post-flight health check: brew doctor (silent unless warnings),
+  resolution re-check via `command -v` for each upgraded tool, deprecation
+  aggregator across npm/gem/pipx output.
+- Final report includes `⚠ Risks observed` and `Manual steps` sections
+  before the per-tool ✓/↷/✗ table.
+- `compatibility.json` static matrix with seven seed dependency edges.
+- Planning artefacts: v1.1 milestone scaffold under `.planning/milestones/`
+  and `.planning/phases/07-09-*` with full PLAN/CONTEXT documents.
+
+### Unchanged
+
+- Linux & WSL2 paths: the v1.0 sequential flow (Steps 1–6) remains the
+  default for `$OS_TYPE != "macos"`. New parallel flow is gated to macOS;
+  Linux/WSL2 port scheduled for v1.1.x.
+- Audit / skills / packages / all sub-modes — backwards-compatible with
+  every v1.0 invocation form.
+- Cleanup skills (`cleanquick`, `cleandeep`, `audit`, umbrella `upkeep`):
+  no functional changes in v1.1.
+
 ## [1.0.6] - 2026-04-16
 
 ### Fixed

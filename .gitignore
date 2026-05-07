@@ -1,6 +1,5 @@
 .DS_Store
 *.log
-.planning/
 
 # Update mode timestamp file (tracks last passive update check)
 .last-update-check

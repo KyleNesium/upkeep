@@ -199,16 +199,18 @@ All 15 phases, but **never offers to remove anything**. Pure report — shows wh
 
 ### Update
 
-Separate from cleanup entirely. Discovers what's outdated across AI skills and package managers, then upgrades with per-category confirmation gates. Four sub-modes:
+Separate from cleanup entirely. On macOS, four parallel scout agents discover outdated tools, a compatibility synthesizer plans the upgrade order with cross-manager risk flags, and a single approval gate replaces per-category Y/N fatigue. On Linux & WSL2, the v1.0 sequential flow remains unchanged. Four sub-modes:
 
 | Sub-mode | What it does |
 |----------|--------------|
 | `update audit` | Scan everything — show what's outdated, no changes |
-| `update skills` | Git-pull all AI skills in `~/.claude/skills/` |
+| `update skills` | Git-pull AI skills in `~/.claude/skills/` and `~/.codex/skills/` |
 | `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, bun, deno, mise, uv, mas, macOS |
-| `update all` | Skills first, then packages — full sweep with per-category gates |
+| `update all` | Skills first, then packages — full sweep, single approval gate on macOS |
 
-Nothing applies without your approval. `softwareupdate` (macOS system updates) gets an extra restart warning before running.
+The macOS flow flags cross-manager risks before you approve (e.g. `brew:node` upgrade ⇒ npm globals may need rebuild; `brew:openssl` upgrade ⇒ ruby native gems like `nokogiri` need recompile; system Ruby 2.x ⇒ `gem update` auto-uses `--user-install`). Post-flight runs `brew doctor`, re-resolves PATH for upgraded binaries, and surfaces shadowed entries.
+
+Nothing applies without your approval. `softwareupdate` (macOS system updates) always gets an extra restart warning, even under "Apply all".
 
 ---
 
@@ -226,6 +228,8 @@ Four sub-modes:
 | `update all` | Skills first, then packages — full sweep |
 
 Everything is confirmation-gated. Nothing applies without your approval. Destructive or disruptive operations (macOS system updates, brew toolchain changes) get extra warnings.
+
+On macOS, v1.1 introduces a parallel discovery + compatibility-aware single-gate flow (see Update section above). Linux & WSL2 continue to use the v1.0 sequential per-category gates pending v1.1.x port.
 
 upkeep also checks for updates once per day during any cleanup run and nudges you when one is available.
 
@@ -353,7 +357,8 @@ Prompt-based skill — no executable source code. Tested via live invocation aga
 | `/upkeep:cleandeep` | Full 15-phase execution, phase ordering, safety rules |
 | `/upkeep:cleanquick` | Phases 1-3, 8, 11, 13 only; build artifacts report-only enforcement |
 | `/upkeep:audit` | All 15 phases, zero mutations, accurate size reporting |
-| `/upkeep:update` | Sub-mode detection, skill discovery, package manager audit, per-category gates |
+| `/upkeep:update` (Linux / WSL2) | Sub-mode detection, sequential skill + package discovery, per-category gates |
+| `/upkeep:update` (macOS, v1.1) | Parallel scouts, compatibility synthesizer, single approval gate, parallel apply, post-flight (brew doctor, PATH shadow, deprecation aggregator), history-tuned ETA |
 
 ---
 

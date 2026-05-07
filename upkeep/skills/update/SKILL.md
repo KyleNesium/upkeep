@@ -3,11 +3,13 @@ name: upkeep:update
 version: 1.1.0-dev
 author: KyleNesium
 description: |
-  Update AI skills and package managers in one sweep. Discovers what's outdated
-  across git-based skills and package managers, then upgrades with per-category
-  confirmation gates. Four sub-modes: audit (check only), skills (git-pull all
-  AI skills), packages (upgrade brew, npm, pipx, gems, rustup, bun, deno, mise,
-  uv, mas, macOS), all (skills then packages).
+  Update AI skills and package managers in one sweep. On macOS, four parallel
+  scout agents discover outdated tools, a compatibility synthesizer plans the
+  upgrade order with cross-manager risk flags (brew:node ⇒ npm-globals,
+  brew:openssl ⇒ ruby native gems, system Ruby ⇒ --user-install), and a
+  single approval gate replaces per-category Y/N fatigue. Linux & WSL2 use
+  the v1.0 sequential flow. Sub-modes: audit (no changes), skills (git-pull
+  AI skills), packages (package managers only), all.
   Use when: "update upkeep", "update my AI skills", "update everything",
   "check for updates", "upgrade my packages", "update all my tools",
   "is upkeep up to date", "self-update", "upgrade brew", "update skills".
@@ -22,12 +24,23 @@ allowed-tools:
   - Bash(wc *)
   - Bash(grep *)
   - Bash(cut *)
+  - Bash(awk *)
+  - Bash(sort *)
+  - Bash(head *)
+  - Bash(tail *)
+  - Bash(basename *)
+  - Bash(xargs *)
+  - Bash(find *)
+  - Bash(jq *)
+  - Bash(df *)
+  - Bash(mkdir *)
+  - Bash(mv *)
   # OS detection (cross-platform)
   - Bash(uname *)
   - Bash(lsb_release *)
   - Bash(lsblk *)
   - Bash(cat *)
-  # Package manager audit commands
+  # Package manager audit + apply commands
   - Bash(brew *)
   - Bash(npm *)
   - Bash(pipx *)
@@ -51,6 +64,7 @@ allowed-tools:
   - Bash(git -C * symbolic-ref *)
   - Read
   - Glob
+  - Agent
   # Linux system tools
   - Bash(systemctl *)
   - Bash(journalctl *)
@@ -137,7 +151,427 @@ fi
 
 If `$OS_TYPE` is `unknown`, report "Update skill requires macOS, Linux, or WSL2. Detected: $(uname -s)" and stop.
 
+## Routing
+
+```
+if $OS_TYPE = "macos":
+   → run the macOS Parallel Flow below (Steps 1m–5m)
+   → skip the v1.0 Sequential Flow (Steps 1–6)
+else:
+   → skip the macOS Parallel Flow
+   → run the v1.0 Sequential Flow (Steps 1–6, unchanged for Linux/WSL2)
+```
+
+The macOS Parallel Flow uses four scout agents, a synthesizer agent, a single
+approval gate, parallel apply for independent ecosystems, and a post-flight
+health check. Linux/WSL2 paths are intentionally untouched in v1.1; they will
+be ported in v1.1.x.
+
+---
+
+## macOS Parallel Flow — Disk-Space Pre-Flight
+
+Run before any agent fans out:
+
+```bash
+FREE_GB=$(df -k / 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}')
+if [ -z "$FREE_GB" ] || [ "$FREE_GB" -lt 5 ]; then
+  echo "✗ Refusing to start: only ${FREE_GB:-?} GB free on /. Free up at least 5 GB and re-run."
+  exit 1
+elif [ "$FREE_GB" -lt 10 ]; then
+  echo "⚠ Warning: only ${FREE_GB} GB free on /. Heavy brew formulas (qt, ffmpeg, mlx) can spike disk usage."
+fi
+```
+
+If refused, stop here. If warned, continue to discovery.
+
+## Step 1m (macOS): Parallel Discovery — Four Scout Agents
+
+Run these four `Agent` calls in a **single tool-use block** so they execute in
+parallel. Each scout owns a domain, runs its own bash discovery, and returns a
+fragment of the overall JSON. Keep prompts self-contained — scouts don't see
+each other's context.
+
+### Discovery JSON schema (`schema_version: "1"`)
+
+The four fragments combine into:
+
+```json
+{
+  "schema_version": "1",
+  "os": {"type": "macos", "arch": "arm64|x86_64"},
+  "skills":   { /* skills-scout */ },
+  "native":   { /* native-scout */ },
+  "language": { /* language-scout */ },
+  "shadow":   { /* shadow-scout */ },
+  "disk":     {"free_gb": 124, "warn_threshold_gb": 10, "refuse_threshold_gb": 5}
+}
+```
+
+Detailed per-domain shape: see `.planning/phases/07-parallel-discovery/07-CONTEXT.md`.
+
+### Scout 1 — `skills-scout`
+
+> You are the upkeep skills scout. Discover all updatable AI skills on this
+> macOS machine and return a JSON `skills` block per the schema below.
+>
+> **Cover:**
+> 1. Git-cloned skills under `~/.claude/skills/*/.git`. For each: `git fetch
+>    --tags -q origin`, count commits behind `origin/<branch>`, read VERSION
+>    or plugin.json for current version, list newest 5 commit subjects, scan
+>    CHANGELOG.md for `BREAKING\|Breaking` lines between current and target.
+> 2. Git-cloned skills under `~/.codex/skills/*/.git` — treat the same way.
+> 3. Plugin-cache-managed skills (e.g. upkeep itself when it lives under
+>    `~/.claude/plugins/cache/`). Add to `managed[]` with the
+>    `/plugin update <name>` command.
+> 4. Counts only: `~/.claude/plugins/cache/` total dirs, `~/.codex/skills/*`
+>    total dirs.
+>
+> **Output:** valid JSON only, no prose, no markdown fences. Use this shape:
+>
+> ```json
+> {
+>   "git_repos": [{"name": "...", "path": "...", "branch": "main",
+>                  "current_version": "...", "commits_behind": 0,
+>                  "newest_commit_subjects": [], "breaking_lines": [],
+>                  "dirty_files": [], "detached": false, "remote_ok": true,
+>                  "manager": "claude" }],
+>   "managed": [{"name": "upkeep", "manager": "claude-code-plugin",
+>                "version": "1.0.6", "update_command": "/plugin update upkeep"}],
+>   "info": {"claude_plugins": 0, "codex_skills_total": 0, "codex_skills_git": 0},
+>   "errors": []
+> }
+> ```
+
+### Scout 2 — `native-scout`
+
+> You are the upkeep native-package scout. Discover outdated brew packages,
+> Mac App Store updates, and macOS software updates. Return a JSON `native`
+> block per the schema below.
+>
+> **Cover:**
+> 1. Brew: prefer `brew outdated --json=v2 2>/dev/null`; fall back to plain
+>    `brew outdated` when JSON is unavailable. For each formula, classify
+>    `bump` as `major|minor|patch` from semver delta of `installed_versions`
+>    vs `current_version`.
+> 2. mas: `mas outdated 2>/dev/null` if `command -v mas` succeeds.
+> 3. softwareupdate: `softwareupdate -l 2>&1`. Set `restart_required: true`
+>    if the listing contains `[restart]`.
+>
+> **Output:** valid JSON only.
+>
+> ```json
+> {
+>   "brew": {"installed": true, "outdated": [{"name": "node",
+>            "from": "20.18.1", "to": "22.10.0", "bump": "major"}]},
+>   "mas": {"installed": false, "outdated": []},
+>   "softwareupdate": {"installed": true, "updates": [], "restart_required": false},
+>   "errors": []
+> }
+> ```
+
+### Scout 3 — `language-scout`
+
+> You are the upkeep language-ecosystem scout. Discover outdated tools across
+> npm/pipx/gems/uv/bun/deno/rustup/cargo/mise. Return a JSON `language` block
+> per the schema below.
+>
+> **Cover (skip silently when not installed):**
+> - npm: `npm outdated -g --json 2>/dev/null` parsed into name/from/to/bump
+> - pipx: `pipx list --short 2>/dev/null`
+> - gems: `gem outdated 2>/dev/null` parsed into name/from/to/bump.
+>   Detect system Ruby: set `system_ruby: true` and capture `ruby_version`
+>   when `command -v ruby` resolves to `/usr/bin/ruby` AND `ruby --version`
+>   starts with `ruby 2.`
+> - uv: `uv self version 2>/dev/null`
+> - bun: `bun --version 2>/dev/null`
+> - deno: `deno --version 2>/dev/null`
+> - rustup: `rustup check 2>/dev/null`
+> - cargo: `cargo install-update --list 2>/dev/null` (only if cargo-update
+>   plugin installed)
+> - mise: `mise outdated 2>/dev/null`
+>
+> **Output:** valid JSON only.
+>
+> ```json
+> {
+>   "npm":    {"installed": true, "outdated": []},
+>   "pipx":   {"installed": true, "tools": [], "outdated_count": 0},
+>   "gems":   {"installed": true, "system_ruby": true, "ruby_version": "2.6", "outdated": []},
+>   "uv":     {"installed": true, "current": "0.9.7"},
+>   "bun":    {"installed": true, "current": "1.3.9"},
+>   "deno":   {"installed": false},
+>   "rustup": {"installed": false},
+>   "cargo":  {"installed": false},
+>   "mise":   {"installed": false},
+>   "errors": []
+> }
+> ```
+
+### Scout 4 — `shadow-scout`
+
+> You are the upkeep PATH-shadow scout. Detect shadowed binaries and broken
+> symlinks under brew prefixes. Return a JSON `shadow` block.
+>
+> **Method:**
+> 1. `brew --prefix` to find the brew root (typically `/opt/homebrew` on
+>    Apple Silicon, `/usr/local` on Intel).
+> 2. List binaries from `${PREFIX}/bin`. For each binary, run
+>    `which -a <binary>`. If multiple paths and the brew path is not first,
+>    record a duplicate.
+> 3. `find -L ${PREFIX}/bin -maxdepth 1 -type l ! -exec test -e {} \; -print`
+>    for broken symlinks (cap output at 10).
+>
+> **Output:** valid JSON only.
+>
+> ```json
+> {
+>   "duplicates": [{"binary": "gemini",
+>                   "primary": "/Users/kyle/.superset/bin/gemini",
+>                   "shadowed": ["/opt/homebrew/bin/gemini"]}],
+>   "broken_symlinks": [],
+>   "errors": []
+> }
+> ```
+
+### Combine fragments
+
+After all four scouts complete, assemble the combined JSON document inline
+(no disk write). Pass it as input to the synthesizer agent in Step 2m.
+
+If any scout returns invalid JSON or an `errors[]` entry, surface the error
+in the final report under `Manual steps` and continue with a partial
+discovery — don't block the run.
+
+## Step 2m (macOS): Synthesize Plan — Compatibility Synthesizer Agent
+
+Single sequential `Agent` call. Inputs: combined discovery JSON + the contents
+of `compatibility.json` (read with `Read`). Output: ordered plan JSON.
+
+### Synthesizer prompt
+
+> You are the upkeep compatibility synthesizer. Read the discovery JSON and
+> compatibility matrix below, then emit a single JSON `plan` document per the
+> schema. **Emit JSON only — no prose, no markdown fences.**
+>
+> **Hard rules:**
+> 1. Only reference downstream effects that appear in `compatibility.json`.
+>    Do not invent edges.
+> 2. Classify version delta as `major` / `minor` / `patch` strictly by
+>    semver: same-major-different-minor → minor; same-minor-different-patch
+>    → patch; otherwise major.
+> 3. If `language.gems.system_ruby` is `true`, set
+>    `tool_specs.gems.command` to `gem update --user-install` and add
+>    `rationale_for_flag: "system Ruby ${ruby_version} detected; --user-install avoids sudo"`.
+> 4. If `disk.free_gb < 5`, set
+>    `warnings: [{"severity": "high", "message": "Refusing to run: only ${free_gb} GB free"}]`
+>    and emit empty `ordered_groups`.
+> 5. Build `ordered_groups` in this order: `skills` → `brew` → `language`
+>    (parallelism: parallel) → `stores` (mas, macOS).
+> 6. ETA heuristic: if `~/.claude/data/upkeep-history.json` is provided in
+>    your input, use the median of the last 5 runs per category. Otherwise
+>    use the bake-in defaults below.
+> 7. Output `manual_steps` for: plugin-cache-managed skills (surface
+>    `/plugin update <name>`), PATH shadows, codex skills without `.git`.
+>
+> **Bake-in ETA defaults (seconds per item):**
+> - brew: 25, npm: 30, pipx: 20, gems: 15, uv: 5 total, bun: 5 total,
+>   skills: 3, mas: 30, macOS: 300.
+>
+> **Input:**
+> Discovery JSON:
+> ```json
+> {{ paste combined discovery JSON here }}
+> ```
+> Compatibility matrix:
+> ```json
+> {{ paste contents of compatibility.json here }}
+> ```
+> History (may be empty):
+> ```json
+> {{ paste ~/.claude/data/upkeep-history.json here, or {} if missing }}
+> ```
+
+### Plan output schema
+
+See `.planning/phases/08-compatibility-synthesizer/08-CONTEXT.md` for the
+full shape. Required fields: `plan.summary`, `plan.warnings`,
+`plan.manual_steps`, `plan.ordered_groups[]`, `plan.tool_specs{}`.
+
+### Synthesizer fallback
+
+If the synthesizer Agent call fails (timeout, schema-invalid output), build a
+fallback plan inline:
+
+- Order: `skills` → `brew` → each language tool serially → `mas` → `macOS`
+- No compatibility flags, no ETA
+- Surface in the report: `compatibility analysis unavailable — running in fallback mode`
+
+## Step 3m (macOS): Approve & Apply
+
+### Single approval gate
+
+Render the plan compactly:
+
+```
+Plan:
+  Skills (N):     <name> <from> → <to> (<bump>)
+  brew  (N):      ⚠ major: <names>  | minor: <count> | patch: <count>
+  npm   (N):      <names>
+  pipx  (N):      <names>
+  gems  (N):      <major bumps>     [--user-install: system Ruby X detected]
+  uv    (self):   <from> → latest
+  bun   (self):   <from> → latest
+  mas   (N):      <names>
+  macOS (N):      <updates>          [restart] if applicable
+
+Risks flagged:
+  • <one line per plan.warnings entry, plus downstream-effect callouts>
+
+Manual steps (after apply):
+  • <one line per plan.manual_steps entry>
+
+ETA: ~<p50> minutes (p50), up to <p90> minutes (p90)
+Disk free: <free_gb> GB <✓ or ⚠>
+```
+
+Single `AskUserQuestion`:
+- A) Apply all
+- B) Drop categories
+- C) Cancel
+
+If "Drop categories", emit a second multi-select `AskUserQuestion` with one
+option per category in the plan.
+
+If sub-mode is `audit`, **STOP HERE** — emit the plan as the report and skip
+apply + post-flight + history write.
+
+### Apply orchestration
+
+Iterate `plan.ordered_groups`:
+
+- `parallelism: serial` → run each tool's command in order
+- `parallelism: exclusive` → single command, await
+- `parallelism: parallel` → fan out via `Bash` `run_in_background`, cap 4
+  concurrent, await all via Monitor or `wait`
+
+Each tool command:
+1. Run `tool_specs[tool].preconditions` first (e.g., `brew update >/dev/null`)
+2. Capture wall time with `time` or `$SECONDS` deltas
+3. Wrap with isolation: `if ! eval "$CMD" >>"$LOG" 2>&1; then RESULT=fail:$?; else RESULT=ok; fi`
+4. Pipe stdout through deprecation collector:
+   `tee -a "$DEPRECATION_LOG" >/dev/null` for any line matching
+   `(deprecated|deprecation|warning|WARN)`
+
+A failure in one tool **never blocks others** in the same or later groups.
+
+### macOS update restart warning
+
+If `plan.tool_specs.macos.restart_required` is `true`, before running:
+
+> ⚠ This update requires a restart. Save your work.
+> Apply? A) Yes  B) Skip macOS updates
+
+This is a separate `AskUserQuestion` even when "Apply all" was chosen earlier.
+
+## Step 4m (macOS): Post-Flight
+
+Always runs after apply (even on partial failure). Skipped in audit mode.
+
+```bash
+# 1. brew doctor noise filter
+DOCTOR_OUT=$(brew doctor 2>&1)
+case "$DOCTOR_OUT" in
+  *"Your system is ready to brew."*) ;;  # silent on clean
+  *) echo "── brew doctor ──"; echo "$DOCTOR_OUT" ;;
+esac
+
+# 2. PATH shadow re-check, scoped to upgraded brew formulas
+for FORMULA in $UPGRADED_FORMULAS; do
+  for BIN in $(brew list "$FORMULA" 2>/dev/null | grep "/bin/" | xargs -n1 basename | sort -u); do
+    PATHS=$(which -a "$BIN" 2>/dev/null | sort -u)
+    COUNT=$(echo "$PATHS" | wc -l | tr -d ' ')
+    if [ "$COUNT" -gt 1 ]; then
+      FIRST=$(echo "$PATHS" | head -1)
+      BREW_PATH="$(brew --prefix)/bin/$BIN"
+      if [ "$FIRST" != "$BREW_PATH" ]; then
+        echo "shadow: $BIN — first match $FIRST (brew path: $BREW_PATH)"
+      fi
+    fi
+  done
+done
+
+# 3. Resolution re-check for every upgraded tool name
+for TOOL in $UPGRADED_TOOLS; do
+  command -v "$TOOL" >/dev/null 2>&1 || echo "⚠ $TOOL no longer resolves on PATH"
+done
+
+# 4. Deprecation aggregator
+if [ -s "$DEPRECATION_LOG" ]; then
+  echo "── Deprecation warnings ──"
+  sort -u "$DEPRECATION_LOG" | head -20
+fi
+```
+
+## Step 5m (macOS): Report
+
+```
+── ⚠ Risks observed ────────────────────────────────────
+  • <one line per surfaced cross-manager risk that materialised>
+  • <e.g. "brew:openssl 3.3 → 3.4 — re-test gems w/ native ext">
+
+── Manual steps ────────────────────────────────────────
+  • <one line per plan.manual_steps entry, plus PATH shadows from post-flight>
+
+── Update Report ───────────────────────────────────────
+  upkeep   ⓘ /plugin update upkeep
+  gstack   ✓ updated     1.5.1.0 → 1.27.1.0
+  brew     ✓ upgraded    36 packages
+  npm      ✓ upgraded    11.12.1 → 11.14.0
+  pipx     ✓ upgraded    1 tool   (semgrep 1.159.0 → 1.161.0)
+  gems     ✓ upgraded    ~48 gems (--user-install)
+  uv       ✓ upgraded    0.9.7 → 0.11.11
+  bun      ✓ upgraded    1.3.9 → 1.3.13
+  mas      —             not installed
+  macOS    ✓ none
+
+── Informational ───────────────────────────────────────
+  Claude plugins  10 (managed by Claude Code)
+  Codex skills    16 (4 git-managed → updated; 12 manual)
+```
+
+### History write
+
+```bash
+HIST_DIR="$HOME/.claude/data"
+HIST_FILE="$HIST_DIR/upkeep-history.json"
+mkdir -p "$HIST_DIR" 2>/dev/null
+
+if command -v jq >/dev/null 2>&1; then
+  ENTRY=$(jq -n --arg ts "$(date -u +%FT%TZ)" \
+    --argjson minutes "$MINUTES_JSON" \
+    '{ts: $ts, minutes: $minutes}')
+  if [ -f "$HIST_FILE" ]; then
+    jq --argjson entry "$ENTRY" '.runs += [$entry]' "$HIST_FILE" > "$HIST_FILE.tmp" \
+      && mv "$HIST_FILE.tmp" "$HIST_FILE"
+  else
+    jq -n --argjson entry "$ENTRY" '{schema_version:"1", runs:[$entry]}' > "$HIST_FILE"
+  fi
+else
+  echo "ⓘ Install jq to enable ETA self-tuning across runs"
+fi
+```
+
+History is read by Step 2m on the next invocation to refine the ETA.
+
+---
+
 ## Step 1: Discover AI Skills (skip for Update Packages)
+
+> **Routing reminder.** Steps 1–6 below are the v1.0 sequential flow used on
+> Linux and WSL2. On macOS, the parallel flow above (Steps 1m–5m) replaces
+> Steps 1–6 entirely — do not run both. If `$OS_TYPE = "macos"` you should
+> already have produced the final report; skip the rest of this file.
 
 Check git is installed: `command -v git` — if missing, skip skills section and
 note: "Install git: `xcode-select --install`"

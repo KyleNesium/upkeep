@@ -1,6 +1,6 @@
 {
   "name": "upkeep",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "macOS system cleanup and updater. v1.2 hardens /upkeep:update against prompt-injection through upstream package metadata: synthesizer LLM no longer authors shell commands (hardcoded dispatcher), discovery JSON is sanitized of free-text fields, exact-match remote URL validation, first-encounter trust gate for third-party skill repos, and Discover/Approve/Apply turn separation enforced across all mutating skills. v1.1 macOS parallel flow and Linux/WSL2 paths are unchanged in behavior; cleanup unchanged. Five entry points: deep, quick, audit, update, upkeep.",
   "author": {
     "name": "KyleNesium",

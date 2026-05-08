@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-05-08
+
+### Fixed
+
+- **macOS `/upkeep:update` now actually pulls trusted skill repos.** Since
+  v1.2.0, the macOS apply dispatcher's `skills)` case was a no-op pointing
+  to "Step 4 (Apply Skill Updates)" — but Step 4 lives in the Linux/WSL2
+  sequential flow, which the macOS routing reminder explicitly skips. The
+  synthesizer still listed `skills` in `ordered_groups`, the dispatcher
+  still recorded RC=0 → success → name in `UPGRADED_TOOLS_FILE`, and the
+  Step 5m report still printed `gstack ✓ updated 1.5.1.0 → 1.27.1.0` — but
+  no `git pull` ever ran. macOS users running `/upkeep:update all` since
+  2026-05-07 saw "skills upgraded" in the report while their working
+  trees were unchanged.
+
+  Fix: a dedicated **Skills apply phase** now runs inside Step 3m's apply
+  orchestration, before the dispatcher iteration. It walks the discovery
+  JSON's `git_repos[]`, validates each path is under `~/.claude/skills/`
+  or `~/.codex/skills/`, skips dirty trees and detached HEADs, and runs
+  `git -C "$path" pull --ff-only origin "$BRANCH"` with the branch from
+  `git symbolic-ref --short HEAD` (no synthesizer-authored strings — the
+  v1.2.0 hardcoded-dispatcher contract is preserved). The dispatcher's
+  `skills)` case is now an honest no-op marker.
+- **macOS `skills-scout` no longer fetches from untrusted remotes.** The
+  HIGH-3 first-encounter trust gate was implemented for the Linux Step 1
+  flow but missing from the macOS parallel scout, which would
+  `git fetch --tags -q origin` for every git repo found under
+  `~/.claude/skills/*/.git` and `~/.codex/skills/*/.git`. The scout now
+  reads `~/.claude/data/upkeep-skill-trust.json` first and skips the
+  fetch for any URL not on the trust list, marking the repo
+  `untrusted: true` instead. Step 3m's new **Skill trust gate** surfaces
+  untrusted remotes via `AskUserQuestion` before the main approval gate.
+- **Discovery sanitization is more defensive.** Added `dirty_files`,
+  `errors`, and `updates` to the strip list, plus a 256-character cap on
+  every remaining string value. The cap defends against future scout
+  schemas growing free-text fields the denylist forgets to add — bounded
+  identifiers (formula names, version strings, paths) fit comfortably,
+  while injection payloads stuffed into surviving fields get truncated.
+  A code comment documents the path to convert this to a full allowlist
+  in v1.3.
+
+### Changed
+
+- **Router Update Mode redirects to `/upkeep:update` instead of duplicating
+  it.** `skills/upkeep/SKILL.md` previously contained a ~300-line copy of
+  the Linux/WSL2 sequential update flow, which had already drifted: the
+  router's trust gate offered 2 options (A/B) while the canonical
+  `skills/update/SKILL.md` version offered 3 (A/B/C with "Show recent
+  commits"), and the router had no macOS parallel flow at all. The router
+  now ends the turn at an `AskUserQuestion` directing the user to
+  `/upkeep:update`, which is where the v1.2 hardening lives. This removes
+  the divergence risk where a security patch landing in one file silently
+  fails to reach the other.
+- **Router `allowed-tools` tightened.** Removed `Bash(rustup *)`,
+  `Bash(mas *)`, `Bash(softwareupdate *)`, `Bash(deno *)`, `Bash(mise *)`,
+  `Bash(git -C * status *)`, `Bash(git -C * pull *)`, and
+  `Bash(git -C * remote *)` — these were only used by the now-redirected
+  Update Mode body. The remaining git ops cover the self-update check
+  only (`rev-parse`, `fetch`, `log`, `show`, `symbolic-ref`).
+- **`shadow-scout` does a single PATH walk instead of `which -a` per
+  binary.** Apple Silicon brew has hundreds of binaries under
+  `${PREFIX}/bin`; the old method forked once per file. The replacement
+  walks `$PATH` once with `awk` and emits a duplicate entry whenever the
+  brew prefix appears after another directory for a given binary name —
+  same semantics, hundreds fewer process launches.
+
+### Notes
+
+- **No CHANGELOG entry for the version frontmatter resync.** SKILL.md
+  `version:` fields, `VERSION`, `plugin.json`, and `marketplace.json`
+  all move to `1.2.2` together (per the v1.2.1 lockstep rule).
+- **Bootstrap caveat (same as v1.2.1).** Pre-1.2.2 users must run
+  `/plugin update upkeep@<owner>` (or `/upkeep:update` for git-cloned
+  installs) once to pick up these fixes. After that, the daily
+  self-update check surfaces future updates automatically.
+- **Sort comparison limitation noted, not fixed.** The self-update
+  version compare uses `sort -V`, which sorts pre-release suffixes
+  incorrectly (`1.2.1-beta` is "newer" than `1.2.1`). upkeep doesn't
+  ship pre-releases today; revisit if `1.x.y-rc` tags are ever
+  published. Inline comment added at `upkeep/skills/upkeep/SKILL.md`
+  near the comparison.
+
 ## [1.2.1] - 2026-05-08
 
 ### Fixed

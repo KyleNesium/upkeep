@@ -231,9 +231,9 @@ Everything is confirmation-gated. Nothing applies without your approval. Destruc
 
 On macOS, v1.1 introduces a parallel discovery + compatibility-aware single-gate flow (see Update section above). Linux & WSL2 continue to use the v1.0 sequential per-category gates pending v1.1.x port.
 
-upkeep also checks for updates once per day during any cleanup run and nudges you when one is available.
+When you run `/upkeep` it checks once per day whether a newer version is available. Both install layouts are supported: git-cloned skills compare `HEAD` against `origin/main`, and plugin-managed installs compare the installed `plugin.json` against the marketplace clone. If the check finds an update, you'll be asked whether to update first or continue with the current version. The narrow entrypoints (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`) skip the check — re-enter via `/upkeep` if you want the prompt.
 
-To disable the daily check: `export UPKEEP_SKIP_UPDATE_CHECK=1`
+To disable the daily check entirely: `export UPKEEP_SKIP_UPDATE_CHECK=1`
 
 ---
 

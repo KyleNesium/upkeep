@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-05-08
+
+### Fixed
+
+- **Self-update check now actually fires for plugin-managed installs.** The
+  Phase 1 baseline check ran `git fetch` against the install directory, which for
+  plugin-cache installs (`~/.claude/plugins/cache/<owner>/upkeep/<version>/`) is
+  not a git working tree. The check failed silently via `2>/dev/null` and the
+  "ℹ upkeep update available" nudge never appeared, leaving plugin-managed users
+  on stale versions indefinitely (the most common deployment). The new check
+  detects install layout: plugin-cache installs read the installed `plugin.json`
+  and compare against `origin/main:upkeep/.claude-plugin/plugin.json` in the
+  sibling marketplace clone at `~/.claude/plugins/marketplaces/<owner>/`;
+  git-cloned skills walk up to the working tree via
+  `git rev-parse --show-toplevel` and compare `HEAD..origin/main`. The nudge now
+  reports `current → latest` plus the exact update command for the install type
+  (`/plugin update upkeep@<owner>` or `/upkeep:update`).
+- **Self-update is now an interactive gate, not a passive print.** When the
+  check reports an update is available, `/upkeep:upkeep` ends the turn at an
+  `AskUserQuestion` ("Update now (recommended)" / "Continue anyway") before
+  running Mode Selection or any cleanup phases. This matches the v1.2
+  Discover/Approve separation contract and ensures users are running with the
+  v1.2.0 security hardening before any mutating action.
+- Removed the dead self-check from `/upkeep:audit`, `/upkeep:cleandeep`, and
+  `/upkeep:cleanquick`. Those skills had no `git` entry in `allowed-tools` so
+  the inline check could never run regardless of install layout. Direct
+  invocations of those skills now point users to `/upkeep` for the self-update
+  prompt.
+- Added `Bash(git -C * show *)` to `/upkeep:upkeep` `allowed-tools` (required
+  by the layout-aware check to read upstream `plugin.json` / `VERSION` from
+  `origin/main` without mutating the working tree).
+- `set -euo pipefail` added to the macOS update synthesizer's `mktemp`+`trap`
+  setup and the discovery-input sanitization step. Silent `mktemp` failure
+  could leave the trap expanding to `rm -f -- ""` while subsequent appends
+  targeted unset paths; silent `jq` failure during sanitization could leave
+  `DISCOVERY_JSON` unset, falling back to unsanitized upstream metadata in the
+  synthesizer prompt and defeating the v1.2.0 prompt-injection defense
+  (CRIT-1+2). Strict mode aborts the apply pipeline so the failure is visible
+  instead of silently downgrading.
+
+### Changed
+
+- Bumped `version:` frontmatter in all five `SKILL.md` files from the stale
+  `1.1.0-dev` placeholder to `1.2.1`. SKILL frontmatters had drifted from the
+  repo's `VERSION` / `plugin.json` / `marketplace.json` since v1.1.0; this
+  resyncs them. Future releases should keep these in lockstep.
+
+### Notes
+
+- **Bootstrap cost of the self-update fix.** Users on any pre-1.2.1 version
+  will not see the new gate automatically — they must run
+  `/plugin update upkeep@<owner>` (or `/upkeep:update` for git-cloned installs)
+  once to pick up 1.2.1. After that, future updates surface automatically via
+  the now-functional daily check.
+
 ## [1.2.0] - 2026-05-07 — Security Hardening
 
 ### Fixed (security review findings)

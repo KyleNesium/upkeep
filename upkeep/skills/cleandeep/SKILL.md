@@ -1,6 +1,6 @@
 ---
 name: upkeep:cleandeep
-version: 1.1.0-dev
+version: 1.2.1
 author: KyleNesium
 description: |
   Full 15-phase macOS deep clean: Homebrew, dev caches, orphaned app data,
@@ -195,24 +195,7 @@ before/after. Fall back to `df` if unavailable.
 
 > On Linux/WSL2, before/after comparison uses `df -h /` only — there is no APFS purgeable space to track.
 
-Then run a passive update check (at most once per 24h, silent on all failures):
-
-```bash
-if [ "${UPKEEP_SKIP_UPDATE_CHECK:-}" != "1" ] && command -v git >/dev/null 2>&1; then
-  _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../../.last-update-check"
-  _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || stat -c %Y "$_CHECK_FILE" 2>/dev/null || echo 0)
-  if [ $(( $(date +%s) - $_LAST )) -gt 86400 ]; then
-    git -C "${CLAUDE_SKILL_DIR}/../../.." fetch --tags --quiet origin main 2>/dev/null
-    touch "$_CHECK_FILE" 2>/dev/null
-    _BEHIND=$(git -C "${CLAUDE_SKILL_DIR}/../../.." log HEAD..origin/main --oneline \
-      2>/dev/null | wc -l | tr -d ' ')
-    [ "${_BEHIND:-0}" -gt 0 ] && \
-      echo "ℹ upkeep update available — run: /upkeep:update"
-  fi
-fi
-```
-
-If the nudge fires, display it once at the top before phase output.
+Self-update is checked by the main `/upkeep:upkeep` entrypoint. Direct invocations of `/upkeep:cleandeep` skip the check — re-enter via `/upkeep` once a day if you want the nudge.
 
 ## Phase 2: Homebrew Audit
 

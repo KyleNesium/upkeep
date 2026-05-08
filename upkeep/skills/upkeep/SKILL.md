@@ -1,6 +1,6 @@
 ---
 name: upkeep
-version: 1.1.0-dev
+version: 1.2.1
 author: KyleNesium
 description: |
   Cross-platform system cleanup and updates for macOS 14+, Linux (Debian/Ubuntu,
@@ -97,6 +97,7 @@ allowed-tools:
   - Bash(git -C * log *)
   - Bash(git -C * pull *)
   - Bash(git -C * remote *)
+  - Bash(git -C * show *)
   - Bash(git symbolic-ref *)
   - Bash(git -C * symbolic-ref *)
   # Update mode — package manager upgrades
@@ -256,24 +257,76 @@ Capture the "Available" and "Purgeable" values from `diskutil info`.
 APFS volumes have purgeable space that `df` doesn't distinguish — use `diskutil`
 for accurate before/after. Fall back to `df` if `diskutil` is unavailable.
 
-Then run a passive update check (at most once per 24h, silent on all failures):
+Then run a self-update check (at most once per 24h, silent on all failures). The
+check handles two install layouts:
+- **Plugin-cache install** (`~/.claude/plugins/cache/<owner>/upkeep/<version>/`) — read installed version from `<install>/.claude-plugin/plugin.json` and compare against `origin/main:upkeep/.claude-plugin/plugin.json` in the sibling marketplace clone.
+- **Git-cloned skill** — walk up to the working tree, fetch, and compare `HEAD` against `origin/main`.
 
 ```bash
 if [ "${UPKEEP_SKIP_UPDATE_CHECK:-}" != "1" ] && command -v git >/dev/null 2>&1; then
   _CHECK_FILE="${CLAUDE_SKILL_DIR}/../../../.last-update-check"
   _LAST=$(stat -f %m "$_CHECK_FILE" 2>/dev/null || stat -c %Y "$_CHECK_FILE" 2>/dev/null || echo 0)
-  if [ $(( $(date +%s) - $_LAST )) -gt 86400 ]; then
-    git -C "${CLAUDE_SKILL_DIR}/../../.." fetch --tags --quiet origin main 2>/dev/null
+  if [ $(( $(date +%s) - ${_LAST:-0} )) -gt 86400 ]; then
     touch "$_CHECK_FILE" 2>/dev/null
-    _BEHIND=$(git -C "${CLAUDE_SKILL_DIR}/../../.." log HEAD..origin/main --oneline \
-      2>/dev/null | wc -l | tr -d ' ')
-    [ "${_BEHIND:-0}" -gt 0 ] && \
-      echo "ℹ upkeep update available — run: /upkeep:update"
+    _UPKEEP_OUTDATED=0
+    _UPKEEP_INSTALL_TYPE=""
+    _UPKEEP_CURRENT_VER=""
+    _UPKEEP_LATEST_VER=""
+    _UPKEEP_UPDATE_CMD=""
+    # Plugin-cache install: skill dir is .../<owner>/upkeep/<version>/skills/upkeep,
+    # so the install root is two levels up and contains .claude-plugin/plugin.json.
+    if [ -f "${CLAUDE_SKILL_DIR}/../../.claude-plugin/plugin.json" ] \
+      && printf '%s\n' "$CLAUDE_SKILL_DIR" | grep -q '/plugins/cache/[^/]*/upkeep/'; then
+      _UPKEEP_INSTALL_TYPE="plugin"
+      _PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
+      _OWNER=$(printf '%s\n' "$CLAUDE_SKILL_DIR" | sed -n 's#.*/plugins/cache/\([^/]*\)/upkeep/.*#\1#p')
+      _MKT_DIR="${HOME}/.claude/plugins/marketplaces/${_OWNER}"
+      _UPKEEP_CURRENT_VER=$(grep -m1 '"version"' "${_PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null \
+        | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
+      if [ -d "$_MKT_DIR/.git" ]; then
+        git -C "$_MKT_DIR" fetch --quiet origin main 2>/dev/null
+        _UPKEEP_LATEST_VER=$(git -C "$_MKT_DIR" show origin/main:upkeep/.claude-plugin/plugin.json 2>/dev/null \
+          | grep -m1 '"version"' | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
+        if [ -n "$_UPKEEP_CURRENT_VER" ] && [ -n "$_UPKEEP_LATEST_VER" ] \
+          && [ "$_UPKEEP_CURRENT_VER" != "$_UPKEEP_LATEST_VER" ]; then
+          _NEWEST=$(printf '%s\n%s\n' "$_UPKEEP_CURRENT_VER" "$_UPKEEP_LATEST_VER" | sort -V | tail -1)
+          [ "$_NEWEST" = "$_UPKEEP_LATEST_VER" ] && _UPKEEP_OUTDATED=1
+        fi
+        _UPKEEP_UPDATE_CMD="/plugin update upkeep@${_OWNER}"
+      fi
+    else
+      # Git-cloned install: walk up from the skill dir to find the working tree.
+      _GIT_TOP=$(git -C "$CLAUDE_SKILL_DIR" rev-parse --show-toplevel 2>/dev/null)
+      if [ -n "$_GIT_TOP" ]; then
+        _UPKEEP_INSTALL_TYPE="git"
+        git -C "$_GIT_TOP" fetch --tags --quiet origin main 2>/dev/null
+        _BEHIND=$(git -C "$_GIT_TOP" log HEAD..origin/main --oneline 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${_BEHIND:-0}" -gt 0 ]; then
+          _UPKEEP_OUTDATED=1
+          _UPKEEP_CURRENT_VER=$(tr -d '[:space:]' < "$_GIT_TOP/VERSION" 2>/dev/null || echo "?")
+          _UPKEEP_LATEST_VER=$(git -C "$_GIT_TOP" show origin/main:VERSION 2>/dev/null | tr -d '[:space:]' || echo "?")
+          _UPKEEP_UPDATE_CMD="/upkeep:update"
+        fi
+      fi
+    fi
+    export _UPKEEP_OUTDATED _UPKEEP_INSTALL_TYPE _UPKEEP_CURRENT_VER _UPKEEP_LATEST_VER _UPKEEP_UPDATE_CMD
+    if [ "$_UPKEEP_OUTDATED" = "1" ]; then
+      echo "ℹ upkeep ${_UPKEEP_CURRENT_VER:-?} → ${_UPKEEP_LATEST_VER:-?} (update available — ${_UPKEEP_UPDATE_CMD})"
+    fi
   fi
 fi
 ```
 
-If the nudge fires, display it once at the top before phase output. Then continue cleanup normally.
+### Self-update gate (Discover/Approve separation)
+
+If the check above set `$_UPKEEP_OUTDATED=1` (the `ℹ upkeep` line printed), **end this turn with an `AskUserQuestion`** before running Mode Selection or any further phases. Two options:
+
+- **Update now (recommended)** — Tell the user the exact value of `$_UPKEEP_UPDATE_CMD` and that they should re-invoke `/upkeep` after the update finishes. Stop here. Do not run any further phases this session.
+- **Continue anyway** — Acknowledge the staleness and proceed to Mode Selection in the next turn using the current installed version.
+
+If `$_UPKEEP_OUTDATED` is `0` or unset, skip the gate and continue to Mode Selection in the same turn.
+
+This gate is intentional: v1.2 added security hardening (sanitized synthesizer input, exact-match URL validation, turn-separation contracts) — running stale skips those guards. Users who decline the update keep that state explicit.
 
 ## Phase 2: Homebrew Audit (all modes)
 

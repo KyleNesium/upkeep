@@ -1,6 +1,6 @@
 ---
 name: upkeep
-version: 1.2.1
+version: 1.2.2
 author: KyleNesium
 description: |
   Cross-platform system cleanup and updates for macOS 14+, Linux (Debian/Ubuntu,
@@ -90,26 +90,19 @@ allowed-tools:
   - Edit(~/.profile)
   - Glob
   - Grep
-  # Update mode — git ops (scoped to specific subcommands, never global git ops)
+  # Self-update check only — git ops scoped to read-only subcommands.
+  # Mutating ops (pull, status for apply, remote get-url for trust gate)
+  # live in /upkeep:update; Update Mode is redirected to that skill.
   - Bash(git -C * rev-parse *)
-  - Bash(git -C * status *)
   - Bash(git -C * fetch *)
   - Bash(git -C * log *)
-  - Bash(git -C * pull *)
-  - Bash(git -C * remote *)
   - Bash(git -C * show *)
   - Bash(git symbolic-ref *)
   - Bash(git -C * symbolic-ref *)
-  # Update mode — package manager upgrades
-  - Bash(rustup *)
-  - Bash(mas *)
-  - Bash(softwareupdate *)
-  - Bash(deno *)
-  - Bash(mise *)
-  # Linux system tools
+  # Linux system tools (used by cleanup phases)
   - Bash(systemctl *)
   - Bash(journalctl *)
-  # Linux package managers
+  # Linux package managers (cleanup phases — apt-get clean / autoremove etc.)
   - Bash(apt *)
   - Bash(dnf *)
   - Bash(pacman *)
@@ -289,6 +282,10 @@ if [ "${UPKEEP_SKIP_UPDATE_CHECK:-}" != "1" ] && command -v git >/dev/null 2>&1;
           | grep -m1 '"version"' | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
         if [ -n "$_UPKEEP_CURRENT_VER" ] && [ -n "$_UPKEEP_LATEST_VER" ] \
           && [ "$_UPKEEP_CURRENT_VER" != "$_UPKEEP_LATEST_VER" ]; then
+          # `sort -V` does NOT compare semver pre-release suffixes correctly
+          # (e.g. `1.2.1-beta` sorts as newer than `1.2.1`). upkeep doesn't
+          # ship pre-releases today, so this is fine; revisit if `1.x.y-rc`
+          # tags are ever published.
           _NEWEST=$(printf '%s\n%s\n' "$_UPKEEP_CURRENT_VER" "$_UPKEEP_LATEST_VER" | sort -V | tail -1)
           [ "$_NEWEST" = "$_UPKEEP_LATEST_VER" ] && _UPKEEP_OUTDATED=1
         fi
@@ -1035,303 +1032,17 @@ fi
 
 ## Update Mode
 
-Do not run any cleanup phases. Detect sub-mode: **audit** (check only) | **skills**
-(git repos only) | **packages** (package managers only) | **all** (both).
-If no sub-mode, ask: A) Audit  B) Skills  C) Packages  D) All
+Update Mode is **not** implemented inline in this router. It lives canonically in `skills/update/SKILL.md` (`/upkeep:update`), which is where the v1.2 hardening (hardcoded apply dispatcher, sanitized synthesizer input, exact-match remote URL validation, first-encounter trust gate, Discover/Approve/Apply turn separation) and the macOS parallel synthesizer flow live. Keeping a second copy here forks the security guarantees the moment one side is patched and the other isn't — see the v1.2.2 review findings for the drift this avoided.
 
-### Step 1: Discover AI Skills (skip for Update Packages)
+If the user's request matched an Update keyword in Mode Selection, end this turn at an `AskUserQuestion`:
 
-Check git is installed: `command -v git` — if missing, skip skills section and
-note: "Install git: `xcode-select --install`"
+> Update Mode runs in the dedicated `/upkeep:update` skill. Invoke it now?
+> A) Yes — run `/upkeep:update` (recommended)
+> B) Cancel — back out of Update mode
 
-**upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
-- Fails → check for `plugin.json`: if present, "managed by plugin manager";
-  otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
-- Succeeds → verify remote with an exact host+path match (substring match
-  was previously vulnerable to URLs like `https://evil.example/?KyleNesium/upkeep`):
-  ```bash
-  ORIGIN_URL=$(git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin 2>/dev/null)
-  case "$ORIGIN_URL" in
-    https://github.com/KyleNesium/upkeep|\
-    https://github.com/KyleNesium/upkeep.git|\
-    git@github.com:KyleNesium/upkeep|\
-    git@github.com:KyleNesium/upkeep.git)
-      ;;
-    *)
-      echo "Skipping upkeep: unexpected remote URL: $ORIGIN_URL"
-      ;;
-  esac
-  ```
-  Only the four canonical forms above are accepted. Anything else skips.
+On A, instruct the user to run `/upkeep:update <sub-mode>` (or just `/upkeep:update` if sub-mode is unknown) and stop here. Do not run any cleanup phases or package logic from this skill.
 
-**Other Claude skills (discovery-based):**
-```bash
-for d in ~/.claude/skills/*/; do [ -d "$d/.git" ] && echo "$d"; done
-```
-
-**First-encounter approval for third-party skill repos.** Before fetching,
-read `~/.claude/data/upkeep-skill-trust.json` for prior approvals. For any
-remote URL not on the trust list, surface it via `AskUserQuestion`:
-
-> Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
-> A) Trust this remote (remember for future runs)
-> B) Skip this skill
-
-Do not fetch from a remote that has not been explicitly trusted.
-
-For each trusted skill: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
-`git -C "$d" log HEAD..origin/$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null || echo main) --oneline 2>/dev/null`
-
-**Report only (no git):**
-- Claude Code marketplace plugins: `ls ~/.claude/plugins/cache/ 2>/dev/null | wc -l`
-- Codex skills: `ls ~/.codex/skills/ 2>/dev/null | grep -vc '\.bak$'`
-
-### Step 2: Discover Packages (skip for Update Skills)
-
-Use `command -v <tool>` before each — skip silently if not installed.
-
-```bash
-brew outdated 2>/dev/null                                    # count outdated
-npm outdated -g 2>/dev/null                                  # list outdated globals
-pipx list --short 2>/dev/null                                # installed tools
-gem outdated 2>/dev/null                                     # count outdated
-rustup check 2>/dev/null                                     # toolchain status
-cargo install-update --list 2>/dev/null                      # only if cargo-update installed
-command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
-command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
-command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
-command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
-if [ "$OS_TYPE" = "macos" ]; then
-  mas outdated 2>/dev/null                                   # App Store
-  softwareupdate -l 2>/dev/null | grep -E "^\s*\*"           # macOS updates
-else
-  echo "mas: skipped (macOS only)"
-  echo "softwareupdate: skipped (macOS only)"
-fi
-```
-
-### Windows package managers (WSL2 only — audit only)
-
-```bash
-if [ "$OS_TYPE" = "wsl2" ]; then
-  if [ ! -d "/mnt/c" ]; then
-    echo "Windows package managers: /mnt/c not mounted — skipping."
-  else
-    echo "=== Windows package managers (audit — no upgrades run) ==="
-    if command -v winget >/dev/null 2>&1; then
-      echo "--- winget ---"
-      winget list 2>/dev/null | head -5 || echo "(winget accessible but list failed)"
-    else
-      echo "winget: not on PATH"
-    fi
-    if command -v scoop >/dev/null 2>&1; then
-      echo "--- scoop ---"
-      scoop list 2>/dev/null | head -5 || echo "(scoop accessible but list failed)"
-    else
-      echo "scoop: not on PATH"
-    fi
-    if command -v choco >/dev/null 2>&1; then
-      echo "--- choco ---"
-      choco list 2>/dev/null | head -5 || echo "(choco accessible but list failed)"
-    else
-      echo "choco: not on PATH"
-    fi
-  fi
-fi
-```
-
-> Audit only. This block NEVER runs `winget upgrade`, `scoop update`, or `choco upgrade`. Those require a Windows shell (PowerShell or CMD) — running them from WSL2 has permission and UAC implications that `update` intentionally avoids. When one or more Windows package managers are detected, display this exact guidance after the Windows package manager output:
->
-> "To upgrade these, open a Windows PowerShell (as administrator if needed) and run `winget upgrade --all`, `scoop update *`, or `choco upgrade all -y` respectively."
-
-### Step 3: Overview Table
-
-Always present before touching anything:
-```
-── AI Skills ──────────────────────────────
-  upkeep    N commits behind
-  gstack       up to date
-── Packages ───────────────────────────────
-  brew         N outdated      npm globals  N outdated
-  pipx         N tools         gems  N outdated
-  rustup       <status>        cargo  <status>
-  uv           <version>       bun  <version>
-  deno         <version>       mise  N outdated
-  mas          N outdated      macOS  N updates
-── Informational ──────────────────────────
-  Claude plugins  N (Claude Code manages)
-  Codex skills    N (manual update)
-── Windows Packages (WSL2 only — audit only) ──
-  winget       N installed  (upgrade via Windows PowerShell)
-  scoop        N installed  (upgrade via Windows PowerShell)
-  choco        N installed  (upgrade via Windows PowerShell)
-```
-Omit any row where the tool is not installed.
-On Linux or WSL2 (`$OS_TYPE != "macos"`), also omit the `mas` and `macOS` rows — those are macOS-only. The final report in Step 6 shows them as `skipped (macOS only)`.
-
-On macOS or plain Linux, omit the entire "Windows Packages" group — it appears only when `$OS_TYPE = "wsl2"`. For each Windows tool not found via `command -v`, omit that row.
-
-**Update Audit:** stop here. "Audit complete — nothing changed."
-If nothing needs updating: "Everything is up to date." — stop.
-
-**Gate 0 (Update All only):**
-> "Update N skill(s) + N package category(ies)?
-> A) Update all   B) Choose per-category   C) Cancel"
-
-### Step 4: Apply Skill Updates
-
-For each repo with commits behind, show changelog first:
-`git -C "$d" log HEAD..origin/<branch> --format="%h %s"` and CHANGELOG.md sections
-if present. Ask: "Apply updates to <tool>? A) Yes  B) Skip"
-
-Before pulling, check:
-1. `git -C "$d" status --porcelain` — if dirty, show `git status --short` output,
-   warn about conflicts, ask "Continue anyway? A) Yes  B) Skip this tool"
-2. `git -C "$d" symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
-   then retry" — skip this tool, continue others.
-
-Apply: `git -C "$d" pull --ff-only origin <branch> 2>&1`
-If non-fast-forward: surface error + "To reset (WARNING — discards local commits):
-`cd <dir> && git fetch origin && git reset --hard origin/main`" — never auto-reset.
-On success: read `plugin.json` / `VERSION` for old → new version string.
-
-### Step 5: Apply Package Updates
-
-Each category has its own gate. Skipping one does NOT cancel others.
-
-On Linux or WSL2, skip the `mas` and `macOS` rows below — do not run `mas upgrade` or `softwareupdate -ia`. Mark both as `skipped (macOS only)` in the Step 6 final report.
-
-On WSL2, the Step 2 "Windows package managers" block is audit-only — this Step 5 does NOT include winget, scoop, or choco. Upgrades for those require a Windows PowerShell session.
-
-### Linux system packages (apt / dnf / pacman)
-
-Only runs on `$OS_TYPE` of `linux` or `wsl2`. Skipped silently on macOS. Each package manager has its own dry-run preview and approval gate.
-
-```bash
-if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
-  case "$PKG_MGR" in
-    apt)
-      echo "=== apt — pending upgrades ==="
-      _APT_COUNT=$(apt-get upgrade --dry-run 2>/dev/null | grep -c "^Inst")
-      echo "$_APT_COUNT package(s) to upgrade"
-      apt-get upgrade --dry-run 2>/dev/null | grep "^Inst" | head -20
-      ;;
-    dnf)
-      echo "=== dnf — pending upgrades ==="
-      dnf check-update 2>/dev/null | grep -vE "^(Last metadata|$)" | head -20
-      ;;
-    pacman)
-      echo "=== pacman — pending upgrades ==="
-      pacman -Qu 2>/dev/null | head -20
-      ;;
-    *)
-      echo "Linux system packages: unsupported distro ($OS_DISTRO) — skipping"
-      ;;
-  esac
-fi
-```
-
-After the preview, ask per-manager:
-> "Upgrade system packages via $PKG_MGR? A) Yes  B) Skip $PKG_MGR"
-
-On "Yes", the actual upgrade requires root. Never run these from the skill — surface them as Manual Steps prose for the user to run in their own shell:
-
-> To apply the upgrade, run in your own terminal:
-> - apt: `sudo apt-get update && sudo apt-get upgrade -y`
-> - dnf: `sudo dnf upgrade -y`
-> - pacman: `sudo pacman -Syu --noconfirm`
->
-> After the user confirms completion, record the outcome in the Step 6 final report as `apt  ✓ upgraded  N packages` (or `↷ skipped`).
-
-### Snap packages (where installed)
-
-Only runs if `snap` is on `$PATH`. No sudo required for `snap refresh --list`.
-
-```bash
-if command -v snap >/dev/null 2>&1; then
-  echo "=== snap — pending refreshes ==="
-  snap refresh --list 2>/dev/null || echo "(no pending snap refreshes)"
-fi
-```
-
-Ask:
-> "Refresh snap packages? A) Yes  B) Skip snap"
-
-On "Yes", run:
-
-```bash
-if command -v snap >/dev/null 2>&1; then
-  snap refresh 2>&1
-fi
-```
-
-Report outcome in Step 6 as `snap  ✓ refreshed  N packages` (or `↷ skipped`). If `snap refresh` exits non-zero with a polkit/authentication error, surface `sudo snap refresh` as a Manual Steps prose line — never re-run from the skill.
-
-### Flatpak applications (where installed)
-
-Only runs if `flatpak` is on `$PATH`. User-scoped flatpak updates do not require root.
-
-```bash
-if command -v flatpak >/dev/null 2>&1; then
-  echo "=== flatpak — pending updates ==="
-  flatpak remote-ls --updates 2>/dev/null | head -20 || flatpak list --app 2>/dev/null | head -10
-fi
-```
-
-Ask:
-> "Update flatpak applications? A) Yes  B) Skip flatpak"
-
-On "Yes", run:
-
-```bash
-if command -v flatpak >/dev/null 2>&1; then
-  flatpak update -y 2>&1
-fi
-```
-
-Report outcome in Step 6 as `flatpak  ✓ updated  N apps` (or `↷ skipped`). For system-scoped installs requiring root, surface `sudo flatpak update -y` as a Manual Steps prose line — never run from the skill.
-
-### macOS and cross-platform package managers
-
-| Tool | Audit command | Apply command | Extra warning |
-|------|--------------|---------------|---------------|
-| brew | `brew outdated` | `brew upgrade` | May affect pinned toolchains |
-| npm | `npm outdated -g` | `npm update -g` | |
-| pipx | _(list already shown)_ | `pipx upgrade-all` | |
-| gems | `gem outdated` | `gem update` | |
-| rustup | `rustup check` | `rustup update` | |
-| cargo | `cargo install-update --list` | `cargo install-update -a` | Only if cargo-update installed |
-| uv | `uv self version` | `uv self update` | Python package manager replacement |
-| bun | `bun --version` | `bun upgrade` | |
-| deno | `deno --version` | `deno upgrade` | |
-| mise | `mise outdated` | `mise upgrade` | Language version manager |
-| mas | `mas outdated` | `mas upgrade` | |
-| macOS | `softwareupdate -l` | `softwareupdate -ia` | ⚠ Check for `[restart]` in listing — if restart required, warn explicitly before asking |
-
-Gate per category: "Upgrade <tool>? A) Yes  B) Skip <tool>"
-macOS with restart: "⚠ This update requires a restart. Save your work.
-Apply? A) Yes  B) Skip macOS updates"
-
-### Step 6: Final Report
-
-```
-── Update Report ────────────────────────────────
-  upkeep   ✓ updated    v1.0.0 → v1.0.1
-  gstack   ✓ updated    0.17.0 → 0.18.0
-  brew     ✓ upgraded   12 packages
-  npm      ↷ skipped
-  pipx     ✓ upgraded   2 tools
-  bun      ✓ upgraded   1.1.0 → 1.2.0
-  mise     ✓ upgraded   3 runtimes
-  mas      ✓ upgraded   1 app
-  apt      ✓ upgraded   N packages   (Linux/WSL2 only)
-  snap     ✓ refreshed  N packages   (if installed)
-  flatpak  ✓ updated    N apps       (if installed)
-── Informational ────────────────────────────────
-  Claude plugins  9  (managed by Claude Code)
-  Codex skills   12  (manual update required)
-```
-Omit rows for tools not installed on this machine.
+The router intentionally has **no** `git fetch` / `brew upgrade` / `npm update` / `pipx upgrade-all` / `gem update` / `mas upgrade` / `softwareupdate -ia` etc. embedded — those are entirely the responsibility of `/upkeep:update`.
 
 ## Reporting
 

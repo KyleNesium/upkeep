@@ -1,6 +1,6 @@
 ---
 name: upkeep:update
-version: 1.2.1
+version: 1.2.2
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep. On macOS, four parallel
@@ -226,15 +226,28 @@ Detailed per-domain shape: see `.planning/phases/07-parallel-discovery/07-CONTEX
 > You are the upkeep skills scout. Discover all updatable AI skills on this
 > macOS machine and return a JSON `skills` block per the schema below.
 >
+> **Trust check first.** Read `~/.claude/data/upkeep-skill-trust.json` (treat
+> absent file as `{}`). For every git repo found, get the remote URL via
+> `git -C "$d" remote get-url origin`. If the URL is NOT a key in the trust
+> file, mark the repo `untrusted: true` and **skip the `git fetch`** — record
+> only `path`, `branch`, `current_version`, `remote_url`, and leave
+> `commits_behind`, `newest_commit_subjects`, `breaking_lines` as `null` /
+> `[]`. The orchestrator (Step 3m trust gate) will surface untrusted remotes
+> for explicit user approval before any network call to them.
+>
 > **Cover:**
-> 1. Git-cloned skills under `~/.claude/skills/*/.git`. For each: `git fetch
->    --tags -q origin`, count commits behind `origin/<branch>`, read VERSION
->    or plugin.json for current version, list newest 5 commit subjects, scan
->    CHANGELOG.md for `BREAKING\|Breaking` lines between current and target.
-> 2. Git-cloned skills under `~/.codex/skills/*/.git` — treat the same way.
+> 1. Git-cloned skills under `~/.claude/skills/*/.git`. For trusted repos
+>    only: `git fetch --tags -q origin`, count commits behind
+>    `origin/<branch>`, read VERSION or plugin.json for current version,
+>    list newest 5 commit subjects, scan CHANGELOG.md for `BREAKING\|Breaking`
+>    lines between current and target. For untrusted repos: skip fetch (see
+>    Trust check above).
+> 2. Git-cloned skills under `~/.codex/skills/*/.git` — same trust check and
+>    handling as (1).
 > 3. Plugin-cache-managed skills (e.g. upkeep itself when it lives under
 >    `~/.claude/plugins/cache/`). Add to `managed[]` with the
->    `/plugin update <name>` command.
+>    `/plugin update <name>` command. (No trust check needed — plugin cache
+>    is managed by Claude Code, not by upkeep.)
 > 4. Counts only: `~/.claude/plugins/cache/` total dirs, `~/.codex/skills/*`
 >    total dirs.
 >
@@ -243,6 +256,8 @@ Detailed per-domain shape: see `.planning/phases/07-parallel-discovery/07-CONTEX
 > ```json
 > {
 >   "git_repos": [{"name": "...", "path": "...", "branch": "main",
+>                  "remote_url": "git@github.com:owner/repo.git",
+>                  "untrusted": false,
 >                  "current_version": "...", "commits_behind": 0,
 >                  "newest_commit_subjects": [], "breaking_lines": [],
 >                  "dirty_files": [], "detached": false, "remote_ok": true,
@@ -327,9 +342,29 @@ Detailed per-domain shape: see `.planning/phases/07-parallel-discovery/07-CONTEX
 > **Method:**
 > 1. `brew --prefix` to find the brew root (typically `/opt/homebrew` on
 >    Apple Silicon, `/usr/local` on Intel).
-> 2. List binaries from `${PREFIX}/bin`. For each binary, run
->    `which -a <binary>`. If multiple paths and the brew path is not first,
->    record a duplicate.
+> 2. **Single-pass PATH walk** (do not run `which -a` per binary — that
+>    forks once per file under `${PREFIX}/bin`, which is hundreds of
+>    processes on Apple Silicon brew). Instead, walk `$PATH` once with
+>    awk, recording the first directory each name appears in:
+>    ```bash
+>    PREFIX=$(brew --prefix 2>/dev/null)
+>    awk -v prefix="$PREFIX/bin" 'BEGIN {
+>      n = split(ENVIRON["PATH"], P, ":")
+>      for (i = 1; i <= n; i++) {
+>        cmd = "ls -1 " P[i] " 2>/dev/null"
+>        while ((cmd | getline name) > 0) {
+>          if (!(name in seen)) seen[name] = P[i]
+>          else if (P[i] == prefix && seen[name] != prefix) {
+>            # brew path appears AFTER something else for this name
+>            print name "\t" seen[name] "\t" prefix
+>          }
+>        }
+>        close(cmd)
+>      }
+>    }'
+>    ```
+>    Each `name` shadowed by an earlier-PATH directory becomes one
+>    `duplicates[]` entry: `{binary, primary, shadowed: [prefix]}`.
 > 3. `find -L ${PREFIX}/bin -maxdepth 1 -type l ! -exec test -e {} \; -print`
 >    for broken symlinks (cap output at 10).
 >
@@ -407,7 +442,16 @@ the same way — paste the values you've gathered.
 >    your input, use the median of the last 5 runs per category. Otherwise
 >    use the bake-in defaults below.
 > 7. Output `manual_steps` for: plugin-cache-managed skills (surface
->    `/plugin update <name>`), PATH shadows, codex skills without `.git`.
+>    `/plugin update <name>`), PATH shadows, codex skills without `.git`,
+>    and any `git_repos[]` entry with `untrusted: true` (surface
+>    `Re-run /upkeep:update after trusting <remote_url>`).
+> 7a. **Skills apply** runs as a dedicated pre-step inside Step 3m's apply
+>    orchestration — it iterates the discovery JSON's `git_repos[]`
+>    directly (not from `tool_specs`). The `skills` entry in
+>    `ordered_groups` is a category marker only; do not emit a
+>    `tool_specs.skills.command`. Untrusted repos must NOT appear in the
+>    skills count for `ordered_groups` — they belong in `manual_steps`
+>    until the user trusts them via Step 3m's trust gate.
 > 8. If `native.softwareupdate.restart_required` is `true`, include a
 >    `macos` entry under `tool_specs` with
 >    `{kind: "store", restart_required: true}` (no `command` field) and
@@ -484,6 +528,29 @@ If sub-mode is `audit`, render the plan from Step 2m as the report and
 **stop here** — skip the approval gate, apply, post-flight, and history
 write entirely.
 
+### Skill trust gate (check before approval)
+
+If any entry in the discovery JSON's `skills.git_repos[]` has
+`untrusted: true`, surface the unknown remotes via `AskUserQuestion`
+**before** the main approval gate so the user can decide which third-party
+skill repos to trust. Per untrusted remote, emit one option:
+
+> Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
+> A) Trust this remote (remember for future runs)
+> B) Skip this skill this run
+> C) Show recent commits from origin first
+
+On A, append `<url>` to `~/.claude/data/upkeep-skill-trust.json` and
+re-run Scout 1's discovery for that single repo (fetch + commits-behind +
+changelog) so the approval-gate plan summary reflects what's actually
+about to apply. On B, leave the entry `untrusted: true` — Step 3m's
+skills-apply phase will skip it. On C, show the commits-behind list from
+the remote (via a one-shot `git ls-remote` or `git fetch` deferred until
+trust is granted) and re-prompt A/B.
+
+This gate is its own turn — end the turn at the `AskUserQuestion`. Do not
+proceed to the single approval gate or the dispatcher in the same turn.
+
 ### Single approval gate
 
 Render the plan compactly:
@@ -541,6 +608,64 @@ Iterate `plan.ordered_groups`:
 - `parallelism: exclusive` → single command, await
 - `parallelism: parallel` → fan out via `Bash` `run_in_background`, cap 4
   concurrent, await all via Monitor or `wait`
+
+### Skills apply phase (runs before the dispatcher iteration)
+
+The dispatcher's `skills)` case is a no-op marker — actual `git pull` for
+skill repos happens here, before the main tool loop, so the trust gate and
+per-repo dirty/detached checks live in one place instead of being scattered
+across the dispatcher.
+
+For each entry in the discovery JSON's `skills.git_repos[]` where
+`commits_behind > 0` and `untrusted == false` (untrusted ones were either
+trusted via Step 3m's trust gate and re-discovered, or skipped):
+
+```bash
+# Validate path is under one of the two skill roots. Reject anything else.
+case "$REPO_PATH" in
+  "$HOME/.claude/skills/"*|"$HOME/.codex/skills/"*) ;;
+  *)
+    echo "skills: refusing repo path outside skill roots: $REPO_PATH" >>"$LOG"
+    SKILL_RC=1
+    continue
+    ;;
+esac
+
+# Skip dirty trees rather than risking conflict. Surface in manual_steps.
+DIRTY=$(git -C "$REPO_PATH" status --porcelain 2>/dev/null)
+if [ -n "$DIRTY" ]; then
+  echo "skills: $REPO_NAME has uncommitted changes — skipped" >>"$LOG"
+  SKILL_RC=1
+  continue
+fi
+
+# Refuse detached HEAD. Tell user to checkout the branch and re-run.
+if ! git -C "$REPO_PATH" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+  echo "skills: $REPO_NAME is in detached HEAD — skipped" >>"$LOG"
+  SKILL_RC=1
+  continue
+fi
+
+# Hardcoded git command — branch is from `git symbolic-ref` (bounded to a
+# valid ref name), path is validated above. No synthesizer-authored strings.
+BRANCH=$(git -C "$REPO_PATH" symbolic-ref --short HEAD)
+git -C "$REPO_PATH" pull --ff-only origin "$BRANCH" >>"$LOG" 2>&1
+SKILL_RC=$?
+
+if [ "$SKILL_RC" = "0" ]; then
+  # Read new VERSION / plugin.json for the report
+  NEW_VERSION=$(tr -d '[:space:]' < "$REPO_PATH/VERSION" 2>/dev/null \
+    || grep -m1 '"version"' "$REPO_PATH/.claude-plugin/plugin.json" 2>/dev/null \
+       | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
+    || echo "?")
+  echo "$REPO_NAME $CURRENT_VERSION → $NEW_VERSION" >> "$UPGRADED_TOOLS_FILE"
+else
+  echo "$REPO_NAME pull failed (rc=$SKILL_RC)" >> "$DEPRECATION_LOG"
+fi
+```
+
+A failure on one skill **never blocks** other skills or the package
+dispatcher from running.
 
 ### Hardcoded command dispatcher (never `eval` synthesizer output)
 
@@ -605,9 +730,10 @@ Each tool command:
        softwareupdate -ia >>"$LOG" 2>&1; RC=$?
        ;;
      skills)
-       # Per-skill git pull is handled in Step 4 (Apply Skill Updates).
-       # That code path validates the remote URL per HIGH-3 first and
-       # only fast-forwards trusted repos.
+       # Marker only — the actual `git pull` for each skill ran in the
+       # "Skills apply phase" above (path-validated, dirty-skipped,
+       # ff-only, with the trust gate already cleared in Step 3m).
+       # The dispatcher just records that the category was processed.
        RC=0
        ;;
      *)
@@ -649,15 +775,25 @@ the synthesizer from emitting attacker-influenced `manual_steps`,
 set -euo pipefail
 if command -v jq >/dev/null 2>&1; then
   DISCOVERY_JSON=$(jq '
+    # 1. Strip free-text fields entirely. This is a denylist — see the
+    # note below about a future allowlist conversion.
     walk(if type == "object" then
       del(.newest_commit_subjects, .breaking_lines, .description,
-          .release_notes, .commit_messages, .changelog)
+          .release_notes, .commit_messages, .changelog,
+          .dirty_files, .errors, .updates)
     else . end)
+    # 2. Cap every remaining string at 256 chars. Bounded ID-shaped fields
+    # (formula names, version strings, paths) fit comfortably; anything
+    # longer is either a synthesis bug or a payload smuggled through a
+    # field that survived (1).
+    | walk(if type == "string" then .[0:256] else . end)
   ' <<<"$DISCOVERY_JSON_RAW")
 fi
 ```
 
 Strict mode is required on this block: silent `jq` failure (malformed input, missing binary at runtime despite the `command -v` check, OOM) would leave `DISCOVERY_JSON` unset and the synthesizer would receive the unsanitized `DISCOVERY_JSON_RAW` via fallback expansion elsewhere — defeating the prompt-injection defense from CRIT-1+2. `set -e` aborts the apply pipeline so the failure is visible instead of silently downgrading to unsanitized input.
+
+This is still a **denylist** approach. A future v1.3 should convert it to an allowlist projection (`select(.key | IN("name","path",...))`) so newly-introduced upstream fields cannot carry payloads through to the synthesizer by default. The denylist is sufficient as long as the scout schemas don't grow new free-text fields without updating this filter; the 256-char cap is the defense against that drift.
 
 The stripped fields are still surfaced to the user verbatim in Step 4
 (Apply Skill Updates) where they belong — as a changelog the human reads

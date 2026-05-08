@@ -1,6 +1,6 @@
 ---
 name: upkeep:audit
-version: 1.2.1
+version: 1.2.2
 author: KyleNesium
 description: |
   Full 15-phase macOS disk audit — report only, no changes made.

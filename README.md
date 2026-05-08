@@ -359,6 +359,8 @@ Prompt-based skill — no executable source code. Tested via live invocation aga
 | `/upkeep:audit` | All 15 phases, zero mutations, accurate size reporting |
 | `/upkeep:update` (Linux / WSL2) | Sub-mode detection, sequential skill + package discovery, per-category gates |
 | `/upkeep:update` (macOS, v1.1) | Parallel scouts, compatibility synthesizer, single approval gate, parallel apply, post-flight (brew doctor, PATH shadow, deprecation aggregator), history-tuned ETA |
+| `/upkeep:update` (security, v1.2) | Hardcoded apply dispatcher (no `eval`), allowlisted tool ids, denylist + length-cap discovery sanitization, exact-match remote URL validation, first-encounter trust gate for third-party skill repos, Discover/Approve/Apply turn separation, atomic + `flock`-serialized history writer |
+| `/upkeep:update` (regression-fix, v1.2.2) | macOS skills apply phase actually pulls trusted git skill repos (was a silent no-op since v1.2.0); skills-scout no longer fetches from untrusted remotes; router Update Mode redirects to `/upkeep:update` instead of duplicating its logic |
 
 ---
 

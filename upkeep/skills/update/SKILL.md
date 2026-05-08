@@ -1,6 +1,6 @@
 ---
 name: upkeep:update
-version: 1.1.0-dev
+version: 1.2.1
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep. On macOS, four parallel
@@ -524,6 +524,7 @@ Set up race-free accumulators for upgraded names. These feed Step 4m's
 PATH-shadow and resolution-recheck loops:
 
 ```bash
+set -euo pipefail
 UPGRADED_FORMULAS_FILE=$(mktemp)
 UPGRADED_TOOLS_FILE=$(mktemp)
 # Single-quoted body so variable expansion happens at trap-fire time, not
@@ -531,6 +532,8 @@ UPGRADED_TOOLS_FILE=$(mktemp)
 # can't break out of the rm.
 trap 'rm -f -- "$UPGRADED_FORMULAS_FILE" "$UPGRADED_TOOLS_FILE"' EXIT
 ```
+
+Strict mode here is intentional: if `mktemp` fails, the trap would otherwise expand to `rm -f -- ""` and silently no-op, leaving subsequent `>>"$UPGRADED_FORMULAS_FILE"` redirects with an unset path. `set -u` aborts at the first failed `mktemp` instead of letting the orchestrator run on a half-initialized state.
 
 Iterate `plan.ordered_groups`:
 
@@ -643,6 +646,7 @@ the synthesizer from emitting attacker-influenced `manual_steps`,
 `warnings`, or category orderings.
 
 ```bash
+set -euo pipefail
 if command -v jq >/dev/null 2>&1; then
   DISCOVERY_JSON=$(jq '
     walk(if type == "object" then
@@ -652,6 +656,8 @@ if command -v jq >/dev/null 2>&1; then
   ' <<<"$DISCOVERY_JSON_RAW")
 fi
 ```
+
+Strict mode is required on this block: silent `jq` failure (malformed input, missing binary at runtime despite the `command -v` check, OOM) would leave `DISCOVERY_JSON` unset and the synthesizer would receive the unsanitized `DISCOVERY_JSON_RAW` via fallback expansion elsewhere — defeating the prompt-injection defense from CRIT-1+2. `set -e` aborts the apply pipeline so the failure is visible instead of silently downgrading to unsanitized input.
 
 The stripped fields are still surfaced to the user verbatim in Step 4
 (Apply Skill Updates) where they belong — as a changelog the human reads

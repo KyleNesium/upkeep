@@ -231,6 +231,16 @@ Everything is confirmation-gated. Nothing applies without your approval. Destruc
 
 On macOS, v1.1 introduces a parallel discovery + compatibility-aware single-gate flow (see Update section above). Linux & WSL2 continue to use the v1.0 sequential per-category gates pending v1.1.x port.
 
+### v1.3: AI update advisor (macOS)
+
+Discovery and apply remained hardcoded for security (see v1.2 hardening), but v1.3 wraps three reasoning agents around them so the approval gate and final report tell you *what each upgrade means*, not just *what's outdated*:
+
+- **`changelog-reader`** — for every major bump and every cross-manager-flagged upgrade, fetches official release notes from an allowlisted set of upstream hosts (`github.com`, `nodejs.org`, `python.org`, `rubygems.org`, etc.) and returns a severity grade (`low|medium|high|critical`), a one-sentence summary, the concrete breaking changes, and any CVEs explicitly fixed. The grep-CHANGELOG approach from v1.2 is replaced.
+- **`project-impact`** — walks your workspace roots (`~/workspace`, `~/Github`, `~/Projects`, `~/src`, `~/code`, `~/dev` — whichever exist) and reads per-language manifests (`package.json`, `Gemfile`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `.tool-versions`, `Dockerfile`) to surface "node 26 will affect N of your projects" callouts. Reads only — never executes manifest scripts.
+- **`failure-diagnoser`** — fires only when something actually failed during apply. Reads the relevant log excerpt and identifies the root cause from known patterns (missing build deps, version constraints, permission errors, broken native modules after brew major bump), then proposes 1–3 ranked fix options. **All suggested commands are surfaced as text only and are never auto-executed** — you copy them into your shell yourself.
+
+The advisor is layered on top of the v1.2 hardcoded-dispatcher contract: none of these agents author shell commands the orchestrator will execute, all their outputs pass through allowlist-projection sanitization, and the diagnoser's `command` field has an additional denylist scrub for destructive patterns (`rm -rf`, `--force`, `chmod 777`, `curl | sh`, etc.).
+
 When you run `/upkeep` it checks once per day whether a newer version is available. Both install layouts are supported: git-cloned skills compare `HEAD` against `origin/main`, and plugin-managed installs compare the installed `plugin.json` against the marketplace clone. If the check finds an update, you'll be asked whether to update first or continue with the current version. The narrow entrypoints (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`) skip the check — re-enter via `/upkeep` if you want the prompt.
 
 To disable the daily check entirely: `export UPKEEP_SKIP_UPDATE_CHECK=1`

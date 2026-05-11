@@ -5,6 +5,151 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-11
+
+### Added
+
+- **`/upkeep:update` becomes an update *advisor* — three new agents wired into
+  the macOS parallel flow.** Discovery and apply remain hardcoded for the
+  reasons set out in v1.2's prompt-injection hardening, but the user-facing
+  approval gate and final report are now backed by reasoning agents that
+  convert raw version bumps into "here's what breaks for you" prose.
+
+  - **Step 2.5m — `changelog-reader` agent.** Fires after the synthesizer
+    plan is built and before the approval gate. Filters the plan to every
+    `bump: major` item plus anything that materialised a `severity: medium`
+    or `severity: high` edge in `compatibility.json`, capped at 8 items.
+    Fetches official release notes from an allowlist of upstream hosts
+    (`github.com`, `nodejs.org`, `python.org`, `ruby-lang.org`,
+    `rubygems.org`, `pypi.org`, `npmjs.com`, `formulae.brew.sh`,
+    `astral.sh`, `bun.sh`, `deno.com`, `rust-lang.org`, `go.dev`,
+    `golang.org`, `gitlab.com`, `raw.githubusercontent.com`) and returns
+    structured per-item summaries: `severity` (low/medium/high/critical),
+    one-sentence plain-English `summary`, ≤ 3 concrete `breaking[]`
+    changes, fixed `cves[]` IDs, and an optional `action_required`
+    imperative (e.g. "Re-build native modules after upgrade").
+
+    Replaces the v1.2 naive `grep -E "BREAKING\|Breaking"` against
+    CHANGELOG.md, which only fired for git-cloned skills and never read
+    upstream brew/npm/gem release notes. The grep approach gave the
+    illusion of risk analysis without actually doing any.
+
+  - **Step 2.5m — `project-impact` agent.** Runs in parallel with
+    `changelog-reader`. Walks an allowlisted set of workspace roots
+    (`~/workspace`, `~/Github`, `~/Projects`, `~/src`, `~/code`,
+    `~/dev` — only the ones that exist) up to depth 4 for `.git/`
+    directories, then inspects per-language manifests (`package.json`
+    `engines.node`, `Gemfile` `ruby` directive + native-ext gems,
+    `requirements.txt`/`pyproject.toml`/`Pipfile` + native-ext packages,
+    `go.mod`, `Cargo.toml`, `.python-version`, `.ruby-version`,
+    `.tool-versions`, `.nvmrc`, `.node-version`, `Dockerfile` FROM lines).
+    Returns "node 26 affects 3 of your projects: foo, bar, baz"
+    callouts so the user sees concrete consequences before approving
+    an upgrade.
+
+  - **Step 4.5m — `failure-diagnoser` agent.** Fires only when at least
+    one apply step recorded a non-zero RC OR the per-tool log matched a
+    known partial-failure pattern (e.g. `gem update` returning RC=0
+    while four gems failed to compile). Spawns one agent call per
+    failing tool, in parallel, with a 200-line / 16 KB cap on the log
+    excerpt. Identifies root causes from common patterns ("requires
+    Ruby ≥ X", `EACCES`, `checking for ... no`, `no compatible version
+    found`, broken pipx venv after Python bump, dyld native-module
+    break after brew upgrade) and proposes 1–3 ordered `fix_options`,
+    each with a single short `command` string, a `risk` rating, and a
+    rationale.
+
+    Today's Ruby 2.6 / psych failure would have surfaced as: *"psych,
+    sqlite3, stringio, tracer require Ruby ≥ 2.7; system Ruby is 2.6.
+    Recommended fix: `brew install mise` then `mise use -g ruby@3.3`.
+    Alternative: leave system Ruby pinned and accept partial gem
+    coverage."* Instead of leaving the user to grep through the
+    apply log themselves.
+
+- **WebFetch added to `allowed-tools`** — required for `changelog-reader`.
+  Scoped to an explicit upstream-host allowlist enforced inside the agent
+  prompt; the agent is instructed to set `source: "unavailable"` for any
+  other host and skip the fetch.
+
+- **Advisor block in approval-gate render.** Between "Risks flagged"
+  and "Manual steps", the plan now shows up to 8 release-note summaries
+  and up to 50 project-impact entries (20 per tool). Sub-sections are
+  omitted when their source array is empty. If `jq` is missing, the
+  block is replaced by a single one-line note: `Advisor: skipped (jq
+  unavailable)`.
+
+- **Failures-observed block in final report.** Above "Risks observed",
+  the diagnoser's output renders as `tool [SEVERITY]: root_cause` with
+  failing items listed and 1–3 lettered fix options. Suggested
+  commands are prefixed with `$ ` and labeled "copy to run yourself —
+  NOT auto-executed". The orchestrator is contractually forbidden from
+  executing these commands in the same turn or any subsequent turn
+  without explicit user instruction.
+
+- **New `◐ partial` row symbol** in the Update Report for categories
+  where at least one item failed. Every `◐ partial` row is guaranteed
+  to be backed by a diagnosis in the Failures Observed block above it.
+
+- **Advisor count on the Informational line.** Adds
+  `Advisor  changelog: N items / project-impact: M projects` so the
+  reader knows enrichment data exists in the report even if a long
+  section wrapped off-screen.
+
+### Security
+
+- **Same hardcoded-dispatcher contract as v1.2.** None of the three new
+  agents author shell commands the orchestrator will execute. The
+  `changelog-reader` returns prose summaries; the `project-impact`
+  returns paths + manifest filenames; the `failure-diagnoser` returns
+  `command` strings that are explicitly surfaced as TEXT ONLY in the
+  report and never auto-executed.
+- **Allowlist projection on all three agents' outputs.** Step 2.5m
+  filters `CHANGELOG_JSON` and `PROJECT_JSON` through `jq` walks that
+  keep only documented keys and cap every string at 280 chars. Step
+  4.5m runs the same projection on `DIAGNOSIS_JSON` plus a
+  defense-in-depth scrub that drops any `fix_option` whose `command`
+  matches `rm -rf`, `--no-verify`, `--force`, `push --force`,
+  `chmod 777`, `sudo rm`, or `curl ... | ...sh` patterns. False
+  negatives are acceptable (user can always read the log) — false
+  positives where a malicious agent output reaches the user's clipboard
+  are the failure case being guarded against.
+- **`project-impact` search roots are built orchestrator-side** from a
+  hardcoded `CANDIDATE_ROOTS` array; only directories that pass
+  `[ -d "$root" ]` are passed in. The agent is instructed to skip any
+  `search_root` resolving outside `$HOME` and any path under `/private`,
+  `/tmp`, or `/var`. No agent-supplied path ever drives a filesystem
+  read in the orchestrator.
+- **`changelog-reader` cannot pivot beyond the input list.** The prompt
+  explicitly forbids fetching URLs discovered inside fetched content —
+  only URLs constructed from the input item fields are allowed. The
+  WebFetch tool itself enforces no constraint here; the prompt is the
+  control.
+
+### Changed
+
+- `allowed-tools` gains `Grep` and `WebFetch`. `Grep` enables Step
+  4.5m's pattern-detection loops; `WebFetch` is the changelog-reader's
+  only outbound dependency.
+- The Step 3m apply-orchestration trap now cleans up the new
+  `$FAILURE_LOG_FILE` alongside `$UPGRADED_FORMULAS_FILE` and
+  `$UPGRADED_TOOLS_FILE`.
+- The dispatcher's per-tool `case` block writes hard failures
+  (`RC != 0`) and detected partial failures (RC=0 + log pattern) to
+  `$FAILURE_LOG_FILE` so Step 4.5m can fire only when there's
+  something to diagnose.
+
+### Unchanged
+
+- Hardcoded dispatcher command table (v1.2.0).
+- Discovery JSON sanitization, allowlist length cap, exact-match
+  remote URL validation (v1.2.0–v1.2.2).
+- Trust-on-first-use for third-party skill repos (v1.2.0); the
+  changelog-reader and project-impact agents never trigger trust
+  prompts because they don't fetch from skill remotes.
+- Linux/WSL2 sequential flow (v1.0). The v1.3 advisor agents are
+  macOS-only for now; Linux/WSL2 parity is targeted for v1.5.
+- Cleanup skills (audit, cleandeep, cleanquick, upkeep).
+
 ## [1.2.2] - 2026-05-08
 
 ### Fixed

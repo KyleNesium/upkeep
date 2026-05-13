@@ -145,6 +145,47 @@ the plugin surfaced four more issues in the same risk classes.
   A find result starting with `-` would be parsed as a flag. Added
   `--` before `{}` so the literal path is always treated as a path.
 
+### Fixed (third pass — codex challenge against the v1.3.1 patch series)
+
+Codex re-reviewed the cumulative diff in adversarial mode to look for
+regressions the fixes introduced. Three more concrete issues surfaced.
+
+- **The dispatcher's partial-failure detection was still grepping the
+  global `$LOG`.** The second-pass fix migrated the Step 4.5m
+  *documentation* block to `$PER_TOOL_LOG`, but the hot path is the
+  copy embedded in the dispatcher (immediately after each tool's RC is
+  captured) — and that copy still read from the interleaved global
+  log. Under parallel apply, a `^npm (ERR|error)` line written by a
+  concurrent `npm` upgrade would have flipped the `pipx` row to
+  `partial` (or vice versa). Migrated the dispatcher copy too. The
+  `brew` formula extraction (`grep "^==> Upgrading" … >> UPGRADED_FORMULAS_FILE`)
+  also moved to `$PER_TOOL_LOG` for the same reason — pre-fix, a
+  cross-tool `==> Upgrading` line could plant a fake formula name in
+  the post-flight resolution-recheck list.
+
+- **`SEARCH_ROOTS_JSON` hard-required `jq`.** The first-pass fix
+  switched the JSON assembly from string concatenation to
+  `jq -R . | jq -s -c .`, but Step 2.5m's surrounding text
+  ("If `jq` is unavailable, skip enrichment rendering entirely") said
+  the section should degrade gracefully. The new pipe aborts on `jq`
+  absence instead of falling back, breaking enrichment on minimal
+  Linux installs. Guarded with `command -v jq` and reinstated a
+  hand-built encoder for the fallback path, with `sed`-based escaping
+  for `"`, `\`, tab, and newline so a `$HOME` with unusual characters
+  still produces valid JSON.
+
+- **Dispatcher's `cmd ; RC=$?` would abort under `set -euo pipefail`.**
+  The orchestration block at the top of Step 3m sets strict mode; the
+  dispatcher case ran later under the same fence (when the LLM
+  preserves the shell session across the rendering boundary). With
+  strict mode active, a failing `brew upgrade` aborts the dispatcher
+  loop *before* `RC=${PIPESTATUS[0]}` runs, contradicting the
+  documented "a failure on one tool never blocks others" contract.
+  Switched every dispatcher invocation to `RC=0; cmd … || RC=${PIPESTATUS[0]}`
+  — `||` puts the pipeline in a conditional context, so `set -e`
+  doesn't fire, and `PIPESTATUS` at the `||` site still reflects the
+  failed pipeline.
+
 ### Notes
 
 - Self-update check on macOS may briefly flag pre-1.3.1 plugin-cache
@@ -153,6 +194,15 @@ the plugin surfaced four more issues in the same risk classes.
   `/plugin update upkeep` once to converge.
 - No changes to Linux/WSL2 apply commands themselves, the macOS
   cleanup phases, or the `audit` / `upkeep` skills.
+- The cross-fence state persistence question (does `_T_START` survive
+  from the apply-orchestration setup fence into the Step 5m history
+  writer?) remains as documented — the LLM is expected to hold the
+  `_T_START` value in its context across the intervening fences. If
+  it doesn't, the `${_T_START:-$SECONDS}` default produces a
+  `MINUTES_JSON` of 0 rather than aborting; the history entry shows
+  a 0-minute run instead of leaking a strict-mode trip into the user-
+  visible report. Promoting this to a file-backed anchor is left for
+  a future release.
 
 ## [1.3.0] - 2026-05-11
 

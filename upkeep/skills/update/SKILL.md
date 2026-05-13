@@ -567,11 +567,29 @@ for ROOT in "${CANDIDATE_ROOTS[@]}"; do
   [ -n "$REAL" ] && RESOLVED_ROOTS+=("$REAL")
 done
 # De-duplicate (two candidates may resolve to the same target).
-if [ "${#RESOLVED_ROOTS[@]}" -gt 0 ]; then
+# v1.3.1: `jq` is the preferred encoder for safety against unusual
+# characters in $HOME, but Step 2.5m is documented to gracefully
+# degrade when `jq` is missing — so fall back to a hand-quoted encoder
+# in that case rather than aborting the whole enrichment phase. The
+# fallback's input is orchestrator-controlled (`$HOME/<literal>`), so
+# the worst-case input is a $HOME containing characters that need
+# JSON-escaping; `sed` handles `"`, `\`, and tab/newline.
+if [ "${#RESOLVED_ROOTS[@]}" -eq 0 ]; then
+  SEARCH_ROOTS_JSON='[]'
+elif command -v jq >/dev/null 2>&1; then
   SEARCH_ROOTS_JSON=$(printf '%s\n' "${RESOLVED_ROOTS[@]}" | sort -u \
     | jq -R . | jq -s -c .)
 else
-  SEARCH_ROOTS_JSON='[]'
+  # Hand-built fallback. Escape ", \, tab, newline per RFC 8259 §7.
+  SEARCH_ROOTS_JSON='['
+  SEP=''
+  while IFS= read -r ROOT; do
+    ESC=$(printf '%s' "$ROOT" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+      -e ':a;N;$!ba;s/\n/\\n/g' -e 's/\t/\\t/g')
+    SEARCH_ROOTS_JSON="${SEARCH_ROOTS_JSON}${SEP}\"${ESC}\""
+    SEP=','
+  done < <(printf '%s\n' "${RESOLVED_ROOTS[@]}" | sort -u)
+  SEARCH_ROOTS_JSON="${SEARCH_ROOTS_JSON}]"
 fi
 ```
 
@@ -1042,42 +1060,52 @@ Each tool command:
    global `"$LOG"`. The per-tool log is what Step 4.5m's `failure-diagnoser`
    reads, replacing the v1.3.0 `tail -200 "$LOG"` which gave every diagnosis
    the same global tail (wrong root cause under parallel apply). `PIPESTATUS[0]`
-   propagates the tool's RC past the `tee` so failure detection is unchanged.
+   propagates the tool's RC past the `tee`.
+
+   The `RC=0; cmd … || RC=${PIPESTATUS[0]}` shape is intentional: if the
+   apply-orchestration setup's `set -euo pipefail` is still in effect for
+   this fence (per the LLM's execution model), the bare `cmd; RC=$?`
+   form would abort on the first failing tool — directly contradicting
+   the "a failure on one tool never blocks others" contract. The `|| RC=…`
+   form puts the pipeline in a conditional context, so `set -e` does not
+   fire, and `PIPESTATUS` at the moment `||` runs still reflects the
+   failed pipeline.
 
    ```bash
    PER_TOOL_LOG="$LOG_DIR/$TOOL.log"
+   RC=0
    case "$TOOL" in
      brew)
-       brew update >/dev/null 2>&1
-       brew upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+       brew update >/dev/null 2>&1 || true
+       brew upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        ;;
      npm)
-       npm update -g 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+       npm update -g 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        ;;
      pipx)
-       pipx upgrade-all 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+       pipx upgrade-all 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        ;;
      gems)
        # The only synthesizer-chosen flag; treated as a boolean, not a string.
        USER_INSTALL=$(jq -r ".tool_specs.gems.user_install // false" <<<"$PLAN_JSON")
        if [ "$USER_INSTALL" = "true" ]; then
-         gem update --user-install 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+         gem update --user-install 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        else
-         gem update 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+         gem update 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        fi
        ;;
      uv)
-       uv self update 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+       uv self update 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        ;;
      bun)
-       bun upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+       bun upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        ;;
      mas)
-       mas upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+       mas upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        ;;
      macos)
        # Restart warning has its own AskUserQuestion in Step 3m above.
-       softwareupdate -ia 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
+       softwareupdate -ia 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG" || RC=${PIPESTATUS[0]}
        ;;
      skills)
        # Marker only — the actual `git pull` for each skill ran in the
@@ -1096,7 +1124,10 @@ Each tool command:
      RESULT="ok"
      case "$TOOL" in
        brew)
-         grep -E "^==> Upgrading" "$LOG" | awk '{print $3}' | cut -d/ -f1 \
+         # v1.3.1: read from $PER_TOOL_LOG so a brew error message that
+         # happened to contain "==> Upgrading" can't accidentally inject
+         # a fake formula name when another tool also wrote that pattern.
+         grep -E "^==> Upgrading" "$PER_TOOL_LOG" | awk '{print $3}' | cut -d/ -f1 \
            >> "$UPGRADED_FORMULAS_FILE"
          ;;
        *)
@@ -1106,18 +1137,22 @@ Each tool command:
      # v1.3: detect partial-failure patterns even when RC=0 so the
      # diagnoser fires for cases like `gem update` returning 0 while
      # individual gems failed to compile.
+     # v1.3.1: grep $PER_TOOL_LOG, not the interleaved global $LOG —
+     # codex review pass 2 found this block was the *actual* hot path
+     # for partial-failure detection (the matching block in Step 4.5m
+     # was already fixed but was documentation only).
      case "$TOOL" in
        gems)
-         grep -q "^ERROR:  Error installing" "$LOG" 2>/dev/null \
+         grep -q "^ERROR:  Error installing" "$PER_TOOL_LOG" 2>/dev/null \
            && printf 'gems\t0\tpartial\n' >> "$FAILURE_LOG_FILE" ;;
        npm)
-         grep -qE "^npm (ERR|error)" "$LOG" 2>/dev/null \
+         grep -qE "^npm (ERR|error)" "$PER_TOOL_LOG" 2>/dev/null \
            && printf 'npm\t0\tpartial\n' >> "$FAILURE_LOG_FILE" ;;
        brew)
-         grep -qE "^Error: " "$LOG" 2>/dev/null \
+         grep -qE "^Error: " "$PER_TOOL_LOG" 2>/dev/null \
            && printf 'brew\t0\tpartial\n' >> "$FAILURE_LOG_FILE" ;;
        pipx)
-         grep -qE "^(Error|⚠)" "$LOG" 2>/dev/null \
+         grep -qE "^(Error|⚠)" "$PER_TOOL_LOG" 2>/dev/null \
            && printf 'pipx\t0\tpartial\n' >> "$FAILURE_LOG_FILE" ;;
      esac
    else

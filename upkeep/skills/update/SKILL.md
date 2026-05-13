@@ -1,6 +1,6 @@
 ---
 name: upkeep:update
-version: 1.3.0
+version: 1.3.1
 author: KyleNesium
 description: |
   Update AI skills and package managers in one sweep — with an advisor layer
@@ -534,25 +534,45 @@ in parallel.
 Build the `search_roots` array in the orchestrator so the agent never
 reads from arbitrary paths a malicious upstream tried to inject:
 
+v1.3.1: the candidate list is a superset of `/upkeep` Phase 8's workspace
+discovery (`apple-system-dirs.md` neighbours) so the advisor and the
+cleanup phase agree on what counts as a project root. Each candidate is
+canonicalized via `pwd -P` so symlinked workspace roots resolve to their
+real path before the agent walks them — agents reject paths outside
+`search_roots`, and a symlink that the orchestrator passed as
+`~/workspace` but the agent saw as `/Volumes/work/foo` would be rejected
+mid-scan. The JSON array is assembled by `jq -R . | jq -s .` so unusual
+characters in `$HOME` cannot corrupt the payload.
+
 ```bash
 set -euo pipefail
 CANDIDATE_ROOTS=(
   "$HOME/workspace"
   "$HOME/Github"
   "$HOME/Projects"
+  "$HOME/projects"
+  "$HOME/Developer"
   "$HOME/src"
   "$HOME/code"
   "$HOME/dev"
+  "$HOME/repos"
+  "$HOME/Documents"
 )
-SEARCH_ROOTS_JSON='['
-SEP=''
+RESOLVED_ROOTS=()
 for ROOT in "${CANDIDATE_ROOTS[@]}"; do
-  if [ -d "$ROOT" ]; then
-    SEARCH_ROOTS_JSON="${SEARCH_ROOTS_JSON}${SEP}\"$ROOT\""
-    SEP=','
-  fi
+  [ -d "$ROOT" ] || continue
+  # `cd -P + pwd -P` is portable across macOS (no coreutils dep) and
+  # resolves any symlink in the path. Skip silently if the resolve fails.
+  REAL=$( (cd -P -- "$ROOT" 2>/dev/null && pwd -P) ) || continue
+  [ -n "$REAL" ] && RESOLVED_ROOTS+=("$REAL")
 done
-SEARCH_ROOTS_JSON="${SEARCH_ROOTS_JSON}]"
+# De-duplicate (two candidates may resolve to the same target).
+if [ "${#RESOLVED_ROOTS[@]}" -gt 0 ]; then
+  SEARCH_ROOTS_JSON=$(printf '%s\n' "${RESOLVED_ROOTS[@]}" | sort -u \
+    | jq -R . | jq -s -c .)
+else
+  SEARCH_ROOTS_JSON='[]'
+fi
 ```
 
 Empty array → `project-impact` agent returns an empty result without
@@ -779,15 +799,26 @@ skill repos to trust. Per untrusted remote, emit one option:
 > Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
 > A) Trust this remote (remember for future runs)
 > B) Skip this skill this run
-> C) Show recent commits from origin first
 
-On A, append `<url>` to `~/.claude/data/upkeep-skill-trust.json` and
-re-run Scout 1's discovery for that single repo (fetch + commits-behind +
-changelog) so the approval-gate plan summary reflects what's actually
-about to apply. On B, leave the entry `untrusted: true` — Step 3m's
-skills-apply phase will skip it. On C, show the commits-behind list from
-the remote (via a one-shot `git ls-remote` or `git fetch` deferred until
-trust is granted) and re-prompt A/B.
+v1.3.1: the gate is strictly trust-or-skip. The v1.3.0 "show recent
+commits from origin first" option was a network-before-trust footgun —
+it required `git fetch` against the same untrusted remote whose
+trustworthiness the user was about to decide on, exactly contradicting
+the "no network call to an untrusted remote" contract this gate exists
+to enforce. Users who want a preview before trusting must trust-then-
+review-then-revoke, which is the same effort but cannot be tricked into
+a hidden fetch.
+
+On A, append `<url>` to `~/.claude/data/upkeep-skill-trust.json`
+**keyed by exact-match remote URL** (NOT by repo path — paths drift
+when users move skills between directories, and a path-keyed trust
+decision would silently grant trust to whatever new remote the user
+sets at the same path later). The JSON shape is `{"<url>": {"trusted_at":
+"<ISO-8601>", "first_seen_repo": "<name>"}}`. Re-run Scout 1's discovery
+for the now-trusted repo (fetch + commits-behind + changelog) so the
+approval-gate plan summary reflects what's actually about to apply.
+On B, leave the entry `untrusted: true` — Step 3m's skills-apply phase
+will skip it.
 
 This gate is its own turn — end the turn at the `AskUserQuestion`. Do not
 proceed to the single approval gate or the dispatcher in the same turn.
@@ -840,8 +871,28 @@ Single `AskUserQuestion`:
 - B) Drop categories
 - C) Cancel
 
-If "Drop categories", emit a second multi-select `AskUserQuestion` with one
-option per category in the plan.
+If "Drop categories", **end this turn** at a second multi-select
+`AskUserQuestion` with one option per category in the plan.
+
+v1.3.1: dropping categories is **intent only**. After the user picks which
+categories to drop, end the turn again. In the next turn:
+
+1. Rebuild `PLAN_JSON` by filtering `ordered_groups[].tools[]` to remove
+   the dropped categories, then re-render the plan summary (Risks
+   flagged / Release notes / Affects your projects / Manual steps / ETA
+   / Disk free) against the filtered plan. The ETA and advisor sections
+   must reflect what is actually about to apply, not the original plan.
+2. End the turn at a final confirmation `AskUserQuestion`:
+   - A) Apply filtered plan (recommended)
+   - B) Cancel
+
+Only proceed to the dispatcher on `A` of this final gate. The two-turn
+shape is intentional: pre-1.3.1, the model could read the multi-select
+response and apply immediately with stale plan context (the original
+Risks / Manual steps still referenced the dropped categories). Three
+distinct gates (`Apply all/Drop/Cancel` → `pick categories` → `Apply
+filtered/Cancel`) keep every Apply action tied to the exact plan summary
+the user just saw.
 
 ### Apply orchestration
 
@@ -851,15 +902,23 @@ PATH-shadow and resolution-recheck loops:
 ```bash
 set -euo pipefail
 UPGRADED_FORMULAS_FILE=$(mktemp)
-UPGRADED_TOOLS_FILE=$(mktemp)
-FAILURE_LOG_FILE=$(mktemp)  # v1.3: populated per-tool for Step 4.5m diagnoser
+UPGRADED_TOOLS_FILE=$(mktemp)         # binary/tool ids only — consumed by Step 4m `command -v`
+UPDATED_SKILLS_FILE=$(mktemp)         # human-readable "<name> <from> → <to>" rows for the report
+FAILURE_LOG_FILE=$(mktemp)            # v1.3: populated per-tool for Step 4.5m diagnoser
+DEPRECATION_LOG=$(mktemp)             # populated by `tee -a` from dispatcher; read by Step 4m post-flight
+LOG_DIR=$(mktemp -d)                  # v1.3.1: per-tool logs live here — fixes diagnoser cross-talk
+LOG="$LOG_DIR/run.log"                # global apply log (concatenation of per-tool output)
+: >"$LOG"                             # truthify the file so `[ -s "$LOG" ]` works before any tool runs
 # Single-quoted body so variable expansion happens at trap-fire time, not
 # trap-set time. Quoted vars + `--` so paths with spaces or leading dashes
-# can't break out of the rm.
-trap 'rm -f -- "$UPGRADED_FORMULAS_FILE" "$UPGRADED_TOOLS_FILE" "$FAILURE_LOG_FILE"' EXIT
+# can't break out of the rm. `rm -rf -- "$LOG_DIR"` cleans both the per-tool
+# logs and the global LOG it contains.
+trap 'rm -f -- "$UPGRADED_FORMULAS_FILE" "$UPGRADED_TOOLS_FILE" "$UPDATED_SKILLS_FILE" "$FAILURE_LOG_FILE" "$DEPRECATION_LOG"; rm -rf -- "$LOG_DIR"' EXIT
 ```
 
 Strict mode here is intentional: if `mktemp` fails, the trap would otherwise expand to `rm -f -- ""` and silently no-op, leaving subsequent `>>"$UPGRADED_FORMULAS_FILE"` redirects with an unset path. `set -u` aborts at the first failed `mktemp` instead of letting the orchestrator run on a half-initialized state.
+
+`UPGRADED_TOOLS_FILE` is reserved for **tool ids only** (`brew`, `npm`, `gems`, …) because Step 4m's resolution re-check iterates it as `command -v "$TOOL"`. Human-readable skill rows (`upkeep 1.3.0 → 1.3.1`) go into `UPDATED_SKILLS_FILE` and are surfaced in the final report — mixing the two breaks the PATH-shadow loop.
 
 Iterate `plan.ordered_groups`:
 
@@ -905,6 +964,16 @@ if ! git -C "$REPO_PATH" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
   continue
 fi
 
+# Capture the pre-pull version BEFORE the fetch so the report can render
+# "from → to". Same fallback chain as NEW_VERSION below. `|| echo "?"` so
+# `set -u` never trips on a missing VERSION/plugin.json (v1.3.1 fix).
+CURRENT_VERSION=$(
+  tr -d '[:space:]' < "$REPO_PATH/VERSION" 2>/dev/null \
+  || (grep -m1 '"version"' "$REPO_PATH/.claude-plugin/plugin.json" 2>/dev/null \
+       | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/') \
+  || echo "?"
+)
+
 # Hardcoded git command — branch is from `git symbolic-ref` (bounded to a
 # valid ref name), path is validated above. No synthesizer-authored strings.
 BRANCH=$(git -C "$REPO_PATH" symbolic-ref --short HEAD)
@@ -917,7 +986,10 @@ if [ "$SKILL_RC" = "0" ]; then
     || grep -m1 '"version"' "$REPO_PATH/.claude-plugin/plugin.json" 2>/dev/null \
        | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
     || echo "?")
-  echo "$REPO_NAME $CURRENT_VERSION → $NEW_VERSION" >> "$UPGRADED_TOOLS_FILE"
+  # v1.3.1: write to UPDATED_SKILLS_FILE (human-readable rows for the report),
+  # NOT UPGRADED_TOOLS_FILE — the latter is iterated by Step 4m's `command -v`
+  # resolution check and must contain only valid tool ids.
+  echo "$REPO_NAME $CURRENT_VERSION → $NEW_VERSION" >> "$UPDATED_SKILLS_FILE"
 else
   echo "$REPO_NAME pull failed (rc=$SKILL_RC)" >> "$DEPRECATION_LOG"
 fi
@@ -954,39 +1026,46 @@ Each tool command:
 2. Capture wall time with `time` or `$SECONDS` deltas.
 3. Run the command directly (no `eval`, no string concatenation):
 
+   v1.3.1: every command writes to `"$LOG_DIR/$TOOL.log"` AND appends to the
+   global `"$LOG"`. The per-tool log is what Step 4.5m's `failure-diagnoser`
+   reads, replacing the v1.3.0 `tail -200 "$LOG"` which gave every diagnosis
+   the same global tail (wrong root cause under parallel apply). `PIPESTATUS[0]`
+   propagates the tool's RC past the `tee` so failure detection is unchanged.
+
    ```bash
+   PER_TOOL_LOG="$LOG_DIR/$TOOL.log"
    case "$TOOL" in
      brew)
        brew update >/dev/null 2>&1
-       brew upgrade >>"$LOG" 2>&1; RC=$?
+       brew upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        ;;
      npm)
-       npm update -g >>"$LOG" 2>&1; RC=$?
+       npm update -g 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        ;;
      pipx)
-       pipx upgrade-all >>"$LOG" 2>&1; RC=$?
+       pipx upgrade-all 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        ;;
      gems)
        # The only synthesizer-chosen flag; treated as a boolean, not a string.
        USER_INSTALL=$(jq -r ".tool_specs.gems.user_install // false" <<<"$PLAN_JSON")
        if [ "$USER_INSTALL" = "true" ]; then
-         gem update --user-install >>"$LOG" 2>&1; RC=$?
+         gem update --user-install 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        else
-         gem update >>"$LOG" 2>&1; RC=$?
+         gem update 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        fi
        ;;
      uv)
-       uv self update >>"$LOG" 2>&1; RC=$?
+       uv self update 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        ;;
      bun)
-       bun upgrade >>"$LOG" 2>&1; RC=$?
+       bun upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        ;;
      mas)
-       mas upgrade >>"$LOG" 2>&1; RC=$?
+       mas upgrade 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        ;;
      macos)
        # Restart warning has its own AskUserQuestion in Step 3m above.
-       softwareupdate -ia >>"$LOG" 2>&1; RC=$?
+       softwareupdate -ia 2>&1 | tee -a "$PER_TOOL_LOG" >> "$LOG"; RC=${PIPESTATUS[0]}
        ;;
      skills)
        # Marker only — the actual `git pull` for each skill ran in the
@@ -1082,7 +1161,10 @@ After all groups complete, populate the env vars Step 4m consumes:
 ```bash
 UPGRADED_FORMULAS=$(sort -u "$UPGRADED_FORMULAS_FILE" | tr '\n' ' ')
 UPGRADED_TOOLS=$(sort -u "$UPGRADED_TOOLS_FILE" | tr '\n' ' ')
-export UPGRADED_FORMULAS UPGRADED_TOOLS
+# v1.3.1: skills lines stay newline-delimited (the report renders one row
+# each); only export the path so Step 5m can read it without space-mangling
+# "<name> X → Y" entries.
+export UPGRADED_FORMULAS UPGRADED_TOOLS UPDATED_SKILLS_FILE
 ```
 
 A failure in one tool **never blocks others** in the same or later groups.
@@ -1151,6 +1233,14 @@ both the apply log and the resolution-recheck results.
 Extend the dispatcher (Step 3m) to write a tab-separated failure log.
 After the `case "$TOOL"` block in each iteration, append:
 
+v1.3.1: the partial-failure grep checks read from `"$PER_TOOL_LOG"` (set
+in the dispatcher case-block above), not the global `"$LOG"`. Under
+parallel apply the global log interleaves output from every concurrent
+tool — grepping it for tool-specific patterns false-positives across
+tools (a brew error inside the brew window also matches when checking
+`pipx`). Per-tool logs are isolated and the patterns can only fire on
+their own tool's output.
+
 ```bash
 FAILURE_LOG_FILE="${FAILURE_LOG_FILE:-$(mktemp)}"
 if [ "$RC" != "0" ]; then
@@ -1159,38 +1249,32 @@ fi
 # Detect known partial-failure patterns even when RC=0
 case "$TOOL" in
   gems)
-    if grep -q "^ERROR:  Error installing" "$LOG" 2>/dev/null; then
+    if grep -q "^ERROR:  Error installing" "$PER_TOOL_LOG" 2>/dev/null; then
       printf 'gems\t0\tpartial\n' >> "$FAILURE_LOG_FILE"
     fi
     ;;
   npm)
-    if grep -qE "^npm (ERR|error)" "$LOG" 2>/dev/null; then
+    if grep -qE "^npm (ERR|error)" "$PER_TOOL_LOG" 2>/dev/null; then
       printf 'npm\t0\tpartial\n' >> "$FAILURE_LOG_FILE"
     fi
     ;;
   brew)
-    if grep -qE "^Error: " "$LOG" 2>/dev/null; then
+    if grep -qE "^Error: " "$PER_TOOL_LOG" 2>/dev/null; then
       printf 'brew\t0\tpartial\n' >> "$FAILURE_LOG_FILE"
     fi
     ;;
   pipx)
-    if grep -qE "^(Error|⚠)" "$LOG" 2>/dev/null; then
+    if grep -qE "^(Error|⚠)" "$PER_TOOL_LOG" 2>/dev/null; then
       printf 'pipx\t0\tpartial\n' >> "$FAILURE_LOG_FILE"
     fi
     ;;
 esac
 ```
 
-`$FAILURE_LOG_FILE` is created via `mktemp` on first write and cleaned up
-by the existing dispatcher `trap`. Extend the trap line in Step 3m's
-apply-orchestration setup to include it:
-
-```bash
-trap 'rm -f -- "$UPGRADED_FORMULAS_FILE" "$UPGRADED_TOOLS_FILE" "$FAILURE_LOG_FILE"' EXIT
-```
-
-(Empty `$FAILURE_LOG_FILE` is harmless — `rm -f` handles a path that
-doesn't exist.)
+`$FAILURE_LOG_FILE` is created in the Step 3m apply-orchestration setup
+alongside `LOG`, `LOG_DIR`, and the other accumulators (see the trap above
+that block). Empty `$FAILURE_LOG_FILE` is harmless — `rm -f` handles a path
+that doesn't exist.
 
 ### When to fire the agent
 
@@ -1213,9 +1297,24 @@ For each `(tool, rc, kind)` triple in `$FAILURE_LOG_FILE`, build a
 bounded log excerpt to pass into the agent. Never pass the entire log —
 cap at the last 200 lines per tool:
 
+v1.3.1: each excerpt is sliced from the failing tool's own per-tool log,
+not the global `$LOG`. Pre-1.3.1 this used `tail -200 "$LOG"` for every
+diagnosis, which under parallel apply attributed cross-tool noise (and
+under serial apply attributed the last tool's output) to whichever
+failure the agent was looking at — producing misleading root-cause
+analyses.
+
 ```bash
 while IFS=$'\t' read -r TOOL_FAIL RC_FAIL KIND_FAIL; do
-  EXCERPT=$(tail -200 "$LOG" 2>/dev/null | head -c 16000)
+  PER_TOOL_LOG_FAIL="$LOG_DIR/$TOOL_FAIL.log"
+  if [ -s "$PER_TOOL_LOG_FAIL" ]; then
+    EXCERPT=$(tail -200 "$PER_TOOL_LOG_FAIL" 2>/dev/null | head -c 16000)
+  else
+    # Fallback for tools that legitimately didn't write a per-tool log
+    # (e.g. `skills` is a no-op marker; its real output went into $LOG
+    # via the dedicated skills-apply phase). Bound just the same.
+    EXCERPT=$(tail -200 "$LOG" 2>/dev/null | head -c 16000)
+  fi
   # Build per-tool input JSON below.
 done < "$FAILURE_LOG_FILE"
 ```
@@ -1413,6 +1512,12 @@ The new symbols:
   knows the enrichment data exists in the report even if their terminal
   wrapped the long sections.
 
+The per-skill "X → Y" rows (e.g., `gstack ✓ updated 1.5.1.0 → 1.27.1.0`)
+come from `UPDATED_SKILLS_FILE`, populated by the skills-apply phase in
+Step 3m. Render one row per line in that file; if the file is empty,
+collapse to `skills    ✓ none` or `skills    —` per the corresponding
+row. Do not concatenate skill rows into a single line.
+
 ### History write
 
 Writes are guarded against concurrent `/upkeep:update` runs by an `flock`
@@ -1502,9 +1607,17 @@ prior approvals; for any new remote URL, surface it via `AskUserQuestion`:
 > Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
 > A) Trust this remote (remember for future runs)
 > B) Skip this skill
-> C) Show recent commits from origin first
 
-On A, append to `upkeep-skill-trust.json` keyed by the absolute repo path.
+v1.3.1: this gate matches the macOS flow's storage format and option set
+exactly. The trust file is **keyed by exact-match remote URL** (NOT by
+repo path) so a trust decision survives the user moving the skill between
+directories and does not transfer trust if they re-clone a different
+remote at the same path. The pre-1.3.1 path-keyed Linux/WSL2 format would
+have caused trust drift between the two flows — a remote trusted on
+macOS would not be honored on Linux against the same skill, and vice
+versa.
+
+On A, append to `upkeep-skill-trust.json` keyed by the remote URL.
 Do not fetch from a remote that has not been explicitly trusted. This makes
 the supply-chain trust decision visible and reversible (delete the entry to
 re-prompt) instead of implicit.

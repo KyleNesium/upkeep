@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-05-13
+
+### Fixed
+
+Five regressions in the v1.3 macOS parallel flow surfaced by an independent
+code review against the as-shipped instructions. All five would have fired
+the first time the new advisor flow was exercised end-to-end on a real
+upgrade — none were covered by the v1.2.2 review pass because they live in
+the apply orchestration and Step 4.5m diagnoser paths, which the v1.2 review
+treated as out of scope.
+
+- **`/upkeep:update` apply phase referenced three undefined variables
+  (`LOG`, `DEPRECATION_LOG`, `CURRENT_VERSION`).** The Step 3m apply
+  orchestration block declared `set -euo pipefail` and then immediately
+  appended skill failures to `>>"$LOG"`, summary rows to `>>"$DEPRECATION_LOG"`,
+  and rendered `"$REPO_NAME $CURRENT_VERSION → $NEW_VERSION"` — none of
+  which were assigned anywhere in the skill. Under `set -u` the orchestrator
+  hard-aborts on the first append; without `set -u` (the dispatcher loop
+  re-enters subshells that drop strict-mode in places) it silently writes
+  garbage. Fixed by initialising `LOG=$LOG_DIR/run.log`, `DEPRECATION_LOG=$(mktemp)`,
+  and a new `UPDATED_SKILLS_FILE=$(mktemp)` alongside the existing
+  accumulators, plus reading `CURRENT_VERSION` from the repo's `VERSION` /
+  `plugin.json` *before* the `git pull` so the report can show "from → to".
+
+- **`UPGRADED_TOOLS_FILE` was being polluted with skill summary rows.**
+  Step 4m's post-flight iterates `UPGRADED_TOOLS` as
+  `command -v "$TOOL"` to surface PATH shadows for tools that no longer
+  resolve. The skills-apply phase was writing
+  `"$REPO_NAME $CURRENT_VERSION → $NEW_VERSION"` lines into that same file,
+  which `command -v` would try to resolve as a binary called
+  `upkeep 1.3.0 → 1.3.1` — emitting bogus shadow warnings. Split into
+  `UPDATED_SKILLS_FILE` (human-readable report rows) vs
+  `UPGRADED_TOOLS_FILE` (tool ids only).
+
+- **`failure-diagnoser` agent received the wrong log slice.** Step 4.5m
+  built every per-tool diagnosis from `tail -200 "$LOG"` against the
+  single global apply log. Under the parallel apply path (the v1.1
+  default on macOS) the global log interleaves output from up to four
+  concurrent tools, so each diagnosis was attributing some other tool's
+  errors to the failing one. Under serial apply, every failing tool got
+  the *last* tool's tail. Fixed by writing each tool's output to
+  `"$LOG_DIR/$TOOL.log"` via `tee` (PIPESTATUS preserves the upgrade
+  command's RC) and slicing the excerpt from the matching per-tool log.
+  The partial-failure pattern detectors (Step 4.5m collect block) also
+  switched from grepping `$LOG` to grepping `$PER_TOOL_LOG`, since
+  cross-tool false positives in the global log were silently flagging
+  every category as `partial` whenever any one tool had emitted an
+  `Error:` line.
+
+- **"Drop categories" multi-select had no final confirmation turn.**
+  The single approval gate offered `Apply all / Drop categories / Cancel`,
+  with a second multi-select for which categories to drop on the middle
+  option. The model could then apply immediately against the filtered
+  plan while still rendering the *original* plan's risks, manual steps,
+  and ETA — a Discover/Approve/Apply cliff. Made the post-drop turn end
+  at an explicit `Apply filtered plan / Cancel` `AskUserQuestion`, with
+  the plan summary re-rendered against the filtered `ordered_groups[].tools[]`
+  before the gate. Three gates now bracket every Apply action.
+
+- **`project-impact` agent saw a narrower workspace root list than
+  `/upkeep` Phase 8.** Step 2.5m built `search_roots` from
+  `~/workspace ~/Github ~/Projects ~/src ~/code ~/dev` only — missing
+  `~/Developer` (Apple's recommended path on macOS 14+), `~/projects`
+  (lowercase, case-sensitive on case-sensitive APFS volumes),
+  `~/repos`, and `~/Documents` (which Phase 8 scans). Symlinked roots
+  were also not canonicalized, so the agent (which validates discovered
+  paths against `search_roots`) would reject its own walks on machines
+  where `~/workspace` is a symlink. The JSON array was hand-built by
+  string concatenation. Unified the root list with Phase 8, resolved
+  each via `cd -P ... && pwd -P` before building the array, deduped,
+  and assembled the JSON via `jq -R . | jq -s .` so unusual `$HOME`
+  characters cannot corrupt the payload.
+
+### Security
+
+- **Trust gate no longer needs network to preview an untrusted remote.**
+  v1.3.0's first-encounter gate offered three options — `A) Trust`,
+  `B) Skip`, `C) Show recent commits from origin first`. Option C
+  required `git fetch` (or `git ls-remote`) against the same untrusted
+  remote whose trustworthiness the user was about to decide on, directly
+  contradicting the "no network call to an untrusted remote until the
+  user explicitly trusts it" contract this gate exists to enforce.
+  Made the gate strictly `A) Trust / B) Skip`. Users who want a preview
+  before trusting must trust-then-review-then-revoke, which is the same
+  effort but cannot be tricked into a hidden fetch by a discovery JSON
+  carrying a doctored remote URL.
+
+- **Trust store format unified between macOS and Linux/WSL2.** The
+  v1.3.0 macOS flow appended the **remote URL** to
+  `~/.claude/data/upkeep-skill-trust.json`; the Linux/WSL2 flow appended
+  the **absolute repo path**. A trust decision made on one platform did
+  not honour the same skill on the other, and a path-keyed approval
+  would silently transfer trust if the user later re-cloned a different
+  remote at the same path. Both flows now key by exact-match remote URL
+  with a `{trusted_at, first_seen_repo}` payload.
+
+### Notes
+
+- Self-update check on macOS may briefly flag pre-1.3.1 plugin-cache
+  installs as outdated even after the marketplace clone pulls — the
+  `.last-update-check` sentinel suppresses re-checks for 24h. Run
+  `/plugin update upkeep` once to converge.
+- No changes to Linux/WSL2 sequential apply flow, the cleanup phases,
+  or the `audit` / `cleandeep` / `cleanquick` / `upkeep` skills.
+
 ## [1.3.0] - 2026-05-11
 
 ### Added

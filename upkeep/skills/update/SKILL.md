@@ -711,7 +711,18 @@ enrichment rendering entirely and surface
 `enrichment unavailable — install jq for changelog + project-impact context`
 as a single line in the plan summary.
 
+v1.3.1: capture the raw agent outputs into `CHANGELOG_RAW` and
+`PROJECT_RAW` (verbatim string return from each `Agent` tool call) before
+the jq block runs. Under `set -euo pipefail`, an unset `$CHANGELOG_RAW`
+trips `unbound variable` and aborts the synthesizer flow — give both
+vars an empty-JSON default at the top so a skipped agent (filter list
+empty, fan-out failure, agent timeout) degrades to "no advisor data" in
+the gate render rather than a hard abort.
+
 ```bash
+: "${CHANGELOG_RAW:={\"summaries\":[],\"errors\":[]}}"
+: "${PROJECT_RAW:={\"by_tool\":{},\"summary\":{},\"errors\":[]}}"
+
 if command -v jq >/dev/null 2>&1; then
   CHANGELOG_JSON=$(jq '
     {summaries: (.summaries // [] | map({
@@ -901,6 +912,7 @@ PATH-shadow and resolution-recheck loops:
 
 ```bash
 set -euo pipefail
+_T_START=$SECONDS                     # v1.3.1: wall-time anchor for Step 5m's MINUTES_JSON
 UPGRADED_FORMULAS_FILE=$(mktemp)
 UPGRADED_TOOLS_FILE=$(mktemp)         # binary/tool ids only — consumed by Step 4m `command -v`
 UPDATED_SKILLS_FILE=$(mktemp)         # human-readable "<name> <from> → <to>" rows for the report
@@ -1405,7 +1417,16 @@ agent calls in a **single tool-use block** so they execute in parallel
 
 ### Output sanitization
 
+v1.3.1: `DIAGNOSIS_RAW` is the concatenated agent output from the parallel
+fan-out — one diagnosis per failing tool, merged into a single
+`{"diagnoses":[...], "errors":[...]}` envelope by the orchestrator before
+this sanitization runs. Default to an empty envelope so `set -u` cannot
+trip when the fan-out is skipped (RUN_DIAGNOSER=0) but the renderer
+still reaches this block on a later code path.
+
 ```bash
+: "${DIAGNOSIS_RAW:={\"diagnoses\":[],\"errors\":[]}}"
+
 if command -v jq >/dev/null 2>&1; then
   DIAGNOSIS_JSON=$(jq '
     {diagnoses: (.diagnoses // [] | map({
@@ -1524,11 +1545,22 @@ Writes are guarded against concurrent `/upkeep:update` runs by an `flock`
 on a sibling lockfile, and the temp file uses `mktemp` (not a predictable
 `$HIST_FILE.tmp` that another user-writable process could pre-symlink).
 
+v1.3.1: `MINUTES_JSON` is built here from the apply phase's wall-time
+deltas. The dispatcher captured a `$SECONDS` reading at apply start
+(`_T_START=$SECONDS` set in Step 3m's apply-orchestration setup); convert
+to ceil-minutes for the history entry. If `$_T_START` is unset for any
+reason (an early-aborted run reaching this block, an audit-mode path
+that doesn't apply but logs anyway), default to `0` so the unset-variable
+trip stays out of the history writer.
+
 ```bash
 HIST_DIR="$HOME/.claude/data"
 HIST_FILE="$HIST_DIR/upkeep-history.json"
 HIST_LOCK="$HIST_DIR/upkeep-history.lock"
 mkdir -p "$HIST_DIR" 2>/dev/null
+
+_ELAPSED=$(( SECONDS - ${_T_START:-$SECONDS} ))
+MINUTES_JSON=$(( (_ELAPSED + 59) / 60 ))
 
 if command -v jq >/dev/null 2>&1; then
   ENTRY=$(jq -n --arg ts "$(date -u +%FT%TZ)" \
@@ -1720,6 +1752,26 @@ If nothing needs updating: "Everything is up to date." — stop.
 **Gate 0 (Update All only):**
 > "Update N skill(s) + N package category(ies)?
 > A) Update all   B) Choose per-category   C) Cancel"
+
+v1.3.1: "Choose per-category" is **intent only**. End this turn at Gate 0.
+
+- On `A) Update all`, proceed to Step 4 in the next turn against every
+  category surfaced in Step 3's overview table.
+- On `B) Choose per-category`, end this turn at a second multi-select
+  `AskUserQuestion` with one option per category (skills, brew, npm,
+  pipx, gems, uv, bun, mas, macOS, apt, dnf, pacman, snap, flatpak —
+  only the ones that returned non-empty discovery in Step 3). End the
+  turn again. In the next turn re-render the overview table filtered
+  to the user's selection and end at a final
+  `Apply filtered plan / Cancel` `AskUserQuestion`. Proceed to Step 4
+  only on `Apply filtered plan`.
+- On `C) Cancel`, stop here.
+
+The three-gate shape matches the macOS Step 3m approval gate so Linux
+users see the same "every Apply is bracketed by the exact plan summary
+just shown" contract. Pre-1.3.1, the Linux flow specified Option B
+without defining what should happen next, so the LLM was free to apply
+immediately after the multi-select with stale overview context.
 
 ## Step 4: Apply Skill Updates
 

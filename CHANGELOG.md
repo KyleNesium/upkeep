@@ -101,14 +101,58 @@ treated as out of scope.
   remote at the same path. Both flows now key by exact-match remote URL
   with a `{trusted_at, first_seen_repo}` payload.
 
+### Fixed (second pass — additional findings from the same review session)
+
+After fixing the five findings above, a second sweep against the rest of
+the plugin surfaced four more issues in the same risk classes.
+
+- **Four more agent-output variables were assumed-but-never-defined.**
+  Step 2.5m's sanitization read from `$CHANGELOG_RAW` and `$PROJECT_RAW`,
+  Step 4.5m's sanitization read from `$DIAGNOSIS_RAW`, and Step 5m's
+  history writer fed `$MINUTES_JSON` straight into
+  `jq --argjson minutes`. None had a defined assignment anywhere in the
+  skill — the convention was implicit ("capture the agent output into
+  this name"), so any path that reached the jq block before the agent
+  had been invoked (filter list empty, fan-out skipped, audit-mode
+  short-circuit) hit the same class of failure as finding 1. Set
+  empty-JSON defaults for the three agent raw vars via `: "${VAR:=...}"`
+  so a skipped agent renders as "no advisor data" rather than aborting,
+  and compute `MINUTES_JSON` from `_T_START=$SECONDS` (set in the apply
+  orchestration setup) → `(SECONDS - _T_START + 59) / 60`.
+
+- **Linux/WSL2 Gate 0 "Choose per-category" was underspecified.** The
+  sequential flow offered the same three-option overview gate
+  (`Update all / Choose per-category / Cancel`) as macOS but never
+  defined what happens after `Choose per-category` — so the LLM was
+  free to apply immediately after a multi-select with stale overview
+  context, exactly the cliff finding 4 closed on the macOS side.
+  Specified the same three-gate shape: Gate 0 ends turn → multi-select
+  ends turn → final `Apply filtered plan / Cancel` ends turn → Step 4.
+
+- **`cleandeep` Linux cache removal interpolated discovered subdir
+  names without `--`.** The approval gate said "for each approved
+  index, run `rm -rf ~/.cache/<subdir>/`". `<subdir>` came from the
+  `du -sh ~/.cache/*/` listing — a cache directory with a leading dash
+  (rare but the shell can produce one — e.g. some Wine prefixes,
+  manual `mkdir ./- name`) would be parsed as `rm` options. Switched
+  to carrying the absolute path through the index→object map and
+  invoking `rm -rf -- "$cache_path"`, matching the path-substitution
+  rule the cleanup router enforces.
+
+- **`cleanquick` cache cleanup missed `--` in `find -exec`.** The
+  exact same class as above: `find ~/.cache ... -exec rm -rf {} +`
+  was missing the end-of-options sentinel between `rm -rf` and `{}`.
+  A find result starting with `-` would be parsed as a flag. Added
+  `--` before `{}` so the literal path is always treated as a path.
+
 ### Notes
 
 - Self-update check on macOS may briefly flag pre-1.3.1 plugin-cache
   installs as outdated even after the marketplace clone pulls — the
   `.last-update-check` sentinel suppresses re-checks for 24h. Run
   `/plugin update upkeep` once to converge.
-- No changes to Linux/WSL2 sequential apply flow, the cleanup phases,
-  or the `audit` / `cleandeep` / `cleanquick` / `upkeep` skills.
+- No changes to Linux/WSL2 apply commands themselves, the macOS
+  cleanup phases, or the `audit` / `upkeep` skills.
 
 ## [1.3.0] - 2026-05-11
 

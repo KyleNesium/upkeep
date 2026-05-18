@@ -214,7 +214,7 @@ the only meaningful bottleneck, and we run it concurrently with the other
 three sections.
 
 ```bash
-SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT:-/Users/kyle/.claude/plugins/cache/KyleNesium/upkeep}"
+SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/KyleNesium/upkeep}"
 SCRIPT_DIR="$SCRIPT_DIR/$(ls -1 "$SCRIPT_DIR" 2>/dev/null | sort -V | tail -1)/skills/update/scripts"
 # Fallback: locate scripts relative to this SKILL.md when not running from cache
 [ -d "$SCRIPT_DIR" ] || SCRIPT_DIR="$(dirname "$0")/scripts"

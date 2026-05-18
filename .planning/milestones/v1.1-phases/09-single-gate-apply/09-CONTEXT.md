@@ -26,7 +26,7 @@ Risks flagged:
   • brew:node upgrade may require npm-globals reinstall (deprecation warnings expected)
   • brew:openssl 3.3 → 3.4 affects ruby native gems: nokogiri, openssl
   • gem update will run with --user-install (system Ruby 2.6 detected)
-  • PATH shadow: gemini → /Users/kyle/.superset/bin/gemini overrides brew
+  • PATH shadow: gemini → ~/.local/bin/gemini overrides brew
 
 ETA: ~22 minutes (p50), up to 38 minutes (p90)
 Disk free: 124 GB ✓

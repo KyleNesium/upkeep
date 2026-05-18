@@ -32,7 +32,7 @@ in-context for the synthesizer agent), shaped:
     "git_repos": [
       {
         "name": "gstack",
-        "path": "/Users/kyle/.claude/skills/gstack",
+        "path": "~/.claude/skills/gstack",
         "branch": "main",
         "current_version": "1.5.1.0",
         "commits_behind": 31,
@@ -72,7 +72,7 @@ in-context for the synthesizer agent), shaped:
   },
   "shadow": {
     "duplicates": [
-      {"binary": "gemini", "primary": "/Users/kyle/.superset/bin/gemini", "shadowed": ["/opt/homebrew/bin/gemini"]}
+      {"binary": "gemini", "primary": "~/.local/bin/gemini", "shadowed": ["/opt/homebrew/bin/gemini"]}
     ],
     "broken_symlinks": []
   },

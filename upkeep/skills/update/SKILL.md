@@ -545,7 +545,7 @@ record `CHANGELOG_JSON='{"summaries":[],"errors":[]}'`.
 > **Input:**
 > ```json
 > {"items": [{"tool": "node", "from": "25.9.0_3", "to": "26.0.0"}],
->  "search_roots": ["/Users/kyle/workspace", "/Users/kyle/Github"]}
+>  "search_roots": ["~/workspace", "~/Github"]}
 > ```
 >
 > **Method:**

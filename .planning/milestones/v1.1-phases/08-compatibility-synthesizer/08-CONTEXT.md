@@ -55,7 +55,7 @@ Plus: a static compatibility matrix file at
     ],
     "manual_steps": [
       {"label": "upkeep self-update", "command": "/plugin update upkeep"},
-      {"label": "PATH shadow", "command": "Move /opt/homebrew/bin before ~/.superset/bin in PATH or rename your local gemini wrapper"}
+      {"label": "PATH shadow", "command": "Move /opt/homebrew/bin before ~/.local/bin in PATH or rename your local gemini wrapper"}
     ],
     "ordered_groups": [
       {
@@ -86,7 +86,7 @@ Plus: a static compatibility matrix file at
     "tool_specs": {
       "gstack": {
         "kind": "skill",
-        "command": "git -C /Users/kyle/.claude/skills/gstack pull --ff-only origin main",
+        "command": "git -C ~/.claude/skills/gstack pull --ff-only origin main",
         "preconditions": [],
         "current_version": "1.5.1.0",
         "target_version": "1.27.1.0",

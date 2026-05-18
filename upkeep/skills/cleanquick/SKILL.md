@@ -254,8 +254,10 @@ fi
 > **Quick-mode cache approval gate (Linux/WSL2 only).** Show the list of items older than 30 days. Prompt: "Remove these stale cache entries? (yes / no)". On `yes`:
 >
 > ```bash
-> find ~/.cache -mindepth 1 -maxdepth 2 -mtime +30 -type d -exec rm -rf {} + 2>/dev/null
+> find ~/.cache -mindepth 1 -maxdepth 2 -mtime +30 -type d -exec rm -rf -- {} + 2>/dev/null
 > ```
+>
+> The `--` sentinel between `rm -rf` and `{}` protects against cache subdirs whose names begin with a leading dash (rare but possible — `find` returns the literal path including any leading dash, and without `--` those names would be parsed as `rm` options instead of paths to remove).
 >
 > This removes only cache subdirectories that have not been accessed by `find -mtime` semantics (mtime > 30 days). It does NOT touch `~/.cache` itself, and it does NOT remove anything inside `~/.cache/<tool>/<hotpath>` that was recently written. Skip warn-list items (`mesa_shader_cache`, `fontconfig`, `nvidia`) by inspecting the output before running — if the user includes them, warn them and confirm again.
 >

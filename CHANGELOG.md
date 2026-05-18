@@ -5,6 +5,299 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-18
+
+### Performance
+
+The macOS `/upkeep:update` parallel flow now runs discovery + plan in
+~15 seconds instead of the ~120 seconds of LLM agent overhead it took in
+v1.3. End-to-end approval-gate latency on a clean run drops from "almost
+unusable" to "interactive". Eight times faster, same security posture.
+
+- **`scripts/discover.sh`** replaces the four `skills-scout`, `native-scout`,
+  `language-scout`, and `shadow-scout` agents from v1.3. All four
+  discovery sections now run as inline bash + jq in concurrent background
+  jobs — `brew update` (the long pole at ~14s) runs in parallel with the
+  skills walk, the language-tool sweep, and the single-pass PATH-shadow
+  awk. Combined wall time is bounded by the slowest section, not by the
+  sum of four LLM round-trips. Per-section: skills 2s, native 14s,
+  language 5s, shadow <1s.
+- **`scripts/synthesize.sh`** replaces the v1.3 synthesizer agent. Plan
+  construction (semver classification, compat-matrix edge materialisation,
+  manual-steps assembly, ETA bake-ins, `gems.user_install` flagging) is
+  pure deterministic logic — the LLM never had real choices to make
+  here, only translation work. Pure jq + bash runs in under 300ms.
+- **`brew update` runs as part of discovery, not apply.** A v1.3 bug
+  surfaced today during a real run: the scout agent listed 19 outdated
+  brew packages, but only 3 were actually outdated once `brew upgrade`
+  refreshed its metadata. The user got a wildly inaccurate plan at the
+  approval gate. v1.4 runs `brew update` inside `discover.sh` so the
+  outdated list shown to the user matches what `brew upgrade` will
+  actually do.
+- **Enrichment agents now gate aggressively.** `changelog-reader` and
+  `project-impact` only fire when there is at least one brew major bump
+  OR at least one compat-matrix edge materialised at severity medium+.
+  Gem-only major bumps no longer trigger them — those almost always fail
+  on system Ruby and are better handled by the post-apply
+  `failure-diagnoser` than by upfront WebFetch overhead. Patch-heavy
+  runs skip enrichment entirely and surface
+  `Advisor: skipped (no high-impact upgrades)` in the gate body.
+
+### Security (preserved from v1.2 + v1.3)
+
+The v1.4 fast-path preserves every hardening invariant from v1.2 and
+v1.3. None of the security boundaries moved — only the path between
+them got shorter.
+
+- **Hardcoded dispatcher (v1.2)** — Step 3m's tool case statement is
+  unchanged; `tool_specs[].command` fields are still ignored.
+  `synthesize.sh` never emits a `command` field and the dispatcher's
+  allowlist check (`brew|npm|pipx|gems|uv|bun|mas|macos|skills`) still
+  rejects unknown tool ids.
+- **Discovery sanitization (v1.2.2)** — the optional 256-char string cap
+  + free-text field denylist is still applied before any LLM agent
+  receives discovery-derived input (the changelog-reader and
+  project-impact inputs are built from the sanitized JSON, not the raw
+  output of `discover.sh`).
+- **Exact-match remote URL validation (v1.2)** — the four canonical
+  forms for upkeep's own remote are still the only ones accepted.
+- **Trust-on-first-use for skill repos (v1.2)** — `discover.sh` reads
+  `~/.claude/data/upkeep-skill-trust.json` and marks unknown remotes
+  `untrusted: true` without fetching from them. The trust gate
+  (`AskUserQuestion`) still gates approval before any `git fetch` to an
+  unknown remote can happen.
+- **Discover / Approve / Apply turn separation (v1.2)** — unchanged.
+  Discovery, the trust gate (when triggered), the approval gate, and
+  apply are each their own conversation turn.
+- **Hardened script semantics** — both `discover.sh` and `synthesize.sh`
+  use `set -uo pipefail`, validate `schema_version: "1"` on input, and
+  fail closed (non-zero exit + empty stdout) rather than emit
+  half-formed JSON. A subtle pipefail-plus-fallback bug found during
+  testing (which produced `[]\n[]` for `sw_updates` when
+  `softwareupdate -l` had no matching lines) is fixed and now has an
+  explanatory comment so it doesn't get re-introduced.
+
+### Migration
+
+Existing installations of v1.3 / v1.3.1 will continue to work exactly as
+before — the v1.0 sequential flow for Linux and WSL2 is untouched, and
+the macOS routing decision in SKILL.md still chooses the parallel flow
+on `$OS_TYPE = "macos"`. The two new scripts live under
+`upkeep/skills/update/scripts/` and are referenced from SKILL.md via
+relative path; no environment variables, no install steps. Users who
+ran `/upkeep:update` under v1.3 and felt the latency will get the
+speedup automatically after `/plugin update upkeep`.
+
+### File-level changes
+
+- **NEW** `upkeep/skills/update/scripts/discover.sh` — ~430 lines
+- **NEW** `upkeep/skills/update/scripts/synthesize.sh` — ~210 lines
+- **CHANGED** `upkeep/skills/update/SKILL.md` — Steps 1m and 2m
+  rewritten to call the scripts; Step 2.5m enrichment gating tightened.
+  Net SKILL.md size: 1978 → 1833 lines (-145).
+- **CHANGED** `VERSION` 1.3.1 → 1.4.0
+- **CHANGED** `upkeep/.claude-plugin/plugin.json` version + description
+  rewritten to lead with the v1.4 speedup.
+
+## [1.3.1] - 2026-05-13
+
+### Fixed
+
+Five regressions in the v1.3 macOS parallel flow surfaced by an independent
+code review against the as-shipped instructions. All five would have fired
+the first time the new advisor flow was exercised end-to-end on a real
+upgrade — none were covered by the v1.2.2 review pass because they live in
+the apply orchestration and Step 4.5m diagnoser paths, which the v1.2 review
+treated as out of scope.
+
+- **`/upkeep:update` apply phase referenced three undefined variables
+  (`LOG`, `DEPRECATION_LOG`, `CURRENT_VERSION`).** The Step 3m apply
+  orchestration block declared `set -euo pipefail` and then immediately
+  appended skill failures to `>>"$LOG"`, summary rows to `>>"$DEPRECATION_LOG"`,
+  and rendered `"$REPO_NAME $CURRENT_VERSION → $NEW_VERSION"` — none of
+  which were assigned anywhere in the skill. Under `set -u` the orchestrator
+  hard-aborts on the first append; without `set -u` (the dispatcher loop
+  re-enters subshells that drop strict-mode in places) it silently writes
+  garbage. Fixed by initialising `LOG=$LOG_DIR/run.log`, `DEPRECATION_LOG=$(mktemp)`,
+  and a new `UPDATED_SKILLS_FILE=$(mktemp)` alongside the existing
+  accumulators, plus reading `CURRENT_VERSION` from the repo's `VERSION` /
+  `plugin.json` *before* the `git pull` so the report can show "from → to".
+
+- **`UPGRADED_TOOLS_FILE` was being polluted with skill summary rows.**
+  Step 4m's post-flight iterates `UPGRADED_TOOLS` as
+  `command -v "$TOOL"` to surface PATH shadows for tools that no longer
+  resolve. The skills-apply phase was writing
+  `"$REPO_NAME $CURRENT_VERSION → $NEW_VERSION"` lines into that same file,
+  which `command -v` would try to resolve as a binary called
+  `upkeep 1.3.0 → 1.3.1` — emitting bogus shadow warnings. Split into
+  `UPDATED_SKILLS_FILE` (human-readable report rows) vs
+  `UPGRADED_TOOLS_FILE` (tool ids only).
+
+- **`failure-diagnoser` agent received the wrong log slice.** Step 4.5m
+  built every per-tool diagnosis from `tail -200 "$LOG"` against the
+  single global apply log. Under the parallel apply path (the v1.1
+  default on macOS) the global log interleaves output from up to four
+  concurrent tools, so each diagnosis was attributing some other tool's
+  errors to the failing one. Under serial apply, every failing tool got
+  the *last* tool's tail. Fixed by writing each tool's output to
+  `"$LOG_DIR/$TOOL.log"` via `tee` (PIPESTATUS preserves the upgrade
+  command's RC) and slicing the excerpt from the matching per-tool log.
+  The partial-failure pattern detectors (Step 4.5m collect block) also
+  switched from grepping `$LOG` to grepping `$PER_TOOL_LOG`, since
+  cross-tool false positives in the global log were silently flagging
+  every category as `partial` whenever any one tool had emitted an
+  `Error:` line.
+
+- **"Drop categories" multi-select had no final confirmation turn.**
+  The single approval gate offered `Apply all / Drop categories / Cancel`,
+  with a second multi-select for which categories to drop on the middle
+  option. The model could then apply immediately against the filtered
+  plan while still rendering the *original* plan's risks, manual steps,
+  and ETA — a Discover/Approve/Apply cliff. Made the post-drop turn end
+  at an explicit `Apply filtered plan / Cancel` `AskUserQuestion`, with
+  the plan summary re-rendered against the filtered `ordered_groups[].tools[]`
+  before the gate. Three gates now bracket every Apply action.
+
+- **`project-impact` agent saw a narrower workspace root list than
+  `/upkeep` Phase 8.** Step 2.5m built `search_roots` from
+  `~/workspace ~/Github ~/Projects ~/src ~/code ~/dev` only — missing
+  `~/Developer` (Apple's recommended path on macOS 14+), `~/projects`
+  (lowercase, case-sensitive on case-sensitive APFS volumes),
+  `~/repos`, and `~/Documents` (which Phase 8 scans). Symlinked roots
+  were also not canonicalized, so the agent (which validates discovered
+  paths against `search_roots`) would reject its own walks on machines
+  where `~/workspace` is a symlink. The JSON array was hand-built by
+  string concatenation. Unified the root list with Phase 8, resolved
+  each via `cd -P ... && pwd -P` before building the array, deduped,
+  and assembled the JSON via `jq -R . | jq -s .` so unusual `$HOME`
+  characters cannot corrupt the payload.
+
+### Security
+
+- **Trust gate no longer needs network to preview an untrusted remote.**
+  v1.3.0's first-encounter gate offered three options — `A) Trust`,
+  `B) Skip`, `C) Show recent commits from origin first`. Option C
+  required `git fetch` (or `git ls-remote`) against the same untrusted
+  remote whose trustworthiness the user was about to decide on, directly
+  contradicting the "no network call to an untrusted remote until the
+  user explicitly trusts it" contract this gate exists to enforce.
+  Made the gate strictly `A) Trust / B) Skip`. Users who want a preview
+  before trusting must trust-then-review-then-revoke, which is the same
+  effort but cannot be tricked into a hidden fetch by a discovery JSON
+  carrying a doctored remote URL.
+
+- **Trust store format unified between macOS and Linux/WSL2.** The
+  v1.3.0 macOS flow appended the **remote URL** to
+  `~/.claude/data/upkeep-skill-trust.json`; the Linux/WSL2 flow appended
+  the **absolute repo path**. A trust decision made on one platform did
+  not honour the same skill on the other, and a path-keyed approval
+  would silently transfer trust if the user later re-cloned a different
+  remote at the same path. Both flows now key by exact-match remote URL
+  with a `{trusted_at, first_seen_repo}` payload.
+
+### Fixed (second pass — additional findings from the same review session)
+
+After fixing the five findings above, a second sweep against the rest of
+the plugin surfaced four more issues in the same risk classes.
+
+- **Four more agent-output variables were assumed-but-never-defined.**
+  Step 2.5m's sanitization read from `$CHANGELOG_RAW` and `$PROJECT_RAW`,
+  Step 4.5m's sanitization read from `$DIAGNOSIS_RAW`, and Step 5m's
+  history writer fed `$MINUTES_JSON` straight into
+  `jq --argjson minutes`. None had a defined assignment anywhere in the
+  skill — the convention was implicit ("capture the agent output into
+  this name"), so any path that reached the jq block before the agent
+  had been invoked (filter list empty, fan-out skipped, audit-mode
+  short-circuit) hit the same class of failure as finding 1. Set
+  empty-JSON defaults for the three agent raw vars via `: "${VAR:=...}"`
+  so a skipped agent renders as "no advisor data" rather than aborting,
+  and compute `MINUTES_JSON` from `_T_START=$SECONDS` (set in the apply
+  orchestration setup) → `(SECONDS - _T_START + 59) / 60`.
+
+- **Linux/WSL2 Gate 0 "Choose per-category" was underspecified.** The
+  sequential flow offered the same three-option overview gate
+  (`Update all / Choose per-category / Cancel`) as macOS but never
+  defined what happens after `Choose per-category` — so the LLM was
+  free to apply immediately after a multi-select with stale overview
+  context, exactly the cliff finding 4 closed on the macOS side.
+  Specified the same three-gate shape: Gate 0 ends turn → multi-select
+  ends turn → final `Apply filtered plan / Cancel` ends turn → Step 4.
+
+- **`cleandeep` Linux cache removal interpolated discovered subdir
+  names without `--`.** The approval gate said "for each approved
+  index, run `rm -rf ~/.cache/<subdir>/`". `<subdir>` came from the
+  `du -sh ~/.cache/*/` listing — a cache directory with a leading dash
+  (rare but the shell can produce one — e.g. some Wine prefixes,
+  manual `mkdir ./- name`) would be parsed as `rm` options. Switched
+  to carrying the absolute path through the index→object map and
+  invoking `rm -rf -- "$cache_path"`, matching the path-substitution
+  rule the cleanup router enforces.
+
+- **`cleanquick` cache cleanup missed `--` in `find -exec`.** The
+  exact same class as above: `find ~/.cache ... -exec rm -rf {} +`
+  was missing the end-of-options sentinel between `rm -rf` and `{}`.
+  A find result starting with `-` would be parsed as a flag. Added
+  `--` before `{}` so the literal path is always treated as a path.
+
+### Fixed (third pass — codex challenge against the v1.3.1 patch series)
+
+Codex re-reviewed the cumulative diff in adversarial mode to look for
+regressions the fixes introduced. Three more concrete issues surfaced.
+
+- **The dispatcher's partial-failure detection was still grepping the
+  global `$LOG`.** The second-pass fix migrated the Step 4.5m
+  *documentation* block to `$PER_TOOL_LOG`, but the hot path is the
+  copy embedded in the dispatcher (immediately after each tool's RC is
+  captured) — and that copy still read from the interleaved global
+  log. Under parallel apply, a `^npm (ERR|error)` line written by a
+  concurrent `npm` upgrade would have flipped the `pipx` row to
+  `partial` (or vice versa). Migrated the dispatcher copy too. The
+  `brew` formula extraction (`grep "^==> Upgrading" … >> UPGRADED_FORMULAS_FILE`)
+  also moved to `$PER_TOOL_LOG` for the same reason — pre-fix, a
+  cross-tool `==> Upgrading` line could plant a fake formula name in
+  the post-flight resolution-recheck list.
+
+- **`SEARCH_ROOTS_JSON` hard-required `jq`.** The first-pass fix
+  switched the JSON assembly from string concatenation to
+  `jq -R . | jq -s -c .`, but Step 2.5m's surrounding text
+  ("If `jq` is unavailable, skip enrichment rendering entirely") said
+  the section should degrade gracefully. The new pipe aborts on `jq`
+  absence instead of falling back, breaking enrichment on minimal
+  Linux installs. Guarded with `command -v jq` and reinstated a
+  hand-built encoder for the fallback path, with `sed`-based escaping
+  for `"`, `\`, tab, and newline so a `$HOME` with unusual characters
+  still produces valid JSON.
+
+- **Dispatcher's `cmd ; RC=$?` would abort under `set -euo pipefail`.**
+  The orchestration block at the top of Step 3m sets strict mode; the
+  dispatcher case ran later under the same fence (when the LLM
+  preserves the shell session across the rendering boundary). With
+  strict mode active, a failing `brew upgrade` aborts the dispatcher
+  loop *before* `RC=${PIPESTATUS[0]}` runs, contradicting the
+  documented "a failure on one tool never blocks others" contract.
+  Switched every dispatcher invocation to `RC=0; cmd … || RC=${PIPESTATUS[0]}`
+  — `||` puts the pipeline in a conditional context, so `set -e`
+  doesn't fire, and `PIPESTATUS` at the `||` site still reflects the
+  failed pipeline.
+
+### Notes
+
+- Self-update check on macOS may briefly flag pre-1.3.1 plugin-cache
+  installs as outdated even after the marketplace clone pulls — the
+  `.last-update-check` sentinel suppresses re-checks for 24h. Run
+  `/plugin update upkeep` once to converge.
+- No changes to Linux/WSL2 apply commands themselves, the macOS
+  cleanup phases, or the `audit` / `upkeep` skills.
+- The cross-fence state persistence question (does `_T_START` survive
+  from the apply-orchestration setup fence into the Step 5m history
+  writer?) remains as documented — the LLM is expected to hold the
+  `_T_START` value in its context across the intervening fences. If
+  it doesn't, the `${_T_START:-$SECONDS}` default produces a
+  `MINUTES_JSON` of 0 rather than aborting; the history entry shows
+  a 0-minute run instead of leaking a strict-mode trip into the user-
+  visible report. Promoting this to a file-backed anchor is left for
+  a future release.
+
 ## [1.3.0] - 2026-05-11
 
 ### Added

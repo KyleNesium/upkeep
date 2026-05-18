@@ -109,7 +109,7 @@ None — plan executed exactly as written.
 
 ## Self-Check: PASSED
 
-- `/Users/kyle/workspace/Github/KyleNesium/upkeep/upkeep/skills/upkeep/SKILL.md` — exists, 71 Bash entries, version 1.1.0-dev
+- `~/workspace/Github/KyleNesium/upkeep/upkeep/skills/upkeep/SKILL.md` — exists, 71 Bash entries, version 1.1.0-dev
 - Commit `cbc8d03` — confirmed in git log
 - Commit `b422591` — confirmed in git log
 - Commit `237bf77` — confirmed in git log

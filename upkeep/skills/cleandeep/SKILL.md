@@ -312,7 +312,15 @@ if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
 fi
 ```
 
-> **Linux cache removal — approval gate.** If the output above shows any subdirectory over 100MB, present it as a numbered table (index, path, size) and prompt: "Remove which? (space-separated indices, 'all', or 'none')". For each approved index, run `rm -rf ~/.cache/<subdir>/`. NEVER clear `~/.cache/` as a whole directory — some tools (e.g. `~/.cache/mesa_shader_cache`, `~/.cache/fontconfig`) rebuild slowly and impact desktop startup. Only remove named subdirectories the user approves. Known-safe-to-remove subdirs: `pip`, `yarn`, `pnpm`, `go-build`, `thumbnails`, `mozilla`, `chromium`, `vscode-cpptools`. Known-costly-to-rebuild (warn before removing): `mesa_shader_cache`, `fontconfig`, `nvidia`.
+> **Linux cache removal — approval gate.** If the output above shows any subdirectory over 100MB, present it as a numbered table (index, **absolute path**, size) where the absolute path is captured directly from the `du -sh ~/.cache/*/` listing (not reconstructed from the directory name). Prompt: "Remove which? (space-separated indices, 'all', or 'none')". For each approved index, look up the captured absolute path from the index→object map and run:
+>
+> ```bash
+> rm -rf -- "$cache_path"
+> ```
+>
+> NEVER let the user free-type a name and then concatenate it onto `~/.cache/`. NEVER clear `~/.cache/` as a whole directory — some tools (e.g. `~/.cache/mesa_shader_cache`, `~/.cache/fontconfig`) rebuild slowly and impact desktop startup. Only remove named subdirectories the user approves. Known-safe-to-remove subdirs: `pip`, `yarn`, `pnpm`, `go-build`, `thumbnails`, `mozilla`, `chromium`, `vscode-cpptools`. Known-costly-to-rebuild (warn before removing): `mesa_shader_cache`, `fontconfig`, `nvidia`.
+>
+> The `--` end-of-options sentinel and quoted variable are required by the same path-substitution rule the cleanup router enforces in `skills/upkeep/SKILL.md` — a cache subdir with a leading dash or embedded space would otherwise turn into separate shell words and target the wrong path. Carrying the absolute path through the index→object map (rather than reconstructing it from `~/.cache/<name>`) closes the same hole even when `$HOME` resolves through a symlink.
 
 ## Phase 4: Orphaned Application Data
 

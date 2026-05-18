@@ -5,6 +5,100 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-18
+
+### Performance
+
+The macOS `/upkeep:update` parallel flow now runs discovery + plan in
+~15 seconds instead of the ~120 seconds of LLM agent overhead it took in
+v1.3. End-to-end approval-gate latency on a clean run drops from "almost
+unusable" to "interactive". Eight times faster, same security posture.
+
+- **`scripts/discover.sh`** replaces the four `skills-scout`, `native-scout`,
+  `language-scout`, and `shadow-scout` agents from v1.3. All four
+  discovery sections now run as inline bash + jq in concurrent background
+  jobs — `brew update` (the long pole at ~14s) runs in parallel with the
+  skills walk, the language-tool sweep, and the single-pass PATH-shadow
+  awk. Combined wall time is bounded by the slowest section, not by the
+  sum of four LLM round-trips. Per-section: skills 2s, native 14s,
+  language 5s, shadow <1s.
+- **`scripts/synthesize.sh`** replaces the v1.3 synthesizer agent. Plan
+  construction (semver classification, compat-matrix edge materialisation,
+  manual-steps assembly, ETA bake-ins, `gems.user_install` flagging) is
+  pure deterministic logic — the LLM never had real choices to make
+  here, only translation work. Pure jq + bash runs in under 300ms.
+- **`brew update` runs as part of discovery, not apply.** A v1.3 bug
+  surfaced today during a real run: the scout agent listed 19 outdated
+  brew packages, but only 3 were actually outdated once `brew upgrade`
+  refreshed its metadata. The user got a wildly inaccurate plan at the
+  approval gate. v1.4 runs `brew update` inside `discover.sh` so the
+  outdated list shown to the user matches what `brew upgrade` will
+  actually do.
+- **Enrichment agents now gate aggressively.** `changelog-reader` and
+  `project-impact` only fire when there is at least one brew major bump
+  OR at least one compat-matrix edge materialised at severity medium+.
+  Gem-only major bumps no longer trigger them — those almost always fail
+  on system Ruby and are better handled by the post-apply
+  `failure-diagnoser` than by upfront WebFetch overhead. Patch-heavy
+  runs skip enrichment entirely and surface
+  `Advisor: skipped (no high-impact upgrades)` in the gate body.
+
+### Security (preserved from v1.2 + v1.3)
+
+The v1.4 fast-path preserves every hardening invariant from v1.2 and
+v1.3. None of the security boundaries moved — only the path between
+them got shorter.
+
+- **Hardcoded dispatcher (v1.2)** — Step 3m's tool case statement is
+  unchanged; `tool_specs[].command` fields are still ignored.
+  `synthesize.sh` never emits a `command` field and the dispatcher's
+  allowlist check (`brew|npm|pipx|gems|uv|bun|mas|macos|skills`) still
+  rejects unknown tool ids.
+- **Discovery sanitization (v1.2.2)** — the optional 256-char string cap
+  + free-text field denylist is still applied before any LLM agent
+  receives discovery-derived input (the changelog-reader and
+  project-impact inputs are built from the sanitized JSON, not the raw
+  output of `discover.sh`).
+- **Exact-match remote URL validation (v1.2)** — the four canonical
+  forms for upkeep's own remote are still the only ones accepted.
+- **Trust-on-first-use for skill repos (v1.2)** — `discover.sh` reads
+  `~/.claude/data/upkeep-skill-trust.json` and marks unknown remotes
+  `untrusted: true` without fetching from them. The trust gate
+  (`AskUserQuestion`) still gates approval before any `git fetch` to an
+  unknown remote can happen.
+- **Discover / Approve / Apply turn separation (v1.2)** — unchanged.
+  Discovery, the trust gate (when triggered), the approval gate, and
+  apply are each their own conversation turn.
+- **Hardened script semantics** — both `discover.sh` and `synthesize.sh`
+  use `set -uo pipefail`, validate `schema_version: "1"` on input, and
+  fail closed (non-zero exit + empty stdout) rather than emit
+  half-formed JSON. A subtle pipefail-plus-fallback bug found during
+  testing (which produced `[]\n[]` for `sw_updates` when
+  `softwareupdate -l` had no matching lines) is fixed and now has an
+  explanatory comment so it doesn't get re-introduced.
+
+### Migration
+
+Existing installations of v1.3 / v1.3.1 will continue to work exactly as
+before — the v1.0 sequential flow for Linux and WSL2 is untouched, and
+the macOS routing decision in SKILL.md still chooses the parallel flow
+on `$OS_TYPE = "macos"`. The two new scripts live under
+`upkeep/skills/update/scripts/` and are referenced from SKILL.md via
+relative path; no environment variables, no install steps. Users who
+ran `/upkeep:update` under v1.3 and felt the latency will get the
+speedup automatically after `/plugin update upkeep`.
+
+### File-level changes
+
+- **NEW** `upkeep/skills/update/scripts/discover.sh` — ~430 lines
+- **NEW** `upkeep/skills/update/scripts/synthesize.sh` — ~210 lines
+- **CHANGED** `upkeep/skills/update/SKILL.md` — Steps 1m and 2m
+  rewritten to call the scripts; Step 2.5m enrichment gating tightened.
+  Net SKILL.md size: 1978 → 1833 lines (-145).
+- **CHANGED** `VERSION` 1.3.1 → 1.4.0
+- **CHANGED** `upkeep/.claude-plugin/plugin.json` version + description
+  rewritten to lead with the v1.4 speedup.
+
 ## [1.3.1] - 2026-05-13
 
 ### Fixed

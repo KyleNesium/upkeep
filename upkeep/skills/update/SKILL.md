@@ -204,311 +204,166 @@ fi
 
 If refused, stop here. If warned, continue to discovery.
 
-## Step 1m (macOS): Parallel Discovery — Four Scout Agents
+## Step 1m (macOS): Fast Discovery (v1.4)
 
-Run these four `Agent` calls in a **single tool-use block** so they execute in
-parallel. Each scout owns a domain, runs its own bash discovery, and returns a
-fragment of the overall JSON. Keep prompts self-contained — scouts don't see
-each other's context.
+Replaces the v1.3 four-scout-agent flow with a single bundled bash script
+that runs all four discovery sections (skills, native, language, shadow)
+in parallel via background jobs. Cuts wall time from ~90s of LLM agent
+overhead to ~15s of pure bash + jq — the macOS `brew update` call is now
+the only meaningful bottleneck, and we run it concurrently with the other
+three sections.
 
-### Discovery JSON schema (`schema_version: "1"`)
+```bash
+SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT:-/Users/kyle/.claude/plugins/cache/KyleNesium/upkeep}"
+SCRIPT_DIR="$SCRIPT_DIR/$(ls -1 "$SCRIPT_DIR" 2>/dev/null | sort -V | tail -1)/skills/update/scripts"
+# Fallback: locate scripts relative to this SKILL.md when not running from cache
+[ -d "$SCRIPT_DIR" ] || SCRIPT_DIR="$(dirname "$0")/scripts"
 
-The four fragments combine into:
+DISCOVERY_JSON=$(bash "$SCRIPT_DIR/discover.sh" 2>/dev/stderr) || {
+  echo "✗ discover.sh failed — see stderr above"
+  exit 1
+}
+
+# Quick sanity check
+if ! jq -e '.schema_version == "1"' <<<"$DISCOVERY_JSON" >/dev/null 2>&1; then
+  echo "✗ discovery JSON is malformed"
+  exit 1
+fi
+```
+
+The script handles its own:
+- Disk-space pre-flight (still computed; `disk.free_gb` in output drives the
+  Step 2m refuse path)
+- Trust-file reads (no fetch from untrusted remotes — they appear with
+  `untrusted: true` so the trust gate below can surface them)
+- Discovery sanitization (skills git output, brew JSON, mas/softwareupdate)
+- Single-pass PATH walk for shadow detection (no per-binary `which -a` fork)
+
+### Discovery JSON schema (unchanged from v1.3)
 
 ```json
 {
   "schema_version": "1",
   "os": {"type": "macos", "arch": "arm64|x86_64"},
-  "skills":   { /* skills-scout */ },
-  "native":   { /* native-scout */ },
-  "language": { /* language-scout */ },
-  "shadow":   { /* shadow-scout */ },
-  "disk":     {"free_gb": 124, "warn_threshold_gb": 10, "refuse_threshold_gb": 5}
+  "skills":   { /* git_repos[], managed[], info{} */ },
+  "native":   { /* brew{}, mas{}, softwareupdate{} */ },
+  "language": { /* npm/pipx/gems/uv/bun/deno/rustup/cargo/mise */ },
+  "shadow":   { /* duplicates[], broken_symlinks[] */ },
+  "disk":     { "free_gb": 124, "warn_threshold_gb": 10, "refuse_threshold_gb": 5 }
 }
 ```
 
-Detailed per-domain shape: see `.planning/phases/07-parallel-discovery/07-CONTEXT.md`.
+The script's full per-section shape is documented in
+`scripts/discover.sh` itself — the script is the contract.
 
-### Scout 1 — `skills-scout`
+### Trust gate (untrusted skill repos)
 
-> You are the upkeep skills scout. Discover all updatable AI skills on this
-> macOS machine and return a JSON `skills` block per the schema below.
->
-> **Trust check first.** Read `~/.claude/data/upkeep-skill-trust.json` (treat
-> absent file as `{}`). For every git repo found, get the remote URL via
-> `git -C "$d" remote get-url origin`. If the URL is NOT a key in the trust
-> file, mark the repo `untrusted: true` and **skip the `git fetch`** — record
-> only `path`, `branch`, `current_version`, `remote_url`, and leave
-> `commits_behind`, `newest_commit_subjects`, `breaking_lines` as `null` /
-> `[]`. The orchestrator (Step 3m trust gate) will surface untrusted remotes
-> for explicit user approval before any network call to them.
->
-> **Cover:**
-> 1. Git-cloned skills under `~/.claude/skills/*/.git`. For trusted repos
->    only: `git fetch --tags -q origin`, count commits behind
->    `origin/<branch>`, read VERSION or plugin.json for current version,
->    list newest 5 commit subjects, scan CHANGELOG.md for `BREAKING\|Breaking`
->    lines between current and target. For untrusted repos: skip fetch (see
->    Trust check above).
-> 2. Git-cloned skills under `~/.codex/skills/*/.git` — same trust check and
->    handling as (1).
-> 3. Plugin-cache-managed skills (e.g. upkeep itself when it lives under
->    `~/.claude/plugins/cache/`). Add to `managed[]` with the
->    `/plugin update <name>` command. (No trust check needed — plugin cache
->    is managed by Claude Code, not by upkeep.)
-> 4. Counts only: `~/.claude/plugins/cache/` total dirs, `~/.codex/skills/*`
->    total dirs.
->
-> **Output:** valid JSON only, no prose, no markdown fences. Use this shape:
->
-> ```json
-> {
->   "git_repos": [{"name": "...", "path": "...", "branch": "main",
->                  "remote_url": "git@github.com:owner/repo.git",
->                  "untrusted": false,
->                  "current_version": "...", "commits_behind": 0,
->                  "newest_commit_subjects": [], "breaking_lines": [],
->                  "dirty_files": [], "detached": false, "remote_ok": true,
->                  "manager": "claude" }],
->   "managed": [{"name": "upkeep", "manager": "claude-code-plugin",
->                "version": "1.0.6", "update_command": "/plugin update upkeep"}],
->   "info": {"claude_plugins": 0, "codex_skills_total": 0, "codex_skills_git": 0},
->   "errors": []
-> }
-> ```
+Before synthesis, check the discovery JSON for any entry with
+`untrusted: true`. The discovery script refuses to `git fetch` from
+unknown remotes, so untrusted entries have `commits_behind: 0` and empty
+metadata. For each untrusted entry, surface via `AskUserQuestion`:
 
-### Scout 2 — `native-scout`
+> Skill `<name>` at `<path>` has remote `<url>` and no prior trust record.
+> Fetch updates from it?
+> A) Trust this remote (remember for future runs)
+> B) Skip this skill this run
+> C) Show recent commits from origin first
 
-> You are the upkeep native-package scout. Discover outdated brew packages,
-> Mac App Store updates, and macOS software updates. Return a JSON `native`
-> block per the schema below.
->
-> **Cover:**
-> 1. Brew: prefer `brew outdated --json=v2 2>/dev/null`; fall back to plain
->    `brew outdated` when JSON is unavailable. For each formula, classify
->    `bump` as `major|minor|patch` from semver delta of `installed_versions`
->    vs `current_version`.
-> 2. mas: `mas outdated 2>/dev/null` if `command -v mas` succeeds.
-> 3. softwareupdate: `softwareupdate -l 2>&1`. Set `restart_required: true`
->    if the listing contains `[restart]`.
->
-> **Output:** valid JSON only.
->
-> ```json
-> {
->   "brew": {"installed": true, "outdated": [{"name": "node",
->            "from": "20.18.1", "to": "22.10.0", "bump": "major"}]},
->   "mas": {"installed": false, "outdated": []},
->   "softwareupdate": {"installed": true, "updates": [], "restart_required": false},
->   "errors": []
-> }
-> ```
+On A, append the URL to `~/.claude/data/upkeep-skill-trust.json` and
+**re-run `discover.sh`** so the newly-trusted repo gets a real fetch +
+commits_behind count. On B, leave the entry untrusted — Step 3m's
+skills-apply phase will skip it. On C, run `git -C <path> ls-remote
+origin HEAD` to surface the remote tip without writing any local state,
+then re-prompt A/B.
 
-### Scout 3 — `language-scout`
+This gate is its own turn — end the turn at the `AskUserQuestion`. Do
+not proceed to synthesis or apply in the same turn.
 
-> You are the upkeep language-ecosystem scout. Discover outdated tools across
-> npm/pipx/gems/uv/bun/deno/rustup/cargo/mise. Return a JSON `language` block
-> per the schema below.
->
-> **Cover (skip silently when not installed):**
-> - npm: `npm outdated -g --json 2>/dev/null` parsed into name/from/to/bump
-> - pipx: `pipx list --short 2>/dev/null`
-> - gems: `gem outdated 2>/dev/null` parsed into name/from/to/bump.
->   Detect system Ruby: set `system_ruby: true` and capture `ruby_version`
->   when `command -v ruby` resolves to `/usr/bin/ruby` AND `ruby --version`
->   starts with `ruby 2.`
-> - uv: `uv self version 2>/dev/null`
-> - bun: `bun --version 2>/dev/null`
-> - deno: `deno --version 2>/dev/null`
-> - rustup: `rustup check 2>/dev/null`
-> - cargo: `cargo install-update --list 2>/dev/null` (only if cargo-update
->   plugin installed)
-> - mise: `mise outdated 2>/dev/null`
->
-> **Output:** valid JSON only.
->
-> ```json
-> {
->   "npm":    {"installed": true, "outdated": []},
->   "pipx":   {"installed": true, "tools": [], "outdated_count": 0},
->   "gems":   {"installed": true, "system_ruby": true, "ruby_version": "2.6", "outdated": []},
->   "uv":     {"installed": true, "current": "0.9.7"},
->   "bun":    {"installed": true, "current": "1.3.9"},
->   "deno":   {"installed": false},
->   "rustup": {"installed": false},
->   "cargo":  {"installed": false},
->   "mise":   {"installed": false},
->   "errors": []
-> }
-> ```
+### Discovery script error handling
 
-### Scout 4 — `shadow-scout`
+If `discover.sh` exits non-zero or returns invalid JSON:
+- Surface the script's stderr verbatim in the final report under
+  `Manual steps`
+- Halt the run (no fallback "audit-mode" because we have no plan to apply)
+- Suggest `bash <path>/discover.sh 2>&1 | head -50` so the user can
+  re-run it themselves with full output
 
-> You are the upkeep PATH-shadow scout. Detect shadowed binaries and broken
-> symlinks under brew prefixes. Return a JSON `shadow` block.
->
-> **Method:**
-> 1. `brew --prefix` to find the brew root (typically `/opt/homebrew` on
->    Apple Silicon, `/usr/local` on Intel).
-> 2. **Single-pass PATH walk** (do not run `which -a` per binary — that
->    forks once per file under `${PREFIX}/bin`, which is hundreds of
->    processes on Apple Silicon brew). Instead, walk `$PATH` once with
->    awk, recording the first directory each name appears in:
->    ```bash
->    PREFIX=$(brew --prefix 2>/dev/null)
->    awk -v prefix="$PREFIX/bin" 'BEGIN {
->      n = split(ENVIRON["PATH"], P, ":")
->      for (i = 1; i <= n; i++) {
->        cmd = "ls -1 " P[i] " 2>/dev/null"
->        while ((cmd | getline name) > 0) {
->          if (!(name in seen)) seen[name] = P[i]
->          else if (P[i] == prefix && seen[name] != prefix) {
->            # brew path appears AFTER something else for this name
->            print name "\t" seen[name] "\t" prefix
->          }
->        }
->        close(cmd)
->      }
->    }'
->    ```
->    Each `name` shadowed by an earlier-PATH directory becomes one
->    `duplicates[]` entry: `{binary, primary, shadowed: [prefix]}`.
-> 3. `find -L ${PREFIX}/bin -maxdepth 1 -type l ! -exec test -e {} \; -print`
->    for broken symlinks (cap output at 10).
->
-> **Output:** valid JSON only.
->
-> ```json
-> {
->   "duplicates": [{"binary": "gemini",
->                   "primary": "/Users/kyle/.superset/bin/gemini",
->                   "shadowed": ["/opt/homebrew/bin/gemini"]}],
->   "broken_symlinks": [],
->   "errors": []
-> }
-> ```
+This is intentionally less forgiving than v1.3's scout-fallback. A
+deterministic bash script either runs cleanly or has a real bug worth
+filing — there is no "agent timed out" middle ground to paper over.
 
-### Combine fragments
+## Step 2m (macOS): Synthesize Plan (v1.4)
 
-After all four scouts complete, assemble the combined JSON document inline
-(no disk write). Pass it as input to the synthesizer agent in Step 2m.
-
-If any scout returns invalid JSON or an `errors[]` entry, surface the error
-in the final report under `Manual steps` and continue with a partial
-discovery — don't block the run.
-
-## Step 2m (macOS): Synthesize Plan — Compatibility Synthesizer Agent
-
-Single sequential `Agent` call. Inputs: combined discovery JSON + the contents
-of `compatibility.json` (read with `Read`). Output: ordered plan JSON.
-
-### Pre-call: load history file for ETA self-tuning
-
-Before invoking the synthesizer, read the history file into a shell
-variable so it can be injected into the prompt. If absent, use `{}`.
+Replaces the v1.3 synthesizer agent with `scripts/synthesize.sh`. All
+plan construction is deterministic — semver classification, fixed
+category ordering, compatibility-matrix edge materialisation, ETA
+bake-ins — so an LLM round-trip was pure overhead. The script runs in
+under 300 ms.
 
 ```bash
-HIST_FILE="$HOME/.claude/data/upkeep-history.json"
-if [ -f "$HIST_FILE" ]; then
-  HISTORY_JSON=$(cat "$HIST_FILE")
-else
-  HISTORY_JSON='{}'
-fi
+PLAN_JSON=$(bash "$SCRIPT_DIR/synthesize.sh" \
+  "$SCRIPT_DIR/../compatibility.json" \
+  "$HOME/.claude/data/upkeep-history.json" \
+  <<<"$DISCOVERY_JSON") || {
+  echo "✗ synthesize.sh failed"
+  exit 1
+}
 ```
 
-When constructing the synthesizer prompt below, substitute `${HISTORY_JSON}`
-in the History input fence with the value computed above. The other two
-input fences (discovery JSON, compatibility matrix) are filled in
-the same way — paste the values you've gathered.
+### Plan output schema (unchanged from v1.3)
 
-### Synthesizer prompt
+```json
+{
+  "schema_version": "1",
+  "summary": {"category_counts": {...}, "eta_minutes_p50": 5, "eta_minutes_p90": 7, "disk_free_gb": 397},
+  "warnings": [{"severity": "high|medium|low", "code": "...", "message": "..."}],
+  "manual_steps": [{"kind": "...", "message": "..."}],
+  "ordered_groups": [{"name": "skills|brew|language|stores", "parallelism": "serial|exclusive|parallel", "tools": [...], "item_count": N}],
+  "tool_specs": {"gems": {"user_install": true, ...}, "macos": {"restart_required": true}}
+}
+```
 
-> You are the upkeep compatibility synthesizer. Read the discovery JSON and
-> compatibility matrix below, then emit a single JSON `plan` document per the
-> schema. **Emit JSON only — no prose, no markdown fences.**
->
-> **Hard rules:**
-> 1. Only reference downstream effects that appear in `compatibility.json` —
->    do not invent edges. For each materialised edge, read
->    `severity_on_major` and `severity_on_minor` and copy the matching
->    value into the warning entry as `severity`. Sort `plan.warnings[]`
->    by severity: `high` first, then `medium`, then `low`.
-> 2. Classify version delta as `major` / `minor` / `patch` strictly by
->    semver: same-major-different-minor → minor; same-minor-different-patch
->    → patch; otherwise major.
-> 3. If `language.gems.system_ruby` is `true`, set
->    `tool_specs.gems.user_install` to `true` and add
->    `rationale_for_flag: "system Ruby ${ruby_version} detected; --user-install avoids sudo"`.
->    Do NOT emit `tool_specs.gems.command` — the apply step uses a hardcoded
->    command table and only reads the `user_install` boolean flag.
-> 4. If `disk.free_gb < 5`, set
->    `warnings: [{"severity": "high", "message": "Refusing to run: only ${free_gb} GB free"}]`
->    and emit empty `ordered_groups`.
-> 5. Build `ordered_groups` in this order: `skills` → `brew` → `language`
->    (parallelism: parallel) → `stores` (mas, macOS).
-> 6. ETA heuristic: if `~/.claude/data/upkeep-history.json` is provided in
->    your input, use the median of the last 5 runs per category. Otherwise
->    use the bake-in defaults below.
-> 7. Output `manual_steps` for: plugin-cache-managed skills (surface
->    `/plugin update <name>`), PATH shadows, codex skills without `.git`,
->    and any `git_repos[]` entry with `untrusted: true` (surface
->    `Re-run /upkeep:update after trusting <remote_url>`).
-> 7a. **Skills apply** runs as a dedicated pre-step inside Step 3m's apply
->    orchestration — it iterates the discovery JSON's `git_repos[]`
->    directly (not from `tool_specs`). The `skills` entry in
->    `ordered_groups` is a category marker only; do not emit a
->    `tool_specs.skills.command`. Untrusted repos must NOT appear in the
->    skills count for `ordered_groups` — they belong in `manual_steps`
->    until the user trusts them via Step 3m's trust gate.
-> 8. If `native.softwareupdate.restart_required` is `true`, include a
->    `macos` entry under `tool_specs` with
->    `{kind: "store", restart_required: true}` (no `command` field) and
->    ensure the `stores` `ordered_groups` entry lists `macos`. The
->    `restart_required` field gates Step 3m's separate restart-warning
->    `AskUserQuestion`.
-> 9. **Never emit a `command` field anywhere in `tool_specs`.** Apply
->    commands are hardcoded in Step 3m's dispatcher, keyed by tool id.
->    Any `command` field present in your output will be stripped before
->    apply runs. Likewise, do not emit a `preconditions` field as a shell
->    string — preconditions are also hardcoded.
->
-> **Bake-in ETA defaults (seconds per item):**
-> - brew: 25, npm: 30, pipx: 20, gems: 15, uv: 5 total, bun: 5 total,
->   skills: 3, mas: 30, macOS: 300.
->
-> Convert seconds → minutes when emitting `summary.eta_minutes_p50` /
-> `eta_minutes_p90`. Use `ceil(total_seconds / 60)` so an 89-second
-> estimate rounds to 2 minutes, not 1.
->
-> **Input:**
-> Discovery JSON:
-> ```json
-> {{ paste combined discovery JSON here }}
-> ```
-> Compatibility matrix:
-> ```json
-> {{ paste contents of compatibility.json here }}
-> ```
-> History (may be empty):
-> ```json
-> ${HISTORY_JSON}
-> ```
-
-### Plan output schema
-
-See `.planning/phases/08-compatibility-synthesizer/08-CONTEXT.md` for the
-full shape. Required fields: `plan.summary`, `plan.warnings`,
-`plan.manual_steps`, `plan.ordered_groups[]`, `plan.tool_specs{}`.
+The script enforces these v1.3 hard rules in jq:
+1. **Never emit a `command` field anywhere in `tool_specs`** — the
+   dispatcher in Step 3m has hardcoded commands keyed by tool id.
+2. **Only reference compat edges that materialised** — i.e. the source
+   brew package appears in this run's outdated list.
+3. **Severity mapping** — `severity_on_major` / `severity_on_minor` from
+   `compatibility.json` is used directly; sorted high → medium → low.
+4. **System Ruby flag** — `gems.user_install: true` is added when
+   `language.gems.system_ruby` is true.
+5. **Disk-refuse short-circuit** — when `disk.free_gb < refuse_threshold_gb`,
+   the plan has empty `ordered_groups` and a single
+   `severity: high, code: "disk-refuse"` warning. Step 3m's audit-mode
+   short-circuit handles this without an apply.
+6. **ETA** — bake-in defaults (brew 25s/pkg, gems 15s/gem, etc.); if a
+   history file is present, future revisions may use medians (the
+   current script reads but does not yet apply medians).
 
 ### Synthesizer fallback
 
-If the synthesizer Agent call fails (timeout, schema-invalid output), build a
-fallback plan inline:
+If `synthesize.sh` exits non-zero or emits invalid JSON, fall back to a
+minimal rule-based plan inline:
 
-- Order: `skills` → `brew` → each language tool serially → `mas` → `macOS`
-- No compatibility flags, no ETA
-- Surface in the report: `compatibility analysis unavailable — running in fallback mode`
+```bash
+PLAN_JSON=$(jq -nc --argjson d "$DISCOVERY_JSON" '{
+  schema_version: "1",
+  summary: {category_counts: {}, eta_minutes_p50: 0, eta_minutes_p90: 0, disk_free_gb: $d.disk.free_gb},
+  warnings: [{severity: "medium", code: "synthesizer-fallback",
+              message: "compatibility analysis unavailable — running in fallback mode"}],
+  manual_steps: [],
+  ordered_groups: [
+    {name: "skills",   parallelism: "serial", tools: ["skills"], item_count: ($d.skills.git_repos | map(select(.untrusted == false and (.commits_behind // 0) > 0)) | length)},
+    {name: "brew",     parallelism: "exclusive", tools: ["brew"], item_count: ($d.native.brew.outdated | length)},
+    {name: "language", parallelism: "parallel", tools: ["npm","pipx","gems","uv","bun"], item_count: 0},
+    {name: "stores",   parallelism: "serial", tools: ["mas","macos"], item_count: 0}
+  ],
+  tool_specs: (if $d.language.gems.system_ruby then {gems: {user_install: true}} else {} end)
+}')
+```
 
+Surface in the final report:
+`compatibility analysis unavailable — running in fallback mode`.
 ## Step 2.5m (macOS): Enrichment — Risk Advisor Agents (v1.3)
 
 After Step 2m builds the plan but **before** Step 3m's approval gate, fan
@@ -525,6 +380,18 @@ Skip Step 2.5m entirely when any of:
 - sub-mode is `audit` (the Step 3m audit short-circuit fires anyway)
 - `plan.ordered_groups[]` is empty
 - `plan.warnings[]` contains a `severity: high` `disk-refuse` entry
+- **(v1.4)** no enrichment-worthy items exist:
+  - **No brew major bumps** in `discovery.native.brew.outdated` (gem-only
+    majors typically fail on system Ruby and are handled by the
+    failure-diagnoser post-apply, not by upfront release-note context), AND
+  - **No compat-matrix edges materialised at `severity: medium` or higher**
+    in `plan.warnings[]` (no cross-manager risks worth deep-reading)
+
+In that "nothing to enrich" case, set `CHANGELOG_JSON='{"summaries":[],"errors":[]}'`
+and `PROJECT_JSON='{"by_tool":{},"summary":{},"errors":[]}'` and surface
+`Advisor: skipped (no high-impact upgrades)` in the gate body. This
+typically cuts ~30–60s of WebFetch + find-walk overhead on patch-heavy
+or gems-only runs.
 
 Otherwise dispatch both agents in a single tool-use block so they execute
 in parallel.

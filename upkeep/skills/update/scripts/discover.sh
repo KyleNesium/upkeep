@@ -194,7 +194,21 @@ discover_native() {
   if command -v brew >/dev/null 2>&1; then
     brew_installed=true
     # CRITICAL FIX from v1.3: refresh metadata FIRST so outdated list is accurate.
-    brew update >/dev/null 2>&1 || errors=$(jq '. + ["brew update failed"]' <<<"$errors")
+    # v1.5: TTL-cache `brew update` (8–14s wall) against brew's own formula.jws.json
+    # mtime. Default 1h; bypass with UPKEEP_NO_CACHE=1. Sentinel is the JSON file
+    # `brew update` already writes — no separate timestamp file needed.
+    local brew_sentinel="$HOME/Library/Caches/Homebrew/api/formula.jws.json"
+    local brew_ttl="${UPKEEP_BREW_TTL:-3600}"  # seconds
+    local brew_ttl_min=$(( brew_ttl / 60 ))
+    [ "$brew_ttl_min" -lt 1 ] && brew_ttl_min=1
+    local skip_update=0
+    if [ "${UPKEEP_NO_CACHE:-0}" != "1" ] && \
+       [ -n "$(find "$brew_sentinel" -mmin -"$brew_ttl_min" 2>/dev/null)" ]; then
+      skip_update=1
+    fi
+    if [ "$skip_update" = "0" ]; then
+      brew update >/dev/null 2>&1 || errors=$(jq '. + ["brew update failed"]' <<<"$errors")
+    fi
 
     local brew_json
     brew_json=$(brew outdated --json=v2 2>/dev/null || echo '{"formulae":[],"casks":[]}')

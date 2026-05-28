@@ -10,6 +10,9 @@ vetter-report.md
 # Local Claude Code state (personal permission cache)
 .claude/settings.local.json
 
+# Stray npm artifact — no real Node deps in this repo
+package-lock.json
+
 # Safety nets
 .env
 .env.*

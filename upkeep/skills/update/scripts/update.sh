@@ -1,0 +1,546 @@
+#!/usr/bin/env bash
+# upkeep update orchestrator — single-shot (v1.5)
+#
+# Collapses what v1.4 did across five SKILL.md steps (1m discover, 2m
+# synthesize, 2.5m enrich, 3m apply, 4m post-flight, 4.5m diagnose,
+# 5m report) into two shell invocations:
+#
+#   update.sh plan <mode> [--no-cache]
+#     → builds plan, writes it to a temp file, prints SKILL.md-facing
+#       summary JSON on stdout (plan_file path, render hints, gate
+#       requirements). Total LLM exposure: one turn to render the gate.
+#
+#   update.sh apply <plan-file> [--drop=tool1,tool2] [--advisor]
+#     → reads the plan, runs the apply dispatcher + post-flight +
+#       pattern-table diagnoser + history write, prints SKILL.md-facing
+#       report JSON on stdout. Total LLM exposure: one turn to render
+#       the report.
+#
+# All v1.4 security invariants preserved:
+#   - hardcoded dispatcher allowlist (no eval of synthesizer output)
+#   - tool_specs.command / preconditions ignored if present
+#   - discovery sanitization (256-char string cap + free-text denylist)
+#   - trust-on-first-use surfaced as untrusted_repos in plan JSON
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(dirname "$SCRIPT_DIR")"
+DATA_DIR="${UPKEEP_DATA_DIR:-$HOME/.claude/data}"
+
+# ── Common helpers ───────────────────────────────────────────────
+_require_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo '{"error":"jq required but not found"}' >&2
+    exit 1
+  fi
+}
+
+_die() {
+  jq -n --arg msg "$1" '{error:$msg}'
+  exit 1
+}
+
+# ───────────────────────────────────────────────────────────────────
+# COMMAND: plan
+# ───────────────────────────────────────────────────────────────────
+_cmd_plan() {
+  local mode="${1:-all}"
+  shift || true
+  local no_cache=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-cache) no_cache=1 ;;
+      *) ;;
+    esac
+    shift
+  done
+
+  _require_jq
+
+  # Run discovery (with optional cache bypass)
+  local discovery
+  if [ "$no_cache" = "1" ]; then
+    discovery=$(UPKEEP_NO_CACHE=1 bash "$SCRIPT_DIR/discover.sh" 2>/dev/null) \
+      || _die "discover.sh failed"
+  else
+    discovery=$(bash "$SCRIPT_DIR/discover.sh" 2>/dev/null) \
+      || _die "discover.sh failed"
+  fi
+
+  if ! jq -e '.schema_version == "1"' <<<"$discovery" >/dev/null 2>&1; then
+    _die "discover.sh produced invalid JSON"
+  fi
+
+  # Apply mode filter — audit and skills modes shrink the synthesizer's
+  # input so the plan reflects what the user actually asked for.
+  case "$mode" in
+    skills)
+      # Replace native + language with empty stubs so the synthesizer
+      # emits only the skills group. Going field-by-field misses things
+      # like pipx.outdated_count (a number, not an array) and tools[].
+      # The stub schema matches what the scouts emit when nothing is
+      # installed.
+      discovery=$(jq '
+        .native = {
+          brew: {installed:false, outdated:[]},
+          mas:  {installed:false, outdated:[]},
+          softwareupdate: {installed:false, updates:[], restart_required:false},
+          errors: []
+        }
+        | .language = {
+          npm: {installed:false, outdated:[]},
+          pipx: {installed:false, tools:[], outdated_count:0},
+          gems: {installed:false, system_ruby:false, outdated:[]},
+          uv: {installed:false},
+          bun: {installed:false},
+          deno: {installed:false},
+          rustup: {installed:false},
+          cargo: {installed:false},
+          mise: {installed:false},
+          errors: []
+        }
+      ' <<<"$discovery")
+      ;;
+    packages)
+      discovery=$(jq '.skills.git_repos=[] | .skills.managed=[]' <<<"$discovery")
+      ;;
+    audit|all|"")
+      mode="${mode:-all}"
+      ;;
+    *)
+      _die "unknown mode: $mode (expected: audit|skills|packages|all)"
+      ;;
+  esac
+
+  # Run synthesizer
+  local hist_file="$DATA_DIR/upkeep-history.json"
+  local plan
+  plan=$(bash "$SCRIPT_DIR/synthesize.sh" \
+    "$SKILL_DIR/compatibility.json" \
+    "$hist_file" \
+    <<<"$discovery" 2>/dev/null) || _die "synthesize.sh failed"
+
+  if ! jq -e '.schema_version == "1"' <<<"$plan" >/dev/null 2>&1; then
+    _die "synthesize.sh produced invalid plan JSON"
+  fi
+
+  # Extract untrusted repos (the v1.3+ trust gate operates on these)
+  local untrusted
+  untrusted=$(jq -c '[.skills.git_repos[]? | select(.untrusted == true)
+                      | {name, path, remote_url}]' <<<"$discovery")
+
+  # Stash full plan + discovery snapshot to disk so apply can read
+  # them without re-running discovery (which would now show post-apply
+  # state, not the state the user approved against).
+  mkdir -p "$DATA_DIR" 2>/dev/null
+  # Sweep stale plan files (>24h) so the data dir doesn't grow unbounded
+  # when users invoke /upkeep:update repeatedly without applying.
+  find "$DATA_DIR" -maxdepth 1 -name 'upkeep-plan.*' -mmin +1440 -delete 2>/dev/null
+  local plan_file
+  # mktemp requires XXXXXX at the END on macOS BSD (no --suffix). The file
+  # is internal; SKILL.md treats plan_file as opaque, no .json suffix needed.
+  plan_file=$(mktemp "${DATA_DIR}/upkeep-plan.XXXXXX") || _die "mktemp failed"
+  jq -n --argjson plan "$plan" --argjson discovery "$discovery" \
+    --arg mode "$mode" --arg ts "$(date -u +%FT%TZ)" \
+    '{schema_version:"1", mode:$mode, created_at:$ts,
+      plan:$plan, discovery:$discovery}' > "$plan_file"
+
+  # Audit-mode short-circuit: no gate, no apply, plan is the report.
+  local needs_approval=true
+  if [ "$mode" = "audit" ]; then
+    needs_approval=false
+  fi
+
+  # If plan has empty ordered_groups (nothing to do), no gate either.
+  local group_count
+  group_count=$(jq '.ordered_groups | length' <<<"$plan")
+  if [ "$group_count" = "0" ]; then
+    needs_approval=false
+  fi
+
+  # SKILL.md-facing summary. Compact — render hints, not full plan.
+  jq -n \
+    --arg plan_file "$plan_file" \
+    --argjson plan "$plan" \
+    --argjson untrusted "$untrusted" \
+    --argjson needs_approval "$needs_approval" \
+    --arg mode "$mode" \
+    '{
+      mode: $mode,
+      plan_file: $plan_file,
+      needs_approval: $needs_approval,
+      summary: $plan.summary,
+      warnings: $plan.warnings,
+      manual_steps: $plan.manual_steps,
+      ordered_groups: $plan.ordered_groups,
+      restart_required: ($plan.tool_specs.macos.restart_required // false),
+      gems_user_install: ($plan.tool_specs.gems.user_install // false),
+      untrusted_repos: $untrusted
+    }'
+}
+
+# ───────────────────────────────────────────────────────────────────
+# COMMAND: apply
+# ───────────────────────────────────────────────────────────────────
+_cmd_apply() {
+  local plan_file="${1:-}"
+  shift || true
+  [ -f "$plan_file" ] || _die "plan file not found: $plan_file"
+
+  local drop_csv=""
+  local advisor=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --drop=*) drop_csv="${1#--drop=}" ;;
+      --advisor) advisor=1 ;;
+      *) ;;
+    esac
+    shift
+  done
+
+  _require_jq
+
+  local plan discovery mode
+  plan=$(jq -c '.plan' "$plan_file")
+  discovery=$(jq -c '.discovery' "$plan_file")
+  mode=$(jq -r '.mode' "$plan_file")
+
+  # ── Set up race-free accumulators (matches v1.4 Step 3m) ─────
+  local tmp_root
+  tmp_root=$(mktemp -d) || _die "mktemp -d failed"
+  local upgraded_formulas_file="$tmp_root/upgraded_formulas"
+  local upgraded_tools_file="$tmp_root/upgraded_tools"
+  local failure_log_file="$tmp_root/failure_log"
+  local deprecation_log="$tmp_root/deprecation_log"
+  local apply_log_root="$tmp_root/logs"
+  mkdir -p "$apply_log_root"
+  trap 'rm -rf -- "$tmp_root"' EXIT
+
+  touch "$upgraded_formulas_file" "$upgraded_tools_file" \
+        "$failure_log_file" "$deprecation_log"
+
+  # ── Dropped tools set (from gate's "drop categories" path) ───
+  local -A dropped=()
+  if [ -n "$drop_csv" ]; then
+    local IFS=,
+    for t in $drop_csv; do dropped[$t]=1; done
+  fi
+
+  # ── Validate tool ids against hardcoded allowlist ────────────
+  local allowed="skills brew npm pipx gems uv bun mas macos"
+  local tool
+  while read -r tool; do
+    [ -z "$tool" ] && continue
+    case " $allowed " in
+      *" $tool "*) ;;
+      *)
+        _die "refusing unknown tool id from plan: $tool"
+        ;;
+    esac
+  done < <(jq -r '.ordered_groups[].tools[]' <<<"$plan")
+
+  # ────────────────────────────────────────────────────────────
+  # SKILLS APPLY PHASE (runs before dispatcher)
+  # ────────────────────────────────────────────────────────────
+  local skills_log="$apply_log_root/skills.log"
+  : > "$skills_log"
+  local skills_applied=0 skills_skipped=0
+  while read -r repo_json; do
+    [ -z "$repo_json" ] && continue
+    local repo_path branch repo_name current_version commits_behind untrusted
+    repo_path=$(jq -r '.path' <<<"$repo_json")
+    branch=$(jq -r '.branch' <<<"$repo_json")
+    repo_name=$(jq -r '.name' <<<"$repo_json")
+    current_version=$(jq -r '.current_version // "?"' <<<"$repo_json")
+    commits_behind=$(jq -r '.commits_behind // 0' <<<"$repo_json")
+    untrusted=$(jq -r '.untrusted // false' <<<"$repo_json")
+
+    [ "$untrusted" = "true" ] && { skills_skipped=$((skills_skipped+1)); continue; }
+    [ "$commits_behind" = "0" ] && continue
+
+    case "$repo_path" in
+      "$HOME/.claude/skills/"*|"$HOME/.codex/skills/"*) ;;
+      *)
+        echo "skills: refusing path outside skill roots: $repo_path" >> "$skills_log"
+        skills_skipped=$((skills_skipped+1))
+        continue
+        ;;
+    esac
+
+    if [ -n "$(git -C "$repo_path" status --porcelain 2>/dev/null)" ]; then
+      echo "skills: $repo_name dirty — skipped" >> "$skills_log"
+      skills_skipped=$((skills_skipped+1))
+      continue
+    fi
+    if ! git -C "$repo_path" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+      echo "skills: $repo_name detached HEAD — skipped" >> "$skills_log"
+      skills_skipped=$((skills_skipped+1))
+      continue
+    fi
+
+    if git -C "$repo_path" pull --ff-only origin "$branch" >> "$skills_log" 2>&1; then
+      local new_version
+      new_version=$(tr -d '[:space:]' < "$repo_path/VERSION" 2>/dev/null \
+        || grep -m1 '"version"' "$repo_path/.claude-plugin/plugin.json" 2>/dev/null \
+           | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
+        || echo "?")
+      echo "$repo_name $current_version → $new_version" >> "$upgraded_tools_file"
+      skills_applied=$((skills_applied+1))
+    else
+      echo "$repo_name pull failed" >> "$failure_log_file"
+      skills_skipped=$((skills_skipped+1))
+    fi
+  done < <(jq -c '.skills.git_repos[]?' <<<"$discovery")
+
+  # ────────────────────────────────────────────────────────────
+  # PACKAGE DISPATCHER (hardcoded commands, never eval plan)
+  # ────────────────────────────────────────────────────────────
+  _run_tool() {
+    local tool="$1"
+    local log="$apply_log_root/${tool}.log"
+    : > "$log"
+    local rc=0
+
+    [ "${dropped[$tool]:-0}" = "1" ] && return 0
+
+    case "$tool" in
+      brew)
+        brew upgrade >> "$log" 2>&1; rc=$?
+        if [ "$rc" = "0" ]; then
+          grep -E "^==> Upgrading" "$log" 2>/dev/null \
+            | awk '{print $3}' | cut -d/ -f1 >> "$upgraded_formulas_file"
+        fi
+        ;;
+      npm)
+        npm update -g >> "$log" 2>&1; rc=$?
+        ;;
+      pipx)
+        pipx upgrade-all >> "$log" 2>&1; rc=$?
+        ;;
+      gems)
+        local user_install
+        user_install=$(jq -r '.tool_specs.gems.user_install // false' <<<"$plan")
+        if [ "$user_install" = "true" ]; then
+          gem update --user-install >> "$log" 2>&1; rc=$?
+        else
+          gem update >> "$log" 2>&1; rc=$?
+        fi
+        ;;
+      uv)    uv self update >> "$log" 2>&1; rc=$? ;;
+      bun)   bun upgrade >> "$log" 2>&1; rc=$? ;;
+      mas)   mas upgrade >> "$log" 2>&1; rc=$? ;;
+      macos) softwareupdate -ia >> "$log" 2>&1; rc=$? ;;
+      skills) rc=0 ;;  # already ran above
+      *)
+        echo "refusing unknown tool: $tool" >> "$log"
+        rc=1
+        ;;
+    esac
+
+    if [ "$rc" = "0" ]; then
+      [ "$tool" != "brew" ] && [ "$tool" != "skills" ] && echo "$tool" >> "$upgraded_tools_file"
+    else
+      printf '%s\t%s\thard\t%s\n' "$tool" "$rc" "$log" >> "$failure_log_file"
+    fi
+
+    # Partial-failure detection (even on rc=0)
+    case "$tool" in
+      gems)
+        grep -q "^ERROR:  Error installing" "$log" 2>/dev/null \
+          && printf 'gems\t0\tpartial\t%s\n' "$log" >> "$failure_log_file" ;;
+      npm)
+        grep -qE "^npm (ERR|error)" "$log" 2>/dev/null \
+          && printf 'npm\t0\tpartial\t%s\n' "$log" >> "$failure_log_file" ;;
+      brew)
+        grep -qE "^Error: " "$log" 2>/dev/null \
+          && printf 'brew\t0\tpartial\t%s\n' "$log" >> "$failure_log_file" ;;
+      pipx)
+        grep -qE "^(Error|⚠)" "$log" 2>/dev/null \
+          && printf 'pipx\t0\tpartial\t%s\n' "$log" >> "$failure_log_file" ;;
+    esac
+
+    # Deprecation aggregator
+    grep -iE "(deprecat|warning|WARN)" "$log" 2>/dev/null >> "$deprecation_log"
+  }
+
+  # Iterate ordered groups
+  local group_idx=0 group_count
+  group_count=$(jq '.ordered_groups | length' <<<"$plan")
+  while [ "$group_idx" -lt "$group_count" ]; do
+    local group parallelism tools
+    group=$(jq -c ".ordered_groups[$group_idx]" <<<"$plan")
+    parallelism=$(jq -r '.parallelism' <<<"$group")
+    tools=$(jq -r '.tools[]' <<<"$group")
+
+    case "$parallelism" in
+      parallel)
+        local pids=()
+        local concurrency=0
+        for tool in $tools; do
+          _run_tool "$tool" &
+          pids+=($!)
+          concurrency=$((concurrency+1))
+          if [ "$concurrency" -ge 4 ]; then
+            wait "${pids[0]}"
+            pids=("${pids[@]:1}")
+            concurrency=$((concurrency-1))
+          fi
+        done
+        for pid in "${pids[@]}"; do wait "$pid"; done
+        ;;
+      serial|exclusive)
+        for tool in $tools; do _run_tool "$tool"; done
+        ;;
+      *) _die "unknown parallelism: $parallelism" ;;
+    esac
+    group_idx=$((group_idx+1))
+  done
+
+  # ────────────────────────────────────────────────────────────
+  # POST-FLIGHT (Step 4m verbatim, condensed)
+  # ────────────────────────────────────────────────────────────
+  local doctor_out=""
+  if command -v brew >/dev/null 2>&1 && [ -n "$(cat "$upgraded_formulas_file" 2>/dev/null)" ]; then
+    doctor_out=$(brew doctor 2>&1)
+    case "$doctor_out" in
+      *"Your system is ready to brew."*) doctor_out="" ;;
+    esac
+  fi
+
+  local upgraded_formulas
+  upgraded_formulas=$(sort -u "$upgraded_formulas_file" | tr '\n' ' ')
+  local upgraded_tools
+  upgraded_tools=$(sort -u "$upgraded_tools_file" | tr '\n' ' ')
+
+  local shadow_hits='[]'
+  if [ -n "$upgraded_formulas" ] && command -v brew >/dev/null 2>&1; then
+    local brew_prefix
+    brew_prefix=$(brew --prefix 2>/dev/null)
+    local shadow_lines=""
+    for formula in $upgraded_formulas; do
+      local bins
+      bins=$(brew list "$formula" 2>/dev/null | grep "/bin/" | xargs -n1 basename 2>/dev/null | sort -u)
+      for bin in $bins; do
+        local paths first
+        paths=$(which -a "$bin" 2>/dev/null | sort -u)
+        local count
+        count=$(echo "$paths" | grep -c . 2>/dev/null)
+        if [ "${count:-0}" -gt 1 ]; then
+          first=$(echo "$paths" | head -1)
+          local brew_path="$brew_prefix/bin/$bin"
+          if [ "$first" != "$brew_path" ]; then
+            shadow_lines+="$bin (first: $first, brew: $brew_path)\n"
+          fi
+        fi
+      done
+    done
+    if [ -n "$shadow_lines" ]; then
+      shadow_hits=$(printf '%b' "$shadow_lines" | jq -R '.' | jq -s -c '.')
+    fi
+  fi
+
+  local resolution_failures='[]'
+  local res_lines=""
+  for t in $upgraded_tools; do
+    case "$t" in
+      */*|*→*) continue ;;  # skip "skill name → version" entries
+    esac
+    if ! command -v "$t" >/dev/null 2>&1; then
+      res_lines+="$t\n"
+    fi
+  done
+  [ -n "$res_lines" ] && resolution_failures=$(printf '%b' "$res_lines" | jq -R '.' | jq -s -c '.')
+
+  # ────────────────────────────────────────────────────────────
+  # FAILURE DIAGNOSIS (replaces v1.4 Step 4.5m LLM agent)
+  # ────────────────────────────────────────────────────────────
+  local diagnoses_json='{"diagnoses":[],"errors":[]}'
+  if [ -s "$failure_log_file" ]; then
+    diagnoses_json=$(bash "$SCRIPT_DIR/diagnose.sh" < "$failure_log_file" 2>/dev/null \
+      || echo '{"diagnoses":[],"errors":["diagnose.sh failed"]}')
+  fi
+
+  # ────────────────────────────────────────────────────────────
+  # HISTORY WRITE (Step 5m flock-guarded)
+  # ────────────────────────────────────────────────────────────
+  if command -v jq >/dev/null 2>&1; then
+    local hist_file="$DATA_DIR/upkeep-history.json"
+    local hist_lock="$DATA_DIR/upkeep-history.lock"
+    mkdir -p "$DATA_DIR" 2>/dev/null
+    local entry
+    entry=$(jq -n --arg ts "$(date -u +%FT%TZ)" \
+      --argjson formulas "$(jq '.native.brew.outdated | length' <<<"$discovery")" \
+      --argjson tools "$(jq '.language | [.[].outdated // [] | length] | add // 0' <<<"$discovery")" \
+      '{ts:$ts, brew_count:$formulas, lang_count:$tools}')
+    _write_history() {
+      local tmp
+      tmp=$(mktemp "${DATA_DIR}/.upkeep-history.XXXXXX") || return 1
+      if [ -f "$hist_file" ]; then
+        jq --argjson e "$entry" '.runs += [$e]' "$hist_file" > "$tmp" \
+          && mv -- "$tmp" "$hist_file"
+      else
+        jq -n --argjson e "$entry" '{schema_version:"1", runs:[$e]}' > "$tmp" \
+          && mv -- "$tmp" "$hist_file"
+      fi
+    }
+    if command -v flock >/dev/null 2>&1; then
+      ( flock -x 9; _write_history ) 9>"$hist_lock"
+    else
+      _write_history
+    fi
+  fi
+
+  # ────────────────────────────────────────────────────────────
+  # REPORT JSON for SKILL.md to render
+  # ────────────────────────────────────────────────────────────
+  jq -n \
+    --arg mode "$mode" \
+    --argjson skills_applied "$skills_applied" \
+    --argjson skills_skipped "$skills_skipped" \
+    --argjson upgraded_formulas "$(echo "$upgraded_formulas" | tr ' ' '\n' | grep -v '^$' | jq -R '.' | jq -s -c '.')" \
+    --argjson upgraded_tools "$(echo "$upgraded_tools" | tr ' ' '\n' | grep -v '^$' | jq -R '.' | jq -s -c '.')" \
+    --argjson diagnoses "$diagnoses_json" \
+    --argjson shadow_hits "$shadow_hits" \
+    --argjson resolution_failures "$resolution_failures" \
+    --arg doctor "$doctor_out" \
+    '{
+      mode: $mode,
+      skills: {applied: $skills_applied, skipped: $skills_skipped},
+      upgraded_formulas: $upgraded_formulas,
+      upgraded_tools: $upgraded_tools,
+      doctor: ($doctor | select(length > 0)),
+      shadow_hits: $shadow_hits,
+      resolution_failures: $resolution_failures,
+      diagnoses: $diagnoses.diagnoses,
+      diagnosis_errors: $diagnoses.errors
+    }'
+
+  # Plan file has served its purpose — remove. The trap on $tmp_root
+  # handles the apply workspace; the plan file lives in $DATA_DIR.
+  rm -f -- "$plan_file" 2>/dev/null
+}
+
+# ───────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ───────────────────────────────────────────────────────────────────
+case "${1:-}" in
+  plan)  shift; _cmd_plan "$@" ;;
+  apply) shift; _cmd_apply "$@" ;;
+  ""|help|--help)
+    cat <<'EOF' >&2
+upkeep/update.sh — single-shot orchestrator (v1.5)
+
+Usage:
+  update.sh plan <audit|skills|packages|all> [--no-cache]
+  update.sh apply <plan-file> [--drop=tool1,tool2] [--advisor]
+
+Environment:
+  UPKEEP_BREW_TTL    brew update cache TTL in seconds (default 3600)
+  UPKEEP_NO_CACHE    set to 1 to force brew update refresh
+  UPKEEP_DATA_DIR    plan/history directory (default ~/.claude/data)
+EOF
+    exit 64
+    ;;
+  *) _die "unknown command: $1 (expected: plan|apply)" ;;
+esac

@@ -5,6 +5,136 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-05-28
+
+### Performance
+
+v1.4 made discovery 8x faster but the multi-turn SKILL.md structure still
+cost ~15–25s of LLM round-trip overhead between steps, and the enrichment
+agents added another 30–60s before the approval gate. User-perceived
+end-to-end time was ~60–90s — still too slow for routine use ("this skill
+takes way too long to run, people complain about it and won't use it in
+its current state").
+
+v1.5 collapses the macOS flow into a single shell orchestrator and moves
+enrichment out of the critical path. Total LLM turns from invocation to
+approval gate: **2** (was: 5–6). Measured warm-cache numbers on a real
+machine (Apple Silicon, 20 outdated brew formulae, 14 outdated gems on
+system Ruby 2.6):
+
+| Phase | v1.4 | v1.5 | Speedup |
+|---|---|---|---|
+| Discovery + plan (warm cache) | ~16s | **~5s** | 3.2x |
+| Discovery + plan (cold cache) | ~16s | ~13s | 1.2x |
+| User-perceived pre-gate (incl. enrichment + LLM turns) | ~60–90s | **~5s** | **12–18x** |
+| Audit-mode end-to-end | ~30s+ | **~5s** | 6x |
+| Failure diagnosis per failing tool | ~10–20s (LLM) | **~100ms** (pattern table) | 100x+ |
+
+The 5s warm-cache floor is dominated by `discover.sh`'s parallel sections
+(skills walk + language scout + shadow walk). Dropping that further is the
+v1.5.x eager-discovery hook story (deferred — current numbers hit
+"interactive" without it).
+
+- **`scripts/update.sh`** is the new single-shot orchestrator. Two
+  commands:
+  - `update.sh plan <mode> [--no-cache]` — runs discover.sh +
+    synthesize.sh, writes the full plan to a temp file in
+    `~/.claude/data/`, emits a compact JSON envelope for SKILL.md to
+    render the gate from.
+  - `update.sh apply <plan-file> [--drop=tool1,tool2]` — reads the plan,
+    runs the skills apply phase + hardcoded package dispatcher +
+    post-flight + diagnose.sh + history write, emits a compact JSON
+    envelope for SKILL.md to render the final report.
+  SKILL.md drops from 1845 lines to ~430 (macOS section: ~1300 lines →
+  ~230). It now contains zero apply orchestration logic — that all lives
+  in `update.sh`.
+- **`brew update` is TTL-cached.** `discover.sh` checks
+  `~/Library/Caches/Homebrew/api/formula.jws.json` mtime (the sentinel
+  brew itself maintains) and skips `brew update` if it's fresh within
+  `UPKEEP_BREW_TTL` (default 3600s). The 8–14s long pole that dominated
+  v1.4 discovery is now ~0s on warm runs. `UPKEEP_NO_CACHE=1` forces a
+  refresh. Measured impact on this machine: discovery 16s cold → ~5s
+  warm.
+- **`scripts/diagnose.sh` replaces the v1.3 `failure-diagnoser` LLM
+  agent.** Eight pattern-matched root causes covering ~80% of real
+  failures: system Ruby version (gems), missing native build deps
+  (extconf), `EACCES` / permission denied, broken pipx venv
+  (ImportError), `dyld` library not loaded, arch mismatch (`incompatible
+  cpu-arch` / `wrong ELF class`), dependency-solver constraints, brew
+  formula post-install failures. Output JSON shape matches the v1.4
+  agent's so SKILL.md's failure-block rendering is unchanged. Runs in
+  ~50ms vs the agent's 10–20s per failure. Destructive-command denylist
+  (`rm -rf|--force|sudo rm|chmod 777|push --force|curl|sh`) still applies
+  as defense-in-depth even though patterns are hand-authored.
+- **Enrichment is opt-in.** `changelog-reader` and `project-impact`
+  agents (introduced in v1.3) move from "fires before the gate" to
+  "fires after the gate, in parallel with apply, only when the user
+  passes `--advisor`". The default flow never WebFetches and never walks
+  `~/workspace`, removing 30–60s of pre-gate wait for the common case.
+  Users who want the context still get it — they pass `--advisor` and
+  see release-note summaries + project-impact matches in the final
+  report instead of the gate.
+
+### Security (preserved from v1.4)
+
+The v1.5 rewrite preserves every hardening invariant from v1.2/v1.3/v1.4
+verbatim — only the path between them got shorter.
+
+- **Hardcoded dispatcher** — `update.sh`'s `case "$tool"` block contains
+  the canonical command for every supported tool id. Plan JSON's
+  `tool_specs[].command` and `.preconditions` fields are NEVER read; the
+  synthesizer is wired to not emit them and the dispatcher would ignore
+  them if they appeared.
+- **Tool-id allowlist** — `update.sh` validates every tool id from
+  `ordered_groups[].tools[]` against `skills brew npm pipx gems uv bun
+  mas macos` before any dispatcher call. Unknown ids abort the apply.
+- **Skills path validation** — `update.sh`'s skills-apply phase only
+  pulls repos under `$HOME/.claude/skills/*` or `$HOME/.codex/skills/*`.
+  Dirty trees skipped, detached HEAD skipped, pulls are `--ff-only`.
+- **Discovery sanitization** — the 256-char string cap + free-text
+  denylist from v1.2.2 still runs inside `discover.sh` before any
+  synthesizer input.
+- **Trust-on-first-use for skill repos** — `discover.sh`'s
+  `untrusted: true` flag still propagates through synthesize.sh to
+  `update.sh plan`'s output as `untrusted_repos[]`; SKILL.md surfaces
+  each via `AskUserQuestion` before the main gate.
+- **Strict mode + bounded temp dirs** — `update.sh` uses `set -uo
+  pipefail` and `mktemp -d` for apply workspace; trap-cleaned on EXIT.
+  Plan files in `~/.claude/data/` are mktemp'd and the apply path
+  removes them after use; orphans >24h old are swept on each plan call.
+- **Diagnose destructive-command filter** — `diagnose.sh`'s output is
+  passed through the same jq regex that v1.4 applied to the
+  `failure-diagnoser` agent, even though every pattern in the table is
+  hand-authored and known safe.
+
+### Changed
+
+- `upkeep/.claude-plugin/plugin.json` version bumped to 1.5.0; description
+  rewritten to reflect the single-shot architecture and the pattern-table
+  diagnoser.
+- `VERSION` bumped to 1.5.0.
+- SKILL.md rewritten. The Linux/WSL2 sequential flow (Steps 1–6) is
+  byte-identical to v1.4 — only the macOS section changed.
+
+### Environment knobs (new in v1.5)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `UPKEEP_BREW_TTL` | 3600 | `brew update` cache TTL in seconds |
+| `UPKEEP_NO_CACHE` | unset | Set to `1` to force `brew update` refresh |
+| `UPKEEP_DATA_DIR` | `~/.claude/data` | Plan + history directory |
+| `UPKEEP_TRUST_FILE` | `~/.claude/data/upkeep-skill-trust.json` | Skill repo trust list |
+
+### Not in v1.5 (deferred)
+
+- **Eager discovery hook** — a `SessionStart` Claude Code hook that
+  pre-runs `discover.sh` so the first `/upkeep:update` invocation is
+  instant. The acceptance targets (<3s audit / <5s gate) are hit
+  without it on warm cache, so it's deferred to a possible v1.5.x.
+- **Linux/WSL2 fast-path port** — `scripts/update.sh` is macOS-only.
+  Linux + WSL2 still use the v1.0 sequential flow. Port scheduled for
+  v1.6.
+
 ## [1.4.0] - 2026-05-18
 
 ### Performance

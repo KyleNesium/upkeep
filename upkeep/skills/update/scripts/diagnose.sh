@@ -222,10 +222,54 @@ _diagnose_one() {
 diagnoses='[]'
 errors='[]'
 
+# v1.5.1 (codex P2): validate every TSV row before processing.
+# - tool must be in the v1.5 allowlist; reject anything else
+# - rc must be numeric
+# - kind must be "hard" or "partial"
+# - log_path must be an absolute path with no shell metacharacters or
+#   path-traversal segments, and must resolve under a known temp/data dir
+_TSV_ALLOWED_TOOLS=" skills brew npm pipx gems uv bun mas macos "
 while IFS=$'\t' read -r tool rc kind log_path; do
   [ -z "${tool:-}" ] && continue
-  if [ ! -f "${log_path:-}" ]; then
-    errors=$(jq --arg t "$tool" --arg p "${log_path:-<empty>}" \
+
+  case " $_TSV_ALLOWED_TOOLS " in
+    *" $tool "*) ;;
+    *)
+      errors=$(jq --arg t "${tool:0:64}" \
+        '. + ["rejecting unknown tool id in failure log: \($t)"]' <<<"$errors")
+      continue
+      ;;
+  esac
+  case "$rc" in
+    ''|*[!0-9]*)
+      errors=$(jq --arg r "${rc:0:32}" \
+        '. + ["rejecting non-numeric rc: \($r)"]' <<<"$errors")
+      continue
+      ;;
+  esac
+  case "$kind" in
+    hard|partial) ;;
+    *)
+      errors=$(jq --arg k "${kind:0:32}" \
+        '. + ["rejecting unknown kind: \($k)"]' <<<"$errors")
+      continue
+      ;;
+  esac
+  case "$log_path" in
+    /*) ;;
+    *)
+      errors=$(jq '. + ["rejecting non-absolute log path"]' <<<"$errors")
+      continue
+      ;;
+  esac
+  case "$log_path" in
+    *..*|*$'\n'*|*$'\r'*|*$'\t'*|*'`'*|*'$('*|*';'*)
+      errors=$(jq '. + ["rejecting log path with suspicious chars"]' <<<"$errors")
+      continue
+      ;;
+  esac
+  if [ ! -f "$log_path" ]; then
+    errors=$(jq --arg t "$tool" --arg p "${log_path:0:200}" \
       '. + ["log not found for \($t): \($p)"]' <<<"$errors")
     continue
   fi
@@ -236,10 +280,22 @@ done
 # Defense-in-depth: strip destructive commands defensively. Even though
 # the pattern table is hand-authored, this matches the v1.4 invariant —
 # no fix_option command may contain rm -rf, sudo rm, --force, etc.
+#
+# v1.5.1 (codex P2): broaden the regex. The prior version missed:
+#   - standalone `sh ...` or `bash ...` invocations
+#   - `curl ... | sh` without spaces around the pipe
+#   - `bash <(curl ...)` process substitution
+#   - `eval`, `exec`, `source`, `.` shorthand
+#   - kill -9, dd of=, write to /dev/sd*
+# This is still a denylist — false negatives possible. The pattern table
+# is hand-authored so any false negative would have to be authored in.
 diagnoses=$(jq '
   map(
     .fix_options |= map(select(
-      (.command | test("rm -rf|--no-verify|--force|push --force|chmod 777|sudo rm|curl .* \\| .*sh"; "i")) | not
+      (.command | test(
+        "rm[[:space:]]+-rf|--no-verify|--force|push[[:space:]]+--force|chmod[[:space:]]+777|sudo[[:space:]]+rm|curl[^|]*\\|[[:space:]]*(sh|bash|zsh)|wget[^|]*\\|[[:space:]]*(sh|bash|zsh)|bash[[:space:]]*<\\([[:space:]]*curl|sh[[:space:]]*<\\([[:space:]]*curl|^[[:space:]]*(sh|bash|zsh|eval|exec|source|\\.)[[:space:]]|;[[:space:]]*(sh|bash|zsh|eval|rm|kill)[[:space:]]|&&[[:space:]]*(rm|kill|chmod[[:space:]]+777)|dd[[:space:]]+.*of=/dev|>[[:space:]]*/dev/(sd|nvme|disk)"
+        ; "i"
+      )) | not
     ))
   )
 ' <<<"$diagnoses" 2>/dev/null || echo "$diagnoses")

@@ -125,12 +125,73 @@ verbatim — only the path between them got shorter.
 | `UPKEEP_DATA_DIR` | `~/.claude/data` | Plan + history directory |
 | `UPKEEP_TRUST_FILE` | `~/.claude/data/upkeep-skill-trust.json` | Skill repo trust list |
 
+### Codex adversarial review (closed before merge)
+
+Pre-merge codex challenge on `update.sh` + `diagnose.sh` surfaced 3 P1
+and 5 P2 findings; all fixed in PR #16 before tagging.
+
+- **P1 — `discover_shadow` command injection via $PATH.** Prior awk
+  implementation built `cmd = "ls -1 " P[i] " 2>/dev/null"` and ran it
+  through awk's pipe-to-shell. A hostile `$PATH` entry containing `;`,
+  backticks, `$()`, or newlines would have executed arbitrary shell
+  during discovery. Replaced with a two-stage walk: bash for-loop
+  iterates `$PATH` safely (bash glob, no `sh -c`), pipes
+  `(dir, name)` TSV to awk for aggregation. awk now only sees data,
+  never builds shell commands.
+- **P1 — Skills path guard was string-prefix only.** Prior
+  `case "$repo_path" in "$HOME/.claude/skills/"*` accepted
+  `.../skills/../outside` and followed symlinks under the skill roots.
+  Replaced with `cd -P` canonical-path resolution + subpath containment
+  check against the canonical root paths. Symlinked or `..`-escape
+  repos are now rejected before any git pull runs.
+- **P1 — Plan-file write was TOCTOU-exploitable.** Prior code did
+  `mktemp` then `> "$plan_file"`, which reopens by path. A same-user
+  attacker watching `~/.claude/data` could swap the freshly-created
+  file for a symlink in the window, redirecting jq's write to an
+  arbitrary target. Replaced with `mktemp -d` (0700 private workdir),
+  jq writes inside the workdir, then atomic `mv` to final path — `mv`
+  uses `rename(2)` which does not follow symlinks at destination.
+  `DATA_DIR` also hardened to 0700.
+- **P2 — `diagnose.sh` destructive-command denylist was too narrow.**
+  Strengthened regex to cover standalone `sh ...` / `bash ...` /
+  `eval` / `source` / `.`, `curl|sh` without spaces, `bash <(curl ...)`
+  process substitution, `dd of=/dev/...`, redirects to `/dev/sd*` and
+  `/dev/nvme*`.
+- **P2 — `--drop` CSV did unquoted word-splitting.** `--drop=*` could
+  glob against cwd. Replaced with `read -r -a` (no glob, no word-split)
+  + per-token validation against the hardcoded tool allowlist; unknown
+  tokens silently dropped instead of echoed.
+- **P2 — Skill pull failure wrote free text to failure log.** Prior
+  code emitted `echo "$repo_name pull failed"` into the tab-separated
+  failure log, which broke `diagnose.sh`'s 4-field parser if a repo
+  name contained tabs. Now emits proper `skills\t1\thard\t<log_path>`
+  TSV. Also: `diagnose.sh` now validates every TSV row (tool in
+  allowlist, rc numeric, kind in `hard|partial`, log_path absolute and
+  free of `..` / control chars / shell metacharacters) and rejects
+  malformed rows into an `errors[]` array.
+- **P2 — Discovery sanitization claim had no implementation.** The
+  v1.2.2 "256-char string cap + free-text denylist" promise from the
+  CHANGELOG / SKILL.md was never wired into v1.5's bash flow. Now
+  applied: `update.sh`'s plan output runs every emitted string through
+  `gsub("[[:cntrl:]]"; "")` + 256-char clamp via jq's `walk(...)`, and
+  the apply report does the same with a 512-char clamp. Defends
+  SKILL.md from rendering raw discovery-derived bytes that could carry
+  terminal escape sequences or prompt-injection payloads.
+- **P2 — brew TTL sentinel spoofable via `touch formula.jws.json`.**
+  Accepted as a same-user-attack tradeoff (`UPKEEP_NO_CACHE=1`
+  available); noted as future hardening (would need
+  ownership/checksum verification on the sentinel).
+
+The codex review session is logged for traceability; the next codex
+pass (post-1.5.0) should focus on the apply path under real failure
+conditions once `/upkeep:update packages` has been live-run.
+
 ### Not in v1.5 (deferred)
 
 - **Eager discovery hook** — a `SessionStart` Claude Code hook that
   pre-runs `discover.sh` so the first `/upkeep:update` invocation is
-  instant. The acceptance targets (<3s audit / <5s gate) are hit
-  without it on warm cache, so it's deferred to a possible v1.5.x.
+  instant. The 5s warm-cache gate hits "interactive" without it, so
+  it's deferred to a possible v1.5.x.
 - **Linux/WSL2 fast-path port** — `scripts/update.sh` is macOS-only.
   Linux + WSL2 still use the v1.0 sequential flow. Port scheduled for
   v1.6.

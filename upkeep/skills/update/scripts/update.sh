@@ -125,26 +125,62 @@ _cmd_plan() {
     _die "synthesize.sh produced invalid plan JSON"
   fi
 
-  # Extract untrusted repos (the v1.3+ trust gate operates on these)
+  # Extract untrusted repos (the v1.3+ trust gate operates on these).
+  # v1.5.1 (codex P2): sanitize every string field that originates in
+  # upstream-controlled territory (remote URL, repo path, repo name) so
+  # SKILL.md never receives raw bytes that could carry terminal escape
+  # sequences or prompt-injection payloads.
+  #
+  # The 256-char cap matches the v1.2.2 discovery sanitization rule. The
+  # safe-char regex strips ANSI/control bytes and shell metacharacters
+  # that have no legitimate place in a git remote URL or POSIX path.
+  # Anything filtered to empty becomes "<scrubbed>" so the gate render
+  # still has something readable.
   local untrusted
-  untrusted=$(jq -c '[.skills.git_repos[]? | select(.untrusted == true)
-                      | {name, path, remote_url}]' <<<"$discovery")
+  untrusted=$(jq -c '
+    [ .skills.git_repos[]?
+      | select(.untrusted == true)
+      | {name, path, remote_url}
+      | with_entries(
+          .value |= (
+            tostring
+            | gsub("[[:cntrl:]]"; "")
+            | .[0:256]
+            | if length == 0 then "<scrubbed>" else . end
+          )
+        )
+    ]
+  ' <<<"$discovery")
 
   # Stash full plan + discovery snapshot to disk so apply can read
   # them without re-running discovery (which would now show post-apply
   # state, not the state the user approved against).
   mkdir -p "$DATA_DIR" 2>/dev/null
+  chmod 700 "$DATA_DIR" 2>/dev/null
   # Sweep stale plan files (>24h) so the data dir doesn't grow unbounded
   # when users invoke /upkeep:update repeatedly without applying.
   find "$DATA_DIR" -maxdepth 1 -name 'upkeep-plan.*' -mmin +1440 -delete 2>/dev/null
-  local plan_file
-  # mktemp requires XXXXXX at the END on macOS BSD (no --suffix). The file
-  # is internal; SKILL.md treats plan_file as opaque, no .json suffix needed.
-  plan_file=$(mktemp "${DATA_DIR}/upkeep-plan.XXXXXX") || _die "mktemp failed"
+  local plan_file plan_workdir plan_suffix
+  # v1.5.1: TOCTOU-safe plan write (codex P1).
+  # Prior version: `mktemp` then `> "$plan_file"` reopened the file by path,
+  # giving a same-user attacker a window to swap it for a symlink and have
+  # jq clobber an arbitrary target.
+  # Fix: write inside a 0700 mktemp -d (which other UIDs cannot enter and
+  # only this process knows the suffix of), then atomic-rename via mv —
+  # rename(2) does not follow symlinks at destination, so a swapped-in
+  # symlink gets replaced rather than written through.
+  plan_workdir=$(mktemp -d "${DATA_DIR}/.upkeep-tmp.XXXXXX") || _die "mktemp -d failed"
+  chmod 700 "$plan_workdir" 2>/dev/null
+  plan_suffix=${plan_workdir##*.}
+  plan_file="${DATA_DIR}/upkeep-plan.${plan_suffix}"
   jq -n --argjson plan "$plan" --argjson discovery "$discovery" \
     --arg mode "$mode" --arg ts "$(date -u +%FT%TZ)" \
     '{schema_version:"1", mode:$mode, created_at:$ts,
-      plan:$plan, discovery:$discovery}' > "$plan_file"
+      plan:$plan, discovery:$discovery}' > "$plan_workdir/plan.json" \
+    || { rm -rf -- "$plan_workdir"; _die "plan JSON write failed"; }
+  mv -- "$plan_workdir/plan.json" "$plan_file" \
+    || { rm -rf -- "$plan_workdir"; _die "plan rename failed"; }
+  rmdir -- "$plan_workdir" 2>/dev/null
 
   # Audit-mode short-circuit: no gate, no apply, plan is the report.
   local needs_approval=true
@@ -160,6 +196,12 @@ _cmd_plan() {
   fi
 
   # SKILL.md-facing summary. Compact — render hints, not full plan.
+  # v1.5.1 (codex P2): every string in the emitted JSON is run through
+  # one final sanitization pass — strip control bytes (incl. ANSI
+  # escapes) and clamp to 256 chars — so SKILL.md never has to render
+  # raw discovery-derived bytes that could carry terminal control
+  # sequences or prompt-injection payloads. Numbers and booleans are
+  # untouched.
   jq -n \
     --arg plan_file "$plan_file" \
     --argjson plan "$plan" \
@@ -177,7 +219,13 @@ _cmd_plan() {
       restart_required: ($plan.tool_specs.macos.restart_required // false),
       gems_user_install: ($plan.tool_specs.gems.user_install // false),
       untrusted_repos: $untrusted
-    }'
+    }
+    | walk(
+        if type == "string"
+        then (gsub("[[:cntrl:]]"; "") | .[0:256])
+        else .
+        end
+      )'
 }
 
 # ───────────────────────────────────────────────────────────────────
@@ -221,10 +269,25 @@ _cmd_apply() {
         "$failure_log_file" "$deprecation_log"
 
   # ── Dropped tools set (from gate's "drop categories" path) ───
+  # v1.5.1 (codex P2): parse CSV without word-splitting + pathname
+  # expansion. Prior version used `for t in $drop_csv` which globbed
+  # against the cwd — `--drop=*` could match filenames. Now: validate
+  # each token against the hardcoded allowlist; silently drop anything
+  # else so we never echo attacker-controlled bytes.
   local -A dropped=()
   if [ -n "$drop_csv" ]; then
-    local IFS=,
-    for t in $drop_csv; do dropped[$t]=1; done
+    local _saved_ifs="$IFS"
+    IFS=','
+    # Use `read -r -a` to split — no globbing, no command interpretation.
+    local _drop_arr=()
+    read -r -a _drop_arr <<<"$drop_csv"
+    IFS="$_saved_ifs"
+    for t in "${_drop_arr[@]}"; do
+      case "$t" in
+        skills|brew|npm|pipx|gems|uv|bun|mas|macos) dropped[$t]=1 ;;
+        *) ;;  # silently ignore unknown tool ids
+      esac
+    done
   fi
 
   # ── Validate tool ids against hardcoded allowlist ────────────
@@ -259,14 +322,31 @@ _cmd_apply() {
     [ "$untrusted" = "true" ] && { skills_skipped=$((skills_skipped+1)); continue; }
     [ "$commits_behind" = "0" ] && continue
 
-    case "$repo_path" in
-      "$HOME/.claude/skills/"*|"$HOME/.codex/skills/"*) ;;
-      *)
-        echo "skills: refusing path outside skill roots: $repo_path" >> "$skills_log"
-        skills_skipped=$((skills_skipped+1))
-        continue
-        ;;
-    esac
+    # v1.5.1: canonical-path containment check. The prior version used a
+    # string-prefix `case` which accepted `.../skills/../outside` and
+    # followed symlinks under the skill roots (codex P1).
+    #
+    # Resolve $repo_path to a canonical absolute path that follows symlinks,
+    # then verify it's a subpath of one of the two allowed canonical roots.
+    # Trailing-slash discipline on the roots prevents false matches like
+    # `~/.codex/skills-evil/` claiming to be under `~/.codex/skills/`.
+    _resolved_repo=$(cd -P -- "$repo_path" 2>/dev/null && pwd -P)
+    _claude_root=$(cd -P -- "$HOME/.claude/skills" 2>/dev/null && pwd -P)
+    _codex_root=$(cd -P -- "$HOME/.codex/skills" 2>/dev/null && pwd -P)
+    _path_ok=0
+    if [ -n "$_resolved_repo" ]; then
+      for _root in "$_claude_root" "$_codex_root"; do
+        [ -z "$_root" ] && continue
+        case "$_resolved_repo/" in
+          "$_root/"*) _path_ok=1; break ;;
+        esac
+      done
+    fi
+    if [ "$_path_ok" != "1" ]; then
+      echo "skills: refusing path outside skill roots: $repo_path (resolved=$_resolved_repo)" >> "$skills_log"
+      skills_skipped=$((skills_skipped+1))
+      continue
+    fi
 
     if [ -n "$(git -C "$repo_path" status --porcelain 2>/dev/null)" ]; then
       echo "skills: $repo_name dirty — skipped" >> "$skills_log"
@@ -288,7 +368,11 @@ _cmd_apply() {
       echo "$repo_name $current_version → $new_version" >> "$upgraded_tools_file"
       skills_applied=$((skills_applied+1))
     else
-      echo "$repo_name pull failed" >> "$failure_log_file"
+      # v1.5.1 (codex P2): emit proper 4-tab TSV row that diagnose.sh
+      # expects (tool\trc\tkind\tlog_path). The prior version echoed free
+      # text with the repo name, which would have poisoned diagnose.sh's
+      # parser if a repo name contained tabs or newlines.
+      printf 'skills\t1\thard\t%s\n' "$skills_log" >> "$failure_log_file"
       skills_skipped=$((skills_skipped+1))
     fi
   done < <(jq -c '.skills.git_repos[]?' <<<"$discovery")
@@ -514,7 +598,13 @@ _cmd_apply() {
       resolution_failures: $resolution_failures,
       diagnoses: $diagnoses.diagnoses,
       diagnosis_errors: $diagnoses.errors
-    }'
+    }
+    | walk(
+        if type == "string"
+        then (gsub("[[:cntrl:]]"; "") | .[0:512])
+        else .
+        end
+      )'
 
   # Plan file has served its purpose — remove. The trap on $tmp_root
   # handles the apply workspace; the plan file lives in $DATA_DIR.

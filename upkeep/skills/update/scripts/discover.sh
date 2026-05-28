@@ -405,23 +405,64 @@ discover_shadow() {
     return
   fi
 
-  # Single-pass PATH walk. The shell printed each shadow as a TSV row;
-  # awk reads each PATH dir, records first occurrence of each binary,
-  # then emits a row when the brew prefix is encountered AFTER another dir
-  # contained the same name.
-  shadow_json=$(awk -v prefix="$prefix/bin" 'BEGIN {
-    n = split(ENVIRON["PATH"], P, ":")
-    for (i = 1; i <= n; i++) {
-      cmd = "ls -1 " P[i] " 2>/dev/null"
-      while ((cmd | getline name) > 0) {
-        if (!(name in seen)) seen[name] = P[i]
-        else if (P[i] == prefix && seen[name] != prefix) {
-          print name "\t" seen[name] "\t" prefix
-        }
+  # Single-pass PATH walk. Records first occurrence of each binary
+  # across $PATH directories; emits a row when the brew prefix appears
+  # AFTER another dir already claimed that name.
+  #
+  # v1.5.1: replaces the prior awk implementation that built shell
+  # commands via string concatenation (`cmd = "ls -1 " P[i] ...`) — a
+  # hostile $PATH entry containing `;`, backticks, `$()`, or newlines
+  # would have executed arbitrary shell during discovery (codex P1).
+  # The bash loop below never invokes a shell with user data; `for f
+  # in "$dir"/*` uses bash's own glob, which does not interpret
+  # metacharacters from $dir's value.
+  # v1.5.1 (codex P1): two-stage PATH walk.
+  # Stage 1 (bash): iterate $PATH safely, emit (dir,name) TSV. The bash
+  #   for-loop never invokes `sh -c` with user data — it uses bash's own
+  #   glob expansion, which treats $PATH segments as paths not commands.
+  #   The prior awk implementation built shell strings via concatenation
+  #   (`cmd = "ls -1 " P[i] " 2>/dev/null"`) and ran them through awk's
+  #   pipe-to-shell — a hostile $PATH entry containing `;`, backticks,
+  #   `$()`, or newlines would have executed arbitrary shell.
+  # Stage 2 (awk): aggregate the (dir,name) stream with awk's assoc
+  #   arrays. macOS ships bash 3.2 which has no `declare -A`, so we
+  #   can't keep the aggregation in pure bash without a regression.
+  #   awk receives only TSV data — never builds shell commands.
+  shadow_input=$(
+    IFS=':' read -r -a _path_dirs <<<"$PATH"
+    shopt -s nullglob
+    for _d in "${_path_dirs[@]}"; do
+      [ -z "$_d" ] && continue
+      [ -d "$_d" ] || continue
+      # Skip CWD-relative entries (don't trust `.` or `./*` in $PATH).
+      if [ "${_d:0:1}" = "." ]; then
+        if [ "$_d" = "." ] || [ "${_d:0:2}" = "./" ]; then
+          continue
+        fi
+      fi
+      for _f in "$_d"/*; do
+        _name=${_f##*/}
+        printf '%s\t%s\n' "$_d" "$_name"
+      done
+    done
+    shopt -u nullglob
+  )
+  shadow_tsv=$(printf '%s\n' "$shadow_input" | awk -F'\t' -v prefix="$prefix/bin" '
+    NF != 2 { next }
+    # Drop rows whose name (col 2) contains control bytes — defends jq
+    # downstream from a binary name carrying a tab/newline/escape.
+    $2 ~ /[\001-\037\177]/ { next }
+    {
+      d = $1; name = $2
+      if (!(name in seen)) {
+        seen[name] = d
+      } else if (d == prefix && seen[name] != prefix) {
+        print name "\t" seen[name] "\t" prefix
       }
-      close(cmd)
     }
-  }' | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") |
+  ')
+  shadow_json=$(printf '%s' "$shadow_tsv" \
+    | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") |
        {binary: .[0], primary: .[1], shadowed: [.[2]]})')
   [ -z "$shadow_json" ] && shadow_json='[]'
 

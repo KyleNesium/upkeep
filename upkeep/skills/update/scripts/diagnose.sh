@@ -202,6 +202,72 @@ _diagnose_one() {
        "risk":"low",
        "rationale":"Shows the formula source and recent upstream changes."}
     ]'
+
+  # ── Pattern 9: dpkg/apt lock held (Linux) ─────────────────────
+  elif echo "$excerpt" | grep -qE "Could not get lock /var/lib/(dpkg|apt)|dpkg.*frontend.*lock|E: Unable to (acquire|lock)"; then
+    root_cause="apt/dpkg lock held — another package operation is running"
+    severity="medium"
+    fix_options='[
+      {"label":"Find the process holding the lock",
+       "command":"sudo lsof /var/lib/dpkg/lock-frontend",
+       "risk":"low",
+       "rationale":"unattended-upgrades or another apt/dpkg run usually holds it. Wait for it to finish, then retry."},
+      {"label":"Wait and retry the upgrade",
+       "command":"sudo apt-get upgrade -y",
+       "risk":"low",
+       "rationale":"The lock clears on its own when the in-progress operation completes."}
+    ]'
+
+  # ── Pattern 10: dnf metadata / file conflict (Linux) ──────────
+  elif echo "$excerpt" | grep -qE "Failed to synchronize cache|Error: Transaction (test |)failed|file conflicts|conflicting requests|Problem: package"; then
+    root_cause="dnf transaction failed — stale metadata or package conflict"
+    severity="medium"
+    fix_options='[
+      {"label":"Refresh dnf metadata and retry",
+       "command":"sudo dnf clean all && sudo dnf upgrade -y",
+       "risk":"low",
+       "rationale":"Clears the cached repodata that caused the sync/transaction failure."},
+      {"label":"Inspect the conflicting packages",
+       "command":"dnf repoquery --conflicts <package-name>",
+       "risk":"low",
+       "rationale":"Shows what the failing package conflicts with so you can resolve it."}
+    ]'
+
+  # ── Pattern 11: snap change in progress / held (Linux) ────────
+  elif [ "$tool" = "snap" ] && \
+       echo "$excerpt" | grep -qE "change in progress|snap .* has running apps|too early for operation|cannot refresh.*held"; then
+    root_cause="snap refresh blocked — a snap change is in progress or held"
+    severity="medium"
+    fix_options='[
+      {"label":"List in-progress snap changes",
+       "command":"snap changes",
+       "risk":"low",
+       "rationale":"Shows the running change; wait for it to reach Done, then retry snap refresh."},
+      {"label":"Retry a single snap once the change clears",
+       "command":"snap refresh <snap-name>",
+       "risk":"low",
+       "rationale":"Targets just the blocked snap instead of the whole set."}
+    ]'
+
+  # ── Pattern 12: flatpak runtime missing (Linux) ───────────────
+  elif [ "$tool" = "flatpak" ] && \
+       echo "$excerpt" | grep -qE "runtime/[^ ]+ not installed|Required runtime .* not installed|No such ref"; then
+    local rt
+    rt=$(echo "$excerpt" | grep -oE "runtime/[^ ]+" | head -3 | jq -R '.' | jq -s -c '.')
+    rt=${rt:-'[]'}
+    root_cause="flatpak update failed — a required runtime is not installed"
+    severity="medium"
+    failing_items="$rt"
+    fix_options='[
+      {"label":"Install missing runtimes from flathub",
+       "command":"flatpak install flathub <runtime-id>",
+       "risk":"low",
+       "rationale":"The app needs a runtime that is not present. Install it, then re-run the update."},
+      {"label":"Update and prune unused runtimes",
+       "command":"flatpak update && flatpak uninstall --unused",
+       "risk":"low",
+       "rationale":"Reconciles the runtime set the installed apps expect."}
+    ]'
   fi
 
   # Compose final diagnosis. All strings clamped to 280 chars at the
@@ -228,7 +294,7 @@ errors='[]'
 # - kind must be "hard" or "partial"
 # - log_path must be an absolute path with no shell metacharacters or
 #   path-traversal segments, and must resolve under a known temp/data dir
-_TSV_ALLOWED_TOOLS=" skills brew npm pipx gems uv bun mas macos "
+_TSV_ALLOWED_TOOLS=" skills brew npm pipx gems uv bun mas macos snap flatpak "
 while IFS=$'\t' read -r tool rc kind log_path; do
   [ -z "${tool:-}" ] && continue
 

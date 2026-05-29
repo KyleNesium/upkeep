@@ -85,13 +85,36 @@ _cmd_plan() {
       # like pipx.outdated_count (a number, not an array) and tools[].
       # The stub schema matches what the scouts emit when nothing is
       # installed.
-      discovery=$(jq '
-        .native = {
-          brew: {installed:false, outdated:[]},
-          mas:  {installed:false, outdated:[]},
-          softwareupdate: {installed:false, updates:[], restart_required:false},
-          errors: []
-        }
+      #
+      # v1.6 (F1): the native stub must match the discovery's OS shape, not
+      # always macOS. The synthesizer's `// []` defenses would absorb a
+      # shape mismatch today, but an OS-matched stub keeps the plan file
+      # honest and future-proof against synthesizer changes that read keys
+      # directly. The language stub is OS-agnostic (shared verbatim).
+      local _os_type
+      _os_type=$(jq -r '.os.type // "macos"' <<<"$discovery")
+      local _native_stub
+      case "$_os_type" in
+        linux|wsl2)
+          _native_stub='{
+            system: {manager:"unknown", installed:false, upgradable:[], count:0, requires_sudo:true},
+            snap:   {installed:false, refreshable:[]},
+            flatpak:{installed:false, updatable:[]},
+            windows:{wsl2:false, mnt_c:false, managers:[]},
+            errors: []
+          }'
+          ;;
+        *)
+          _native_stub='{
+            brew: {installed:false, outdated:[]},
+            mas:  {installed:false, outdated:[]},
+            softwareupdate: {installed:false, updates:[], restart_required:false},
+            errors: []
+          }'
+          ;;
+      esac
+      discovery=$(jq --argjson native "$_native_stub" '
+        .native = $native
         | .language = {
           npm: {installed:false, outdated:[]},
           pipx: {installed:false, tools:[], outdated_count:0},
@@ -311,7 +334,7 @@ _cmd_apply() {
     IFS="$_saved_ifs"
     for t in "${_drop_arr[@]}"; do
       case "$t" in
-        skills|brew|npm|pipx|gems|uv|bun|mas|macos) dropped="${dropped}${t}," ;;
+        skills|brew|npm|pipx|gems|uv|bun|mas|macos|snap|flatpak) dropped="${dropped}${t}," ;;
         *) ;;  # silently ignore unknown tool ids
       esac
     done
@@ -325,7 +348,12 @@ _cmd_apply() {
   }
 
   # ── Validate tool ids against hardcoded allowlist ────────────
-  local allowed="skills brew npm pipx gems uv bun mas macos"
+  # v1.6: snap + flatpak join the allowlist (user-scoped, no sudo).
+  # apt/dnf/pacman are DELIBERATELY absent — they require root and are
+  # surfaced as manual_steps by the synthesizer; this _die is the hard
+  # guarantee that a malformed plan can never smuggle a sudo manager into
+  # the dispatcher.
+  local allowed="skills brew npm pipx gems uv bun mas macos snap flatpak"
   local tool
   while read -r tool; do
     [ -z "$tool" ] && continue
@@ -449,6 +477,10 @@ _cmd_apply() {
       bun)   bun upgrade >> "$log" 2>&1; rc=$? ;;
       mas)   mas upgrade >> "$log" 2>&1; rc=$? ;;
       macos) softwareupdate -ia >> "$log" 2>&1; rc=$? ;;
+      # Linux user-scoped apps (no sudo). snap refresh may polkit-prompt in
+      # the user's own session; flatpak update -y operates on the user install.
+      snap)    snap refresh >> "$log" 2>&1; rc=$? ;;
+      flatpak) flatpak update -y >> "$log" 2>&1; rc=$? ;;
       skills) rc=0 ;;  # already ran above
       *)
         echo "refusing unknown tool: $tool" >> "$log"
@@ -505,7 +537,13 @@ _cmd_apply() {
             concurrency=$((concurrency-1))
           fi
         done
-        for pid in "${pids[@]}"; do wait "$pid"; done
+        # v1.6: guard against bash 3.2's "unbound variable" on expanding an
+        # empty array under `set -u` (the dev box ships bash 3.2.57). The
+        # synthesizer never emits an empty-tools group, but a future caller
+        # might — this keeps the drain safe regardless.
+        if [ "${#pids[@]}" -gt 0 ]; then
+          for pid in "${pids[@]}"; do wait "$pid"; done
+        fi
         ;;
       serial|exclusive)
         for tool in $tools; do _run_tool "$tool"; done

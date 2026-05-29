@@ -41,6 +41,53 @@ _jq_string() { jq -Rs '.' <<<"$1"; }
 # Detect arch
 ARCH=$(uname -m 2>/dev/null || echo unknown)
 
+# ── OS detection (v1.6) ──────────────────────────────────────────
+# Sets OS_TYPE (macos|linux|wsl2|unknown), OS_DISTRO, PKG_MGR. Mirrors
+# the shared block used across the cleanup skills.
+#
+# Test seam: UPKEEP_OS_OVERRIDE / UPKEEP_PKG_MGR_OVERRIDE short-circuit
+# the live `uname` so Linux paths can be exercised on a macOS box (where
+# `uname -s` always reports Darwin). The override forces BOTH the emitted
+# os.type AND which native-discovery function the parallel runner picks —
+# stamping os.type alone would never run discover_native_linux on macOS.
+_detect_os() {
+  if [ -n "${UPKEEP_OS_OVERRIDE:-}" ]; then
+    OS_TYPE="$UPKEEP_OS_OVERRIDE"
+    OS_DISTRO="${UPKEEP_OS_DISTRO_OVERRIDE:-override}"
+  else
+    local kernel krel
+    kernel=$(uname -s 2>/dev/null || echo "unknown")
+    krel=$(uname -r 2>/dev/null || echo "")
+    case "$kernel" in
+      Darwin) OS_TYPE="macos"; OS_DISTRO="macos" ;;
+      Linux)
+        if echo "$krel" | grep -qi "microsoft"; then OS_TYPE="wsl2"; else OS_TYPE="linux"; fi
+        if [ -r /etc/os-release ]; then
+          OS_DISTRO=$(. /etc/os-release 2>/dev/null; echo "${ID_LIKE:-$ID}" | awk '{print $1}')
+        elif command -v lsb_release >/dev/null 2>&1; then
+          OS_DISTRO=$(lsb_release -si 2>/dev/null | tr '[:upper:]' '[:lower:]')
+        else
+          OS_DISTRO="unknown"
+        fi
+        ;;
+      *) OS_TYPE="unknown"; OS_DISTRO="unknown" ;;
+    esac
+  fi
+
+  if [ -n "${UPKEEP_PKG_MGR_OVERRIDE:-}" ]; then
+    PKG_MGR="$UPKEEP_PKG_MGR_OVERRIDE"
+  else
+    case "$OS_DISTRO" in
+      debian|ubuntu)                          PKG_MGR="apt" ;;
+      fedora|rhel|centos|rocky|almalinux)     PKG_MGR="dnf" ;;
+      arch|manjaro|endeavouros)               PKG_MGR="pacman" ;;
+      macos)                                  PKG_MGR="brew" ;;
+      *)                                      PKG_MGR="unknown" ;;
+    esac
+  fi
+}
+_detect_os
+
 # ── Skills section ───────────────────────────────────────────────
 discover_skills() {
   local trust_json='{}'
@@ -273,6 +320,138 @@ discover_native() {
       errors:$errors}'
 }
 
+# ── Native section — Linux/WSL2 (apt/dnf/pacman + snap/flatpak) ──
+# Mirrors discover_native's contract but for Linux. Key invariant: the
+# system manager (apt/dnf/pacman) requires root to upgrade, so it is
+# reported here for the synthesizer to surface as a MANUAL step — it is
+# never auto-applied. snap/flatpak are user-scoped and ARE auto-applied.
+#
+# Exit-code discipline (v1.6):
+#   - `dnf check-update` exits 100 when updates exist (0 = none). Capture
+#     rc and treat 100 as success, anything else as error.
+#   - `grep`/`pacman -Qu`/`snap refresh --list` return 1 on no-match; under
+#     `set -o pipefail` that fails the pipeline, so every extraction ends
+#     with `|| true` and feeds `jq -Rsc 'split…|map(select(length>0))'`,
+#     which yields `[]` on empty input. Never `|| echo '[]'` after a
+#     pipeline (would emit `[]\n[]` → invalid JSON; see discover_native).
+discover_native_linux() {
+  local manager="${PKG_MGR:-unknown}"
+  local sys_installed=false sys_upgradable='[]' sys_count=0
+  local snap_installed=false snap_refreshable='[]'
+  local flatpak_installed=false flatpak_updatable='[]'
+  local errors='[]'
+
+  # ── System package manager (audit only — upgrade needs sudo) ──
+  case "$manager" in
+    apt)
+      if command -v apt-get >/dev/null 2>&1; then
+        sys_installed=true
+        local apt_raw
+        apt_raw=$(apt-get upgrade --dry-run 2>/dev/null | grep '^Inst' || true)
+        if [ -n "$apt_raw" ]; then
+          # "Inst <name> [<from>] (<to> <repo> [arch])"
+          sys_upgradable=$(printf '%s\n' "$apt_raw" | awk '
+            {
+              name=$2; from=""; to=""
+              if (match($0, /\[[^]]*\]/)) { from=substr($0, RSTART+1, RLENGTH-2) }
+              if (match($0, /\([^ )]+/))  { to=substr($0, RSTART+1, RLENGTH-1) }
+              printf "%s\t%s\t%s\n", name, from, to
+            }' \
+            | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
+                       | {name:.[0], from:(.[1]//""), to:(.[2]//"")})')
+        fi
+      fi
+      ;;
+    dnf)
+      if command -v dnf >/dev/null 2>&1; then
+        sys_installed=true
+        local dnf_raw dnf_rc
+        dnf_raw=$(dnf check-update 2>/dev/null); dnf_rc=$?
+        if [ "$dnf_rc" != "0" ] && [ "$dnf_rc" != "100" ]; then
+          errors=$(jq '. + ["dnf check-update failed"]' <<<"$errors")
+        fi
+        # Rows: "name.arch  version-release  repo". Skip blanks, the
+        # metadata banner, and "Obsoleting"/"Security" section headers.
+        sys_upgradable=$(printf '%s\n' "$dnf_raw" \
+          | awk 'NF>=3 && $1 ~ /\./ && $1 !~ /^(Last|Obsoleting|Security|Installing)/ {
+              n=$1; sub(/\.[^.]*$/, "", n); printf "%s\t%s\n", n, $2 }' \
+          | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
+                     | {name:.[0], from:"", to:(.[1]//"")})')
+      fi
+      ;;
+    pacman)
+      if command -v pacman >/dev/null 2>&1; then
+        sys_installed=true
+        local pac_raw
+        pac_raw=$(pacman -Qu 2>/dev/null || true)
+        if [ -n "$pac_raw" ]; then
+          # "name oldver -> newver"
+          sys_upgradable=$(printf '%s\n' "$pac_raw" \
+            | awk 'NF>=4 { printf "%s\t%s\t%s\n", $1, $2, $4 }' \
+            | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
+                       | {name:.[0], from:(.[1]//""), to:(.[2]//"")})')
+        fi
+      fi
+      ;;
+    *) ;;  # unknown manager → sys_installed stays false
+  esac
+  sys_count=$(jq 'length' <<<"$sys_upgradable")
+
+  # ── snap (user-scoped, auto-appliable) ──
+  if command -v snap >/dev/null 2>&1; then
+    snap_installed=true
+    local snap_raw
+    snap_raw=$(snap refresh --list 2>/dev/null || true)
+    # Drop the header row and the "All snaps up to date." sentinel.
+    snap_refreshable=$(printf '%s\n' "$snap_raw" \
+      | awk 'NR>1 && $0 !~ /All snaps up to date/ && NF>=1 { print $1 }' \
+      | jq -Rsc 'split("\n") | map(select(length>0) | {name:.})')
+  fi
+
+  # ── flatpak (user-scoped, auto-appliable) ──
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak_installed=true
+    local fp_raw
+    fp_raw=$(flatpak remote-ls --updates 2>/dev/null || true)
+    flatpak_updatable=$(printf '%s\n' "$fp_raw" \
+      | awk -F'\t' 'NF>=1 && length($1)>0 { print $1 }' \
+      | jq -Rsc 'split("\n") | map(select(length>0) | {name:.})')
+  fi
+
+  # ── Windows package managers (WSL2 only — audit only, never run) ──
+  local win_json='{"wsl2":false,"mnt_c":false,"managers":[]}'
+  if [ "$OS_TYPE" = "wsl2" ]; then
+    local mnt_c=false win_mgrs='[]'
+    [ -d /mnt/c ] && mnt_c=true
+    local m
+    for m in winget scoop choco; do
+      if command -v "$m" >/dev/null 2>&1; then
+        win_mgrs=$(jq --arg n "$m" '. + [$n]' <<<"$win_mgrs")
+      fi
+    done
+    win_json=$(jq -n --argjson wsl2 true --argjson mnt_c "$mnt_c" \
+      --argjson mgrs "$win_mgrs" '{wsl2:$wsl2, mnt_c:$mnt_c, managers:$mgrs}')
+  fi
+
+  jq -n \
+    --arg manager "$manager" \
+    --argjson sys_installed "$sys_installed" \
+    --argjson sys_upgradable "$sys_upgradable" \
+    --argjson sys_count "$sys_count" \
+    --argjson snap_installed "$snap_installed" \
+    --argjson snap_refreshable "$snap_refreshable" \
+    --argjson flatpak_installed "$flatpak_installed" \
+    --argjson flatpak_updatable "$flatpak_updatable" \
+    --argjson windows "$win_json" \
+    --argjson errors "$errors" \
+    '{system:{manager:$manager, installed:$sys_installed,
+              upgradable:$sys_upgradable, count:$sys_count, requires_sudo:true},
+      snap:{installed:$snap_installed, refreshable:$snap_refreshable},
+      flatpak:{installed:$flatpak_installed, updatable:$flatpak_updatable},
+      windows:$windows,
+      errors:$errors}'
+}
+
 # ── Language section ─────────────────────────────────────────────
 discover_language() {
   # npm globals
@@ -479,22 +658,40 @@ discover_shadow() {
 }
 
 # ── Run all sections in parallel ─────────────────────────────────
-# Native is the long pole (`brew update` is ~14s). Running the four sections
-# concurrently bounds wall time to that pole instead of summing all four.
+# Native is the long pole (`brew update` is ~14s on macOS). Running the
+# sections concurrently bounds wall time to that pole instead of summing.
+#
+# v1.6: the native function is OS-selected. discover_shadow's PATH-vs-brew
+# duplicate detection is anchored on `brew --prefix`, so it only runs on
+# macOS; on Linux/WSL2 shadow is emitted empty (Linux PATH-shadow detection
+# is out of scope for v1.6).
 TMPDIR_DISCOVER=$(mktemp -d)
 trap 'rm -rf -- "$TMPDIR_DISCOVER"' EXIT
 
-echo "discover: starting 4 parallel sections..." >&2
+echo "discover: starting parallel sections ($OS_TYPE)..." >&2
 discover_skills   > "$TMPDIR_DISCOVER/skills.json"   2>"$TMPDIR_DISCOVER/skills.err"   &
 PID_SKILLS=$!
-discover_native   > "$TMPDIR_DISCOVER/native.json"   2>"$TMPDIR_DISCOVER/native.err"   &
-PID_NATIVE=$!
 discover_language > "$TMPDIR_DISCOVER/language.json" 2>"$TMPDIR_DISCOVER/language.err" &
 PID_LANG=$!
-discover_shadow   > "$TMPDIR_DISCOVER/shadow.json"   2>"$TMPDIR_DISCOVER/shadow.err"   &
-PID_SHADOW=$!
 
-wait "$PID_SKILLS" "$PID_NATIVE" "$PID_LANG" "$PID_SHADOW"
+case "$OS_TYPE" in
+  linux|wsl2)
+    discover_native_linux > "$TMPDIR_DISCOVER/native.json" 2>"$TMPDIR_DISCOVER/native.err" &
+    PID_NATIVE=$!
+    # No brew prefix on Linux → shadow is empty (not run).
+    printf '%s\n' '{"duplicates":[],"broken_symlinks":[],"errors":[]}' > "$TMPDIR_DISCOVER/shadow.json"
+    PID_SHADOW=""
+    ;;
+  *)
+    discover_native > "$TMPDIR_DISCOVER/native.json" 2>"$TMPDIR_DISCOVER/native.err" &
+    PID_NATIVE=$!
+    discover_shadow > "$TMPDIR_DISCOVER/shadow.json" 2>"$TMPDIR_DISCOVER/shadow.err" &
+    PID_SHADOW=$!
+    ;;
+esac
+
+wait "$PID_SKILLS" "$PID_NATIVE" "$PID_LANG"
+[ -n "$PID_SHADOW" ] && wait "$PID_SHADOW"
 
 SKILLS_JSON=$(cat "$TMPDIR_DISCOVER/skills.json")
 NATIVE_JSON=$(cat "$TMPDIR_DISCOVER/native.json")
@@ -502,21 +699,32 @@ LANGUAGE_JSON=$(cat "$TMPDIR_DISCOVER/language.json")
 SHADOW_JSON=$(cat "$TMPDIR_DISCOVER/shadow.json")
 
 # Fall back to empty JSON sub-objects if any worker died mid-run; the
-# downstream synthesizer treats missing arrays as zero-items.
+# downstream synthesizer treats missing arrays as zero-items. The native
+# fallback shape matches the OS so synthesize.sh's branch reads the right keys.
 [ -z "$SKILLS_JSON" ]   && SKILLS_JSON='{"git_repos":[],"managed":[],"info":{"claude_plugins":0,"codex_skills_total":0,"codex_skills_git":0},"errors":["skills section failed"]}'
-[ -z "$NATIVE_JSON" ]   && NATIVE_JSON='{"brew":{"installed":false,"outdated":[]},"mas":{"installed":false,"outdated":[]},"softwareupdate":{"installed":false,"updates":[],"restart_required":false},"errors":["native section failed"]}'
+case "$OS_TYPE" in
+  linux|wsl2)
+    [ -z "$NATIVE_JSON" ] && NATIVE_JSON='{"system":{"manager":"unknown","installed":false,"upgradable":[],"count":0,"requires_sudo":true},"snap":{"installed":false,"refreshable":[]},"flatpak":{"installed":false,"updatable":[]},"windows":{"wsl2":false,"mnt_c":false,"managers":[]},"errors":["native section failed"]}'
+    ;;
+  *)
+    [ -z "$NATIVE_JSON" ] && NATIVE_JSON='{"brew":{"installed":false,"outdated":[]},"mas":{"installed":false,"outdated":[]},"softwareupdate":{"installed":false,"updates":[],"restart_required":false},"errors":["native section failed"]}'
+    ;;
+esac
 [ -z "$LANGUAGE_JSON" ] && LANGUAGE_JSON='{"npm":{"installed":false,"outdated":[]},"pipx":{"installed":false,"tools":[],"outdated_count":0},"gems":{"installed":false,"system_ruby":false,"ruby_version":"","outdated":[]},"uv":{"installed":false,"current":""},"bun":{"installed":false,"current":""},"deno":{"installed":false,"current":""},"rustup":{"installed":false},"cargo":{"installed":false},"mise":{"installed":false},"errors":["language section failed"]}'
 [ -z "$SHADOW_JSON" ]   && SHADOW_JSON='{"duplicates":[],"broken_symlinks":[],"errors":["shadow section failed"]}'
 
 jq -n \
   --arg arch "$ARCH" \
+  --arg os_type "$OS_TYPE" \
+  --arg os_distro "${OS_DISTRO:-unknown}" \
+  --arg pkg_mgr "${PKG_MGR:-unknown}" \
   --argjson skills "$SKILLS_JSON" \
   --argjson native "$NATIVE_JSON" \
   --argjson language "$LANGUAGE_JSON" \
   --argjson shadow "$SHADOW_JSON" \
   --argjson disk "$disk_json" \
   '{schema_version:"1",
-    os:{type:"macos", arch:$arch},
+    os:{type:$os_type, distro:$os_distro, pkg_mgr:$pkg_mgr, arch:$arch},
     skills:$skills,
     native:$native,
     language:$language,

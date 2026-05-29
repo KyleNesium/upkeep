@@ -410,7 +410,25 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-Prompt-based skill — no executable source code. Tested via live invocation against all five entry points across macOS, Linux, and WSL2.
+**67 tests** across 1 automated test file (`tests/test-update-skill.sh`),
+covering the `update` skill's shell orchestrator. Run with
+`bash tests/test-update-skill.sh` (also passes under `/bin/bash`, macOS 3.2.57).
+The cleanup skills (`cleandeep`/`cleanquick`/`audit`/`upkeep`) remain
+prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
+
+| Area | Tests | What's covered |
+|------|-------|----------------|
+| Syntax | 4 | `bash -n` across all four `scripts/*.sh` |
+| `update.sh plan` contract | ~6 | Valid JSON, plan_file (non-symlink), audit short-circuit, summary shape |
+| Security invariants | ~4 | No `command`/`preconditions` in plan JSON or stored file, `DATA_DIR` 0700 |
+| Mode filters | 2 | `skills` excludes package groups; `packages` excludes plugin-update steps |
+| `diagnose.sh` validation | ~7 | Tool allowlist, numeric rc, kind, path-traversal / non-absolute / metachar log paths |
+| `diagnose.sh` denylist | ~13 | Destructive-command filter (rm -rf, curl\|sh, eval, dd of=/dev, …) vs allowed fixes |
+| `update.sh apply` contract | ~5 | Empty/`--drop` CSV safety, report JSON shape, plan-file cleanup |
+| `jq`-missing contract | 2 | `{"error":…}` to stdout when `jq` absent |
+| Linux/WSL2 fast path (v1.6) | ~23 | OS-detection seam, `discover_native_linux` shape, dnf exit-100, sudo boundary (apt → manual steps not ordered_groups), snap/flatpak auto-apply, allowlist rejection of sudo managers, Linux diagnose patterns, macOS regression guard |
+
+### Skill-level coverage (live invocation)
 
 | Command | What's validated |
 |---------|-----------------|
@@ -418,13 +436,14 @@ Prompt-based skill — no executable source code. Tested via live invocation aga
 | `/upkeep:cleandeep` | Full 15-phase execution, phase ordering, safety rules |
 | `/upkeep:cleanquick` | Phases 1-3, 8, 11, 13 only; build artifacts report-only enforcement |
 | `/upkeep:audit` | All 15 phases, zero mutations, accurate size reporting |
-| `/upkeep:update` (Linux / WSL2) | Sub-mode detection, sequential skill + package discovery, per-category gates |
+| `/upkeep:update` (Linux / WSL2, v1.6) | Single-shot fast path: OS-aware discovery, snap/flatpak auto-apply, apt/dnf/pacman as manual sudo steps, WSL2 Windows audit-only, single approval gate |
 | `/upkeep:update` (macOS, v1.1) | Parallel scouts, compatibility synthesizer, single approval gate, parallel apply, post-flight (brew doctor, PATH shadow, deprecation aggregator), history-tuned ETA |
 | `/upkeep:update` (security, v1.2) | Hardcoded apply dispatcher (no `eval`), allowlisted tool ids, denylist + length-cap discovery sanitization, exact-match remote URL validation, first-encounter trust gate for third-party skill repos, Discover/Approve/Apply turn separation, atomic + `flock`-serialized history writer |
 | `/upkeep:update` (regression-fix, v1.2.2) | macOS skills apply phase actually pulls trusted git skill repos (was a silent no-op since v1.2.0); skills-scout no longer fetches from untrusted remotes; router Update Mode redirects to `/upkeep:update` instead of duplicating its logic |
 | `/upkeep:update` (advisor, v1.3) | `changelog-reader` allowlisted-host fetches, `project-impact` manifest walk under `$HOME` workspace roots, `failure-diagnoser` per-tool log slicing with text-only fix surfaces, destructive-command denylist on diagnoser output |
 | `/upkeep:update` (fast discovery, v1.4) | `scripts/discover.sh` four-section parallel discovery (~15s vs v1.3's ~90s), `scripts/synthesize.sh` deterministic plan synthesis (~300ms), `brew update` inside discovery for accurate outdated lists, enrichment gating on majors / medium+ compat edges only |
 | `/upkeep:update` (single-shot, v1.5) | `scripts/update.sh plan` + `scripts/update.sh apply` two-turn flow, `brew update` TTL cache (`formula.jws.json` mtime, 1h default), `scripts/diagnose.sh` 8-pattern failure table replacing LLM agent, opt-in `--advisor` post-gate enrichment, canonical-path skill containment, TOCTOU-safe plan-file write (`mktemp -d` + atomic rename), `DATA_DIR` mode 0700, TSV-row validation in `diagnose.sh`, JSON-to-stdout error contract on missing `jq`, bash 3.2 compatibility (no `declare -A`) |
+| `/upkeep:update` (Linux/WSL2 port, v1.6) | One OS-aware orchestrator for macOS/Linux/WSL2, `discover_native_linux` (apt/dnf/pacman audit + snap/flatpak + WSL2 Windows managers), sudo boundary (apt/dnf/pacman excluded from dispatcher allowlist → manual steps only), snap/flatpak auto-apply, `os.type`-branched synthesizer, 4 new Linux diagnose patterns, `UPKEEP_OS_OVERRIDE`/`UPKEEP_PKG_MGR_OVERRIDE` test seam, legacy v1.0 sequential flow retired |
 
 ---
 

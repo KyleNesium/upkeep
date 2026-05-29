@@ -7,8 +7,8 @@
 - ✅ **v1.2 Security Hardening** — hardcoded dispatcher, discovery sanitization, exact-match URL validation, trust-on-first-use (shipped 2026-05-07; v1.2.1 self-update fix 2026-05-08; v1.2.2 review findings 2026-05-08)
 - ✅ **v1.3 Update Advisor** — changelog-reader + project-impact enrichment agents, failure-diagnoser, per-tool logging (shipped 2026-05-11; v1.3.1 codex-review findings shipped 2026-05-13)
 - ✅ **v1.4 Fast Discovery + Synthesis** — replaced four scout agents + synthesizer with `scripts/discover.sh` + `scripts/synthesize.sh`, 8x speedup of discovery+plan (shipped 2026-05-18)
-- 🟡 **v1.5 Single-Shot Orchestrator** — collapsed macOS flow into one shell script, brew-update TTL cache, pattern-table failure diagnoser, opt-in enrichment. ~12–18x faster user-perceived pre-gate. PR #16 open as draft 2026-05-28.
-- ⏳ **v1.6 Linux/WSL2 Fast-Path Port** — bring the v1.5 single-shot architecture to apt/dnf/pacman + snap/flatpak. Currently those paths still use the v1.0 sequential flow.
+- ✅ **v1.5 Single-Shot Orchestrator** — collapsed macOS flow into one shell script, brew-update TTL cache, pattern-table failure diagnoser, opt-in enrichment. ~12–18x faster user-perceived pre-gate. (shipped 2026-05-29; PR #16/#17 merged, tagged v1.5.0)
+- 🟡 **v1.6 Linux/WSL2 Fast-Path Port** — brought the v1.5 single-shot architecture to apt/dnf/pacman + snap/flatpak + WSL2. One OS-aware orchestrator for all platforms; sudo managers surfaced as manual steps; legacy sequential flow retired. 44→67 tests. (in PR, 2026-05-29; contract-tested, live Linux validation pending)
 
 ## Phases
 
@@ -132,5 +132,5 @@ Out of scope: Windows-side upgrade execution (still surfaced as manual `winget u
 | Update advisor agents | v1.3 | Complete | 2026-05-11 |
 | Codex review findings | v1.3.1 | Complete | 2026-05-13 |
 | Fast discovery + synthesis | v1.4 | Complete (live-validated) | 2026-05-18 / 2026-05-27 |
-| Single-shot orchestrator | v1.5 | In review (PR #16) | — |
-| Linux/WSL2 fast-path port | v1.6 | Planning | — |
+| Single-shot orchestrator | v1.5 | Complete (shipped) | 2026-05-29 |
+| Linux/WSL2 fast-path port | v1.6 | In review (contract-tested) | 2026-05-29 |

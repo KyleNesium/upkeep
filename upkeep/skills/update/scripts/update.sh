@@ -130,16 +130,23 @@ _cmd_plan() {
   fi
 
   # Extract untrusted repos (the v1.3+ trust gate operates on these).
-  # v1.5.1 (codex P2): sanitize every string field that originates in
-  # upstream-controlled territory (remote URL, repo path, repo name) so
-  # SKILL.md never receives raw bytes that could carry terminal escape
-  # sequences or prompt-injection payloads.
+  # v1.5.1 (codex P2 round 2): these values come from
+  # `git config --get remote.origin.url` and filesystem paths, so they
+  # SHOULD be ASCII URL/path characters. Defensively:
   #
-  # The 256-char cap matches the v1.2.2 discovery sanitization rule. The
-  # safe-char regex strips ANSI/control bytes and shell metacharacters
-  # that have no legitimate place in a git remote URL or POSIX path.
-  # Anything filtered to empty becomes "<scrubbed>" so the gate render
-  # still has something readable.
+  #   1. Strip control bytes (incl. ANSI escapes) so the LLM-rendered
+  #      gate cannot contain terminal control sequences.
+  #   2. Disarm common shell-metachar prompt-injection vectors:
+  #      backticks, `$(`, `${`, backslash. These have no legitimate
+  #      place in a git remote URL or POSIX repo path and are common
+  #      injection tokens.
+  #   3. Clamp to 256 chars.
+  #
+  # Honest scope: this defends the gate against the obvious classes
+  # (terminal escapes, naive `$(rm ...)`, `` `pwd` ``). It does NOT and
+  # cannot fully defend against printable-text prompt injection —
+  # nothing regex-based can. The trust gate exists precisely so the
+  # user reviews the URL before any fetch.
   local untrusted
   untrusted=$(jq -c '
     [ .skills.git_repos[]?
@@ -149,6 +156,10 @@ _cmd_plan() {
           .value |= (
             tostring
             | gsub("[[:cntrl:]]"; "")
+            | gsub("`"; "")
+            | gsub("\\$\\("; "$_(")
+            | gsub("\\$\\{"; "${_")
+            | gsub("\\\\"; "")
             | .[0:256]
             | if length == 0 then "<scrubbed>" else . end
           )
@@ -203,9 +214,15 @@ _cmd_plan() {
   # v1.5.1 (codex P2): every string in the emitted JSON is run through
   # one final sanitization pass — strip control bytes (incl. ANSI
   # escapes) and clamp to 256 chars — so SKILL.md never has to render
-  # raw discovery-derived bytes that could carry terminal control
-  # sequences or prompt-injection payloads. Numbers and booleans are
-  # untouched.
+  # raw discovery-derived bytes carrying terminal control sequences.
+  # Numbers and booleans are untouched.
+  #
+  # Shell-metachar / prompt-injection disarming for upstream-controlled
+  # fields (remote URLs, repo paths, repo names) happens earlier in the
+  # `untrusted` extraction above — the broader `walk` here ONLY does
+  # control-byte stripping + length clamping, since fields like
+  # `summary.eta_minutes_p50` or `ordered_groups[].name` are
+  # synthesizer-controlled and don't need shell-metachar scrubbing.
   jq -n \
     --arg plan_file "$plan_file" \
     --argjson plan "$plan" \

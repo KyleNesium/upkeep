@@ -228,6 +228,59 @@ Plus two contract polish items:
 All five regressions caught by manual integration tests under
 `/bin/bash` 3.2 + bash 5 (`env bash`) before tag.
 
+### Codex follow-up review + regression test suite
+
+Second codex adversarial pass on the post-audit state (commits
+53bee11 + 9594af3) returned **0 P1, 3 P2** — none exploitable, all
+defensive hardening:
+
+- **P2 — Sanitization claim was too broad.** The `gsub("[[:cntrl:]]";
+  "")` strips control bytes (terminal escapes) but doesn't disarm
+  printable shell-metachar prompt-injection vectors. The code comments
+  claimed both. Resolution: tighten the `untrusted_repos` sanitization
+  specifically — strip backticks, neutralize `$(`/`${` to `$_(`/`${_`,
+  drop backslashes — and update the comments to honestly scope the
+  defense (terminal escapes + obvious metachar injection;
+  printable-text prompt injection requires editorial review the trust
+  gate provides). Other plan-output fields (synthesizer-controlled)
+  continue with control-byte-only stripping.
+- **P2 — Source-side TOCTOU on plan write.** The `mv` atomic rename
+  protects the destination from symlink-follow but a same-UID attacker
+  who watches `DATA_DIR` can still race the source file inside the
+  0700 workdir. Impact: plan tamper / DoS, not arbitrary-file
+  clobber. Accepted as scope — fundamentally not defensible in bash
+  against same-UID attackers; the workdir's 0700 perms close the
+  cross-user vector.
+- **P2 — `$PATH` newline/tab can truncate shadow scan.** `read -r -a`
+  splits at newline; a hostile `$PATH` with embedded newlines hides
+  later shadow hits. Impact: diagnostic bypass, not code execution.
+  Accepted as scope — newline in `$PATH` is malformed and a same-UID
+  attacker has stronger primitives anyway.
+
+### `tests/test-update-skill.sh` — regression suite
+
+44-test bash regression suite added so future PRs can't reintroduce
+the audited bugs. Covers:
+
+- Syntax (`bash -n`) on all four scripts
+- Plan contract (valid JSON, plan_file path, audit short-circuit,
+  symlink-free, security invariants 0/0 for `command`/`preconditions`,
+  DATA_DIR mode 0700)
+- Mode-filter behavior (skills/packages exclude the right things)
+- diagnose.sh input validation (rejects unknown tool, non-numeric rc,
+  bogus kind, path-traversal log_path, non-absolute path, shell
+  metachars in path)
+- diagnose.sh denylist (13 cases: rm -rf, sudo rm, curl|sh
+  with/without space, bash<(curl), eval, dot-source, sh, dd of=/dev,
+  >/dev/sda, plus 3 ALLOWED-list confirmations)
+- Apply contract (empty plan emits valid JSON, removes plan file)
+- `--drop` CSV safety with hostile chars
+- jq-missing JSON-to-stdout contract on both update.sh + discover.sh
+  (verified via stub-PATH that has bash but not jq)
+
+Runs in <10s under `/bin/bash` 3.2. Future codex passes can use this
+suite as a tripwire.
+
 ### Not in v1.5 (deferred)
 
 - **Eager discovery hook** — a `SessionStart` Claude Code hook that

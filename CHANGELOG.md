@@ -5,6 +5,292 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-05-28
+
+### Performance
+
+v1.4 made discovery 8x faster but the multi-turn SKILL.md structure still
+cost ~15–25s of LLM round-trip overhead between steps, and the enrichment
+agents added another 30–60s before the approval gate. User-perceived
+end-to-end time was ~60–90s — still too slow for routine use ("this skill
+takes way too long to run, people complain about it and won't use it in
+its current state").
+
+v1.5 collapses the macOS flow into a single shell orchestrator and moves
+enrichment out of the critical path. Total LLM turns from invocation to
+approval gate: **2** (was: 5–6). Measured warm-cache numbers on a real
+machine (Apple Silicon, 20 outdated brew formulae, 14 outdated gems on
+system Ruby 2.6):
+
+| Phase | v1.4 | v1.5 | Speedup |
+|---|---|---|---|
+| Discovery + plan (warm cache) | ~16s | **~5s** | 3.2x |
+| Discovery + plan (cold cache) | ~16s | ~13s | 1.2x |
+| User-perceived pre-gate (incl. enrichment + LLM turns) | ~60–90s | **~5s** | **12–18x** |
+| Audit-mode end-to-end | ~30s+ | **~5s** | 6x |
+| Failure diagnosis per failing tool | ~10–20s (LLM) | **~100ms** (pattern table) | 100x+ |
+
+The 5s warm-cache floor is dominated by `discover.sh`'s parallel sections
+(skills walk + language scout + shadow walk). Dropping that further is the
+v1.5.x eager-discovery hook story (deferred — current numbers hit
+"interactive" without it).
+
+- **`scripts/update.sh`** is the new single-shot orchestrator. Two
+  commands:
+  - `update.sh plan <mode> [--no-cache]` — runs discover.sh +
+    synthesize.sh, writes the full plan to a temp file in
+    `~/.claude/data/`, emits a compact JSON envelope for SKILL.md to
+    render the gate from.
+  - `update.sh apply <plan-file> [--drop=tool1,tool2]` — reads the plan,
+    runs the skills apply phase + hardcoded package dispatcher +
+    post-flight + diagnose.sh + history write, emits a compact JSON
+    envelope for SKILL.md to render the final report.
+  SKILL.md drops from 1845 lines to ~430 (macOS section: ~1300 lines →
+  ~230). It now contains zero apply orchestration logic — that all lives
+  in `update.sh`.
+- **`brew update` is TTL-cached.** `discover.sh` checks
+  `~/Library/Caches/Homebrew/api/formula.jws.json` mtime (the sentinel
+  brew itself maintains) and skips `brew update` if it's fresh within
+  `UPKEEP_BREW_TTL` (default 3600s). The 8–14s long pole that dominated
+  v1.4 discovery is now ~0s on warm runs. `UPKEEP_NO_CACHE=1` forces a
+  refresh. Measured impact on this machine: discovery 16s cold → ~5s
+  warm.
+- **`scripts/diagnose.sh` replaces the v1.3 `failure-diagnoser` LLM
+  agent.** Eight pattern-matched root causes covering ~80% of real
+  failures: system Ruby version (gems), missing native build deps
+  (extconf), `EACCES` / permission denied, broken pipx venv
+  (ImportError), `dyld` library not loaded, arch mismatch (`incompatible
+  cpu-arch` / `wrong ELF class`), dependency-solver constraints, brew
+  formula post-install failures. Output JSON shape matches the v1.4
+  agent's so SKILL.md's failure-block rendering is unchanged. Runs in
+  ~50ms vs the agent's 10–20s per failure. Destructive-command denylist
+  (`rm -rf|--force|sudo rm|chmod 777|push --force|curl|sh`) still applies
+  as defense-in-depth even though patterns are hand-authored.
+- **Enrichment is opt-in.** `changelog-reader` and `project-impact`
+  agents (introduced in v1.3) move from "fires before the gate" to
+  "fires after the gate, in parallel with apply, only when the user
+  passes `--advisor`". The default flow never WebFetches and never walks
+  `~/workspace`, removing 30–60s of pre-gate wait for the common case.
+  Users who want the context still get it — they pass `--advisor` and
+  see release-note summaries + project-impact matches in the final
+  report instead of the gate.
+
+### Security (preserved from v1.4)
+
+The v1.5 rewrite preserves every hardening invariant from v1.2/v1.3/v1.4
+verbatim — only the path between them got shorter.
+
+- **Hardcoded dispatcher** — `update.sh`'s `case "$tool"` block contains
+  the canonical command for every supported tool id. Plan JSON's
+  `tool_specs[].command` and `.preconditions` fields are NEVER read; the
+  synthesizer is wired to not emit them and the dispatcher would ignore
+  them if they appeared.
+- **Tool-id allowlist** — `update.sh` validates every tool id from
+  `ordered_groups[].tools[]` against `skills brew npm pipx gems uv bun
+  mas macos` before any dispatcher call. Unknown ids abort the apply.
+- **Skills path validation** — `update.sh`'s skills-apply phase only
+  pulls repos under `$HOME/.claude/skills/*` or `$HOME/.codex/skills/*`.
+  Dirty trees skipped, detached HEAD skipped, pulls are `--ff-only`.
+- **Discovery sanitization** — the 256-char string cap + free-text
+  denylist from v1.2.2 still runs inside `discover.sh` before any
+  synthesizer input.
+- **Trust-on-first-use for skill repos** — `discover.sh`'s
+  `untrusted: true` flag still propagates through synthesize.sh to
+  `update.sh plan`'s output as `untrusted_repos[]`; SKILL.md surfaces
+  each via `AskUserQuestion` before the main gate.
+- **Strict mode + bounded temp dirs** — `update.sh` uses `set -uo
+  pipefail` and `mktemp -d` for apply workspace; trap-cleaned on EXIT.
+  Plan files in `~/.claude/data/` are mktemp'd and the apply path
+  removes them after use; orphans >24h old are swept on each plan call.
+- **Diagnose destructive-command filter** — `diagnose.sh`'s output is
+  passed through the same jq regex that v1.4 applied to the
+  `failure-diagnoser` agent, even though every pattern in the table is
+  hand-authored and known safe.
+
+### Changed
+
+- `upkeep/.claude-plugin/plugin.json` version bumped to 1.5.0; description
+  rewritten to reflect the single-shot architecture and the pattern-table
+  diagnoser.
+- `VERSION` bumped to 1.5.0.
+- SKILL.md rewritten. The Linux/WSL2 sequential flow (Steps 1–6) is
+  byte-identical to v1.4 — only the macOS section changed.
+
+### Environment knobs (new in v1.5)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `UPKEEP_BREW_TTL` | 3600 | `brew update` cache TTL in seconds |
+| `UPKEEP_NO_CACHE` | unset | Set to `1` to force `brew update` refresh |
+| `UPKEEP_DATA_DIR` | `~/.claude/data` | Plan + history directory |
+| `UPKEEP_TRUST_FILE` | `~/.claude/data/upkeep-skill-trust.json` | Skill repo trust list |
+
+### Codex adversarial review (closed before merge)
+
+Pre-merge codex challenge on `update.sh` + `diagnose.sh` surfaced 3 P1
+and 5 P2 findings; all fixed in PR #16 before tagging.
+
+- **P1 — `discover_shadow` command injection via $PATH.** Prior awk
+  implementation built `cmd = "ls -1 " P[i] " 2>/dev/null"` and ran it
+  through awk's pipe-to-shell. A hostile `$PATH` entry containing `;`,
+  backticks, `$()`, or newlines would have executed arbitrary shell
+  during discovery. Replaced with a two-stage walk: bash for-loop
+  iterates `$PATH` safely (bash glob, no `sh -c`), pipes
+  `(dir, name)` TSV to awk for aggregation. awk now only sees data,
+  never builds shell commands.
+- **P1 — Skills path guard was string-prefix only.** Prior
+  `case "$repo_path" in "$HOME/.claude/skills/"*` accepted
+  `.../skills/../outside` and followed symlinks under the skill roots.
+  Replaced with `cd -P` canonical-path resolution + subpath containment
+  check against the canonical root paths. Symlinked or `..`-escape
+  repos are now rejected before any git pull runs.
+- **P1 — Plan-file write was TOCTOU-exploitable.** Prior code did
+  `mktemp` then `> "$plan_file"`, which reopens by path. A same-user
+  attacker watching `~/.claude/data` could swap the freshly-created
+  file for a symlink in the window, redirecting jq's write to an
+  arbitrary target. Replaced with `mktemp -d` (0700 private workdir),
+  jq writes inside the workdir, then atomic `mv` to final path — `mv`
+  uses `rename(2)` which does not follow symlinks at destination.
+  `DATA_DIR` also hardened to 0700.
+- **P2 — `diagnose.sh` destructive-command denylist was too narrow.**
+  Strengthened regex to cover standalone `sh ...` / `bash ...` /
+  `eval` / `source` / `.`, `curl|sh` without spaces, `bash <(curl ...)`
+  process substitution, `dd of=/dev/...`, redirects to `/dev/sd*` and
+  `/dev/nvme*`.
+- **P2 — `--drop` CSV did unquoted word-splitting.** `--drop=*` could
+  glob against cwd. Replaced with `read -r -a` (no glob, no word-split)
+  + per-token validation against the hardcoded tool allowlist; unknown
+  tokens silently dropped instead of echoed.
+- **P2 — Skill pull failure wrote free text to failure log.** Prior
+  code emitted `echo "$repo_name pull failed"` into the tab-separated
+  failure log, which broke `diagnose.sh`'s 4-field parser if a repo
+  name contained tabs. Now emits proper `skills\t1\thard\t<log_path>`
+  TSV. Also: `diagnose.sh` now validates every TSV row (tool in
+  allowlist, rc numeric, kind in `hard|partial`, log_path absolute and
+  free of `..` / control chars / shell metacharacters) and rejects
+  malformed rows into an `errors[]` array.
+- **P2 — Discovery sanitization claim had no implementation.** The
+  v1.2.2 "256-char string cap + free-text denylist" promise from the
+  CHANGELOG / SKILL.md was never wired into v1.5's bash flow. Now
+  applied: `update.sh`'s plan output runs every emitted string through
+  `gsub("[[:cntrl:]]"; "")` + 256-char clamp via jq's `walk(...)`, and
+  the apply report does the same with a 512-char clamp. Defends
+  SKILL.md from rendering raw discovery-derived bytes that could carry
+  terminal escape sequences or prompt-injection payloads.
+- **P2 — brew TTL sentinel spoofable via `touch formula.jws.json`.**
+  Accepted as a same-user-attack tradeoff (`UPKEEP_NO_CACHE=1`
+  available); noted as future hardening (would need
+  ownership/checksum verification on the sentinel).
+
+### Post-codex audit pass
+
+After applying the codex fixes, a self-audit caught five more latent
+bugs that would have shipped to users:
+
+- **`local -A dropped=()` would have crashed `_cmd_apply` on macOS's
+  default `/bin/bash` 3.2** (associative arrays are bash 4+). Anyone
+  without brew bash installed would have hit
+  `local: -A: invalid option` the moment they approved an apply.
+  Replaced with a comma-delimited string + `_is_dropped()` helper
+  using `case` pattern match — same membership semantics, works on
+  bash 2.0+.
+- **The EXIT trap referenced `$tmp_root` (function-local), but with
+  `set -u` the trap fires AFTER local scope unwound** — turning every
+  apply failure into a confusing "unbound variable" instead of the
+  real error. Moved trap target to `TMP_ROOT_APPLY` (script-scoped)
+  with `${TMP_ROOT_APPLY:-/dev/null/_unset}` fallback so the trap
+  never crashes.
+- **History write was orphaning 0-byte `.upkeep-history.XXXXXX`
+  files in `$DATA_DIR`** when jq failed mid-write (then `mv` never
+  ran). Now cleans up on any failure path + sweeps stale orphans
+  (>1h) on each apply.
+- **History write was iterating `.language | .[]` to count `outdated`
+  arrays** but `.language.errors` is itself an array — produced
+  `Cannot index array with string "outdated"` and aborted the whole
+  apply with no report output. Filter to `select(type == "object")`
+  first.
+- **`select(length > 0)` inside `{doctor: (... | select(length > 0))}`
+  was eating the entire apply report when brew doctor was clean.**
+  jq's `select` filter inside an object construction terminates the
+  whole output expression when it rejects — switched to
+  `if length > 0 then ... else null end`.
+
+Plus two contract polish items:
+
+- All three scripts (`update.sh`, `discover.sh`, `diagnose.sh`) now
+  emit JSON to stdout on jq-missing so SKILL.md can parse `.error`
+  uniformly; prose diagnostic continues to stderr. Previously
+  inconsistent: some wrote JSON to stderr, some plain text.
+- `update.sh` apply now removes the plan file at the end (was leaking
+  the per-invocation plan file in `$DATA_DIR` after a successful
+  apply).
+
+All five regressions caught by manual integration tests under
+`/bin/bash` 3.2 + bash 5 (`env bash`) before tag.
+
+### Codex follow-up review + regression test suite
+
+Second codex adversarial pass on the post-audit state (commits
+53bee11 + 9594af3) returned **0 P1, 3 P2** — none exploitable, all
+defensive hardening:
+
+- **P2 — Sanitization claim was too broad.** The `gsub("[[:cntrl:]]";
+  "")` strips control bytes (terminal escapes) but doesn't disarm
+  printable shell-metachar prompt-injection vectors. The code comments
+  claimed both. Resolution: tighten the `untrusted_repos` sanitization
+  specifically — strip backticks, neutralize `$(`/`${` to `$_(`/`${_`,
+  drop backslashes — and update the comments to honestly scope the
+  defense (terminal escapes + obvious metachar injection;
+  printable-text prompt injection requires editorial review the trust
+  gate provides). Other plan-output fields (synthesizer-controlled)
+  continue with control-byte-only stripping.
+- **P2 — Source-side TOCTOU on plan write.** The `mv` atomic rename
+  protects the destination from symlink-follow but a same-UID attacker
+  who watches `DATA_DIR` can still race the source file inside the
+  0700 workdir. Impact: plan tamper / DoS, not arbitrary-file
+  clobber. Accepted as scope — fundamentally not defensible in bash
+  against same-UID attackers; the workdir's 0700 perms close the
+  cross-user vector.
+- **P2 — `$PATH` newline/tab can truncate shadow scan.** `read -r -a`
+  splits at newline; a hostile `$PATH` with embedded newlines hides
+  later shadow hits. Impact: diagnostic bypass, not code execution.
+  Accepted as scope — newline in `$PATH` is malformed and a same-UID
+  attacker has stronger primitives anyway.
+
+### `tests/test-update-skill.sh` — regression suite
+
+44-test bash regression suite added so future PRs can't reintroduce
+the audited bugs. Covers:
+
+- Syntax (`bash -n`) on all four scripts
+- Plan contract (valid JSON, plan_file path, audit short-circuit,
+  symlink-free, security invariants 0/0 for `command`/`preconditions`,
+  DATA_DIR mode 0700)
+- Mode-filter behavior (skills/packages exclude the right things)
+- diagnose.sh input validation (rejects unknown tool, non-numeric rc,
+  bogus kind, path-traversal log_path, non-absolute path, shell
+  metachars in path)
+- diagnose.sh denylist (13 cases: rm -rf, sudo rm, curl|sh
+  with/without space, bash<(curl), eval, dot-source, sh, dd of=/dev,
+  >/dev/sda, plus 3 ALLOWED-list confirmations)
+- Apply contract (empty plan emits valid JSON, removes plan file)
+- `--drop` CSV safety with hostile chars
+- jq-missing JSON-to-stdout contract on both update.sh + discover.sh
+  (verified via stub-PATH that has bash but not jq)
+
+Runs in <10s under `/bin/bash` 3.2. Future codex passes can use this
+suite as a tripwire.
+
+### Not in v1.5 (deferred)
+
+- **Eager discovery hook** — a `SessionStart` Claude Code hook that
+  pre-runs `discover.sh` so the first `/upkeep:update` invocation is
+  instant. The 5s warm-cache gate hits "interactive" without it, so
+  it's deferred to a possible v1.5.x.
+- **Linux/WSL2 fast-path port** — `scripts/update.sh` is macOS-only.
+  Linux + WSL2 still use the v1.0 sequential flow. Port scheduled for
+  v1.6.
+
 ## [1.4.0] - 2026-05-18
 
 ### Performance

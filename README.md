@@ -241,6 +241,30 @@ Discovery and apply remained hardcoded for security (see v1.2 hardening), but v1
 
 The advisor is layered on top of the v1.2 hardcoded-dispatcher contract: none of these agents author shell commands the orchestrator will execute, all their outputs pass through allowlist-projection sanitization, and the diagnoser's `command` field has an additional denylist scrub for destructive patterns (`rm -rf`, `--force`, `chmod 777`, `curl | sh`, etc.).
 
+### v1.4: discovery & synthesis to bash (macOS)
+
+The v1.3 advisor was useful but the four parallel scout agents + the compatibility synthesizer agent added ~2 minutes of LLM overhead before the approval gate, on top of any actual `brew update` time. v1.4 replaces that mechanical work with two bundled scripts:
+
+- **`scripts/discover.sh`** runs the four discovery sweeps (skills, native, language, shadow) concurrently in pure bash + `jq`, including `brew update` so the outdated list is accurate before approval. ~15s wall time vs the agent flow's ~90s+.
+- **`scripts/synthesize.sh`** does the semver classification, compat-matrix edge materialisation, and ETA bake-ins in deterministic `jq`. ~300ms vs the agent's 5–10s.
+
+Same security invariants as v1.3 (hardcoded dispatcher, allowlisted tool ids, discovery sanitization, trust-on-first-use) — only the implementation language changed.
+
+### v1.5: single-shot orchestrator (macOS)
+
+v1.4 cut the *script* time but the SKILL.md was still structured as 5+ LLM turns (discover → synthesize → enrich → apply → post-flight → diagnose → report), each turn paying ~3–5s of round-trip overhead. v1.5 collapses the whole macOS flow into **two LLM turns**:
+
+- **`scripts/update.sh plan <mode>`** composes `discover.sh` + `synthesize.sh`, writes the full plan to a temp file in `~/.claude/data/`, and emits a compact JSON envelope for SKILL.md to render the approval gate.
+- **`scripts/update.sh apply <plan-file>`** reads the plan, runs the hardcoded dispatcher, post-flight (`brew doctor`, PATH-shadow re-check, resolution re-check), the new pattern-table failure diagnoser, history write, and emits a report JSON for SKILL.md to render.
+
+`brew update` is TTL-cached against `~/Library/Caches/Homebrew/api/formula.jws.json` mtime (1h default; `UPKEEP_NO_CACHE=1` to bypass), removing the 8–14s long pole on warm runs. The v1.3 LLM `failure-diagnoser` agent is replaced by **`scripts/diagnose.sh`** — a hand-authored pattern table covering ~80% of real failures (Ruby version, native build deps, EACCES, broken pipx venv, `dyld` load, arch mismatch, solver constraints, brew post-install). ~100ms vs the agent's 10–20s, deterministic, easier to extend.
+
+The two enrichment agents (`changelog-reader`, `project-impact`) from v1.3 are now opt-in via `--advisor` and run *after* the gate in parallel with apply, so they never block the user reaching the approval gate.
+
+User-perceived pre-gate latency on a real machine drops from ~60–90s (v1.4 with multi-turn skill overhead) to **~5s on warm cache** — 12–18× speedup. All v1.2/v1.3/v1.4 security invariants preserved verbatim, plus three new ones in v1.5: canonical-path containment for skill repo pulls (rejects `../` and symlinks), TOCTOU-safe plan-file write via `mktemp -d` + atomic rename, and TSV-row validation in `diagnose.sh`.
+
+Linux/WSL2 still use the v1.0 sequential flow; fast-path port scheduled for v1.6.
+
 When you run `/upkeep` it checks once per day whether a newer version is available. Both install layouts are supported: git-cloned skills compare `HEAD` against `origin/main`, and plugin-managed installs compare the installed `plugin.json` against the marketplace clone. If the check finds an update, you'll be asked whether to update first or continue with the current version. The narrow entrypoints (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`) skip the check — re-enter via `/upkeep` if you want the prompt.
 
 To disable the daily check entirely: `export UPKEEP_SKIP_UPDATE_CHECK=1`
@@ -371,6 +395,9 @@ Prompt-based skill — no executable source code. Tested via live invocation aga
 | `/upkeep:update` (macOS, v1.1) | Parallel scouts, compatibility synthesizer, single approval gate, parallel apply, post-flight (brew doctor, PATH shadow, deprecation aggregator), history-tuned ETA |
 | `/upkeep:update` (security, v1.2) | Hardcoded apply dispatcher (no `eval`), allowlisted tool ids, denylist + length-cap discovery sanitization, exact-match remote URL validation, first-encounter trust gate for third-party skill repos, Discover/Approve/Apply turn separation, atomic + `flock`-serialized history writer |
 | `/upkeep:update` (regression-fix, v1.2.2) | macOS skills apply phase actually pulls trusted git skill repos (was a silent no-op since v1.2.0); skills-scout no longer fetches from untrusted remotes; router Update Mode redirects to `/upkeep:update` instead of duplicating its logic |
+| `/upkeep:update` (advisor, v1.3) | `changelog-reader` allowlisted-host fetches, `project-impact` manifest walk under `$HOME` workspace roots, `failure-diagnoser` per-tool log slicing with text-only fix surfaces, destructive-command denylist on diagnoser output |
+| `/upkeep:update` (fast discovery, v1.4) | `scripts/discover.sh` four-section parallel discovery (~15s vs v1.3's ~90s), `scripts/synthesize.sh` deterministic plan synthesis (~300ms), `brew update` inside discovery for accurate outdated lists, enrichment gating on majors / medium+ compat edges only |
+| `/upkeep:update` (single-shot, v1.5) | `scripts/update.sh plan` + `scripts/update.sh apply` two-turn flow, `brew update` TTL cache (`formula.jws.json` mtime, 1h default), `scripts/diagnose.sh` 8-pattern failure table replacing LLM agent, opt-in `--advisor` post-gate enrichment, canonical-path skill containment, TOCTOU-safe plan-file write (`mktemp -d` + atomic rename), `DATA_DIR` mode 0700, TSV-row validation in `diagnose.sh`, JSON-to-stdout error contract on missing `jq`, bash 3.2 compatibility (no `declare -A`) |
 
 ---
 

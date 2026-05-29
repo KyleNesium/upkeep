@@ -18,6 +18,10 @@ PLUGIN_CACHE_ROOT="${UPKEEP_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}"
 SCOUT_MAX_REPOS="${UPKEEP_MAX_REPOS:-200}"
 
 if ! command -v jq >/dev/null 2>&1; then
+  # v1.5.1: emit JSON to stdout (callers reading `.schema_version` see
+  # `null`; callers reading `.error` get a clear message); prose to
+  # stderr.
+  printf '%s\n' '{"error":"jq required but not found"}'
   echo "discover.sh: jq is required" >&2
   exit 1
 fi
@@ -194,7 +198,21 @@ discover_native() {
   if command -v brew >/dev/null 2>&1; then
     brew_installed=true
     # CRITICAL FIX from v1.3: refresh metadata FIRST so outdated list is accurate.
-    brew update >/dev/null 2>&1 || errors=$(jq '. + ["brew update failed"]' <<<"$errors")
+    # v1.5: TTL-cache `brew update` (8–14s wall) against brew's own formula.jws.json
+    # mtime. Default 1h; bypass with UPKEEP_NO_CACHE=1. Sentinel is the JSON file
+    # `brew update` already writes — no separate timestamp file needed.
+    local brew_sentinel="$HOME/Library/Caches/Homebrew/api/formula.jws.json"
+    local brew_ttl="${UPKEEP_BREW_TTL:-3600}"  # seconds
+    local brew_ttl_min=$(( brew_ttl / 60 ))
+    [ "$brew_ttl_min" -lt 1 ] && brew_ttl_min=1
+    local skip_update=0
+    if [ "${UPKEEP_NO_CACHE:-0}" != "1" ] && \
+       [ -n "$(find "$brew_sentinel" -mmin -"$brew_ttl_min" 2>/dev/null)" ]; then
+      skip_update=1
+    fi
+    if [ "$skip_update" = "0" ]; then
+      brew update >/dev/null 2>&1 || errors=$(jq '. + ["brew update failed"]' <<<"$errors")
+    fi
 
     local brew_json
     brew_json=$(brew outdated --json=v2 2>/dev/null || echo '{"formulae":[],"casks":[]}')
@@ -391,23 +409,64 @@ discover_shadow() {
     return
   fi
 
-  # Single-pass PATH walk. The shell printed each shadow as a TSV row;
-  # awk reads each PATH dir, records first occurrence of each binary,
-  # then emits a row when the brew prefix is encountered AFTER another dir
-  # contained the same name.
-  shadow_json=$(awk -v prefix="$prefix/bin" 'BEGIN {
-    n = split(ENVIRON["PATH"], P, ":")
-    for (i = 1; i <= n; i++) {
-      cmd = "ls -1 " P[i] " 2>/dev/null"
-      while ((cmd | getline name) > 0) {
-        if (!(name in seen)) seen[name] = P[i]
-        else if (P[i] == prefix && seen[name] != prefix) {
-          print name "\t" seen[name] "\t" prefix
-        }
+  # Single-pass PATH walk. Records first occurrence of each binary
+  # across $PATH directories; emits a row when the brew prefix appears
+  # AFTER another dir already claimed that name.
+  #
+  # v1.5.1: replaces the prior awk implementation that built shell
+  # commands via string concatenation (`cmd = "ls -1 " P[i] ...`) — a
+  # hostile $PATH entry containing `;`, backticks, `$()`, or newlines
+  # would have executed arbitrary shell during discovery (codex P1).
+  # The bash loop below never invokes a shell with user data; `for f
+  # in "$dir"/*` uses bash's own glob, which does not interpret
+  # metacharacters from $dir's value.
+  # v1.5.1 (codex P1): two-stage PATH walk.
+  # Stage 1 (bash): iterate $PATH safely, emit (dir,name) TSV. The bash
+  #   for-loop never invokes `sh -c` with user data — it uses bash's own
+  #   glob expansion, which treats $PATH segments as paths not commands.
+  #   The prior awk implementation built shell strings via concatenation
+  #   (`cmd = "ls -1 " P[i] " 2>/dev/null"`) and ran them through awk's
+  #   pipe-to-shell — a hostile $PATH entry containing `;`, backticks,
+  #   `$()`, or newlines would have executed arbitrary shell.
+  # Stage 2 (awk): aggregate the (dir,name) stream with awk's assoc
+  #   arrays. macOS ships bash 3.2 which has no `declare -A`, so we
+  #   can't keep the aggregation in pure bash without a regression.
+  #   awk receives only TSV data — never builds shell commands.
+  shadow_input=$(
+    IFS=':' read -r -a _path_dirs <<<"$PATH"
+    shopt -s nullglob
+    for _d in "${_path_dirs[@]}"; do
+      [ -z "$_d" ] && continue
+      [ -d "$_d" ] || continue
+      # Skip CWD-relative entries (don't trust `.` or `./*` in $PATH).
+      if [ "${_d:0:1}" = "." ]; then
+        if [ "$_d" = "." ] || [ "${_d:0:2}" = "./" ]; then
+          continue
+        fi
+      fi
+      for _f in "$_d"/*; do
+        _name=${_f##*/}
+        printf '%s\t%s\n' "$_d" "$_name"
+      done
+    done
+    shopt -u nullglob
+  )
+  shadow_tsv=$(printf '%s\n' "$shadow_input" | awk -F'\t' -v prefix="$prefix/bin" '
+    NF != 2 { next }
+    # Drop rows whose name (col 2) contains control bytes — defends jq
+    # downstream from a binary name carrying a tab/newline/escape.
+    $2 ~ /[\001-\037\177]/ { next }
+    {
+      d = $1; name = $2
+      if (!(name in seen)) {
+        seen[name] = d
+      } else if (d == prefix && seen[name] != prefix) {
+        print name "\t" seen[name] "\t" prefix
       }
-      close(cmd)
     }
-  }' | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") |
+  ')
+  shadow_json=$(printf '%s' "$shadow_tsv" \
+    | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") |
        {binary: .[0], primary: .[1], shadowed: [.[2]]})')
   [ -z "$shadow_json" ] && shadow_json='[]'
 

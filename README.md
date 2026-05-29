@@ -410,7 +410,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**67 tests** across 1 automated test file (`tests/test-update-skill.sh`),
+**73 tests** across 1 automated test file (`tests/test-update-skill.sh`),
 covering the `update` skill's shell orchestrator. Run with
 `bash tests/test-update-skill.sh` (also passes under `/bin/bash`, macOS 3.2.57).
 The cleanup skills (`cleandeep`/`cleanquick`/`audit`/`upkeep`) remain
@@ -426,7 +426,7 @@ prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
 | `diagnose.sh` denylist | ~13 | Destructive-command filter (rm -rf, curl\|sh, eval, dd of=/dev, …) vs allowed fixes |
 | `update.sh apply` contract | ~5 | Empty/`--drop` CSV safety, report JSON shape, plan-file cleanup |
 | `jq`-missing contract | 2 | `{"error":…}` to stdout when `jq` absent |
-| Linux/WSL2 fast path (v1.6) | ~23 | OS-detection seam, `discover_native_linux` shape, dnf exit-100, sudo boundary (apt → manual steps not ordered_groups), snap/flatpak auto-apply, allowlist rejection of sudo managers, Linux diagnose patterns, macOS regression guard |
+| Linux/WSL2 fast path (v1.6) | ~29 | OS-detection seam, `discover_native_linux` shape, dnf exit-100 + Obsoleting-section exclusion, apt from-less line parsing, flatpak app-ID column, WSL2 `winget.exe` detection, sudo boundary (apt → manual steps not ordered_groups), snap/flatpak auto-apply, allowlist rejection of sudo managers, Linux diagnose patterns, macOS regression guard |
 
 ### Skill-level coverage (live invocation)
 

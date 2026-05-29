@@ -264,8 +264,14 @@ Render the plan compactly as a report (no apply). Stop.
 If `needs_approval == false` for any other reason (empty
 `ordered_groups`):
 
-Render `Everything is up to date.` Surface any `manual_steps[]` as
-informational. Stop.
+- If `manual_steps[]` contains a `system-sudo` entry (Linux: apt/dnf/pacman
+  has pending upgrades that upkeep can't auto-apply), do **not** say
+  "everything is up to date" — that would be wrong. Instead render:
+  `Nothing to auto-apply, but N system package(s) need a manual upgrade:`
+  then the literal `sudo …` command from that step, plus any other
+  `manual_steps[]`. Stop.
+- Otherwise render `Everything is up to date.`, surface any remaining
+  `manual_steps[]` as informational, and stop.
 
 #### D. Approval gate render
 

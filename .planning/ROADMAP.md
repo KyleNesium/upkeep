@@ -8,7 +8,7 @@
 - ✅ **v1.3 Update Advisor** — changelog-reader + project-impact enrichment agents, failure-diagnoser, per-tool logging (shipped 2026-05-11; v1.3.1 codex-review findings shipped 2026-05-13)
 - ✅ **v1.4 Fast Discovery + Synthesis** — replaced four scout agents + synthesizer with `scripts/discover.sh` + `scripts/synthesize.sh`, 8x speedup of discovery+plan (shipped 2026-05-18)
 - ✅ **v1.5 Single-Shot Orchestrator** — collapsed macOS flow into one shell script, brew-update TTL cache, pattern-table failure diagnoser, opt-in enrichment. ~12–18x faster user-perceived pre-gate. (shipped 2026-05-29; PR #16/#17 merged, tagged v1.5.0)
-- 🟡 **v1.6 Linux/WSL2 Fast-Path Port** — brought the v1.5 single-shot architecture to apt/dnf/pacman + snap/flatpak + WSL2. One OS-aware orchestrator for all platforms; sudo managers surfaced as manual steps; legacy sequential flow retired. 44→67 tests. (in PR, 2026-05-29; contract-tested, live Linux validation pending)
+- 🟡 **v1.6 Linux/WSL2 Fast-Path Port** — brought the v1.5 single-shot architecture to apt/dnf/pacman + snap/flatpak + WSL2. One OS-aware orchestrator for all platforms; sudo managers surfaced as manual steps; legacy sequential flow retired. 44→73 tests. (in PR, 2026-05-29; contract-tested, live Linux validation pending)
 
 ## Phases
 
@@ -108,16 +108,22 @@ Remaining before merge:
 </details>
 
 <details>
-<summary>⏳ v1.6 Linux/WSL2 Fast-Path Port — PLANNING</summary>
+<summary>🟡 v1.6 Linux/WSL2 Fast-Path Port — IN REVIEW (draft PR #18, 2026-05-29)</summary>
 
-The v1.5 single-shot architecture is macOS-only. Linux + WSL2 still run the v1.0 sequential flow (SKILL.md Steps 1–6). Port plan:
+Ported the v1.5 single-shot architecture to Linux + WSL2; all three platforms now share one OS-aware orchestrator. The v1.0 sequential flow (old SKILL.md Steps 1–6, ~330 lines) is retired.
 
-- Extract apt/dnf/pacman + snap/flatpak audit + apply commands into `update.sh`'s dispatcher.
-- Replace per-category "Apply X?" gates with a single approval gate matching macOS UX.
-- Reuse `diagnose.sh`'s pattern table; add Linux-specific patterns (dpkg lock, dnf metadata, AUR build failures).
-- Preserve the Windows-package audit-only behavior on WSL2.
+- [x] `discover.sh`: `_detect_os` (override seam) + `discover_native_linux` (apt/dnf/pacman audit + snap/flatpak + WSL2 Windows managers); dynamic `os.type`; shadow gated to macOS; dnf exit-100 + pipefail discipline.
+- [x] `synthesize.sh`: `os.type` branch — `user-apps` group (snap/flatpak) + `system-sudo`/`windows-audit` manual steps; macOS unchanged via `// []` inertness.
+- [x] `update.sh`: snap/flatpak dispatcher + allowlist (apt/dnf/pacman excluded by design); OS-matched skills-mode stub; bash-3.2 empty-array drain hardened.
+- [x] `diagnose.sh`: 4 Linux patterns + snap/flatpak tool ids.
+- [x] `SKILL.md`: single fast path for all platforms; legacy flow retired; gate/report render manual sudo steps.
+- [x] Tests 44→73 (OS-override seam + PATH-stubbed fake managers). Pre-merge adversarial parser review fixed 4 real bugs (dnf Obsoleting, apt from-less line, flatpak app-ID, WSL2 `.exe`).
 
-Out of scope: Windows-side upgrade execution (still surfaced as manual `winget upgrade --all` guidance).
+Remaining before merge:
+- Live validation against a real Debian/Fedora/Arch box or WSL2 (contract-tested only so far).
+- Optional codex adversarial review of `discover_native_linux` + synthesize Linux branch.
+
+Out of scope: Windows-side upgrade execution (winget/scoop/choco stay audit-only); Linux PATH-shadow detection; Linux compat.json edges.
 
 </details>
 

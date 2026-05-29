@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Linux/WSL2 Fast-Path Port
 status: in_review
-stopped_at: feat/v1.6-linux-fastpath draft PR open 2026-05-29; 67/67 tests green; live Linux validation pending
+stopped_at: feat/v1.6-linux-fastpath draft PR open 2026-05-29; 73/73 tests green; live Linux validation pending
 last_updated: "2026-05-29T00:00:00.000Z"
 progress:
   total_phases: 6
@@ -32,7 +32,7 @@ Seven milestones since v1.0:
 - v1.5 (2026-05-29): single-shot orchestrator + brew TTL cache + pattern-table diagnoser (shipped, tagged)
 - v1.6 (in PR, 2026-05-29): Linux/WSL2 fast-path port — one OS-aware orchestrator for all platforms
 
-v1.6 is in a **draft PR** on `feat/v1.6-linux-fastpath`. All six phases complete (discover/synthesize/update/diagnose/SKILL/docs); 67/67 tests pass under bash 5 and bash 3.2.
+v1.6 is in a **draft PR** on `feat/v1.6-linux-fastpath`. All six phases complete (discover/synthesize/update/diagnose/SKILL/docs); 73/73 tests pass under bash 5 and bash 3.2.
 
 ## Accumulated Context
 
@@ -47,7 +47,8 @@ v1.6 is in a **draft PR** on `feat/v1.6-linux-fastpath`. All six phases complete
 
 - **One OS-aware orchestrator, not per-platform scripts.** `discover.sh`/`synthesize.sh`/`update.sh` branch internally on `os.type`. The shared `discover_skills`/`discover_language` are reused verbatim; only the native section differs. Exploited the `// []` jq idiom so macOS-only and Linux-only native keys are naturally inert on the other OS — minimizing macOS regression risk.
 - **The sudo boundary.** apt/dnf/pacman require root; upkeep never runs sudo. They are surfaced as `system-sudo` manual_steps and are deliberately excluded from the apply allowlist — the allowlist `_die` is the hard guarantee. snap/flatpak (user-scoped) ARE auto-applied.
-- **Test seam over live faking.** `UPKEEP_OS_OVERRIDE`/`UPKEEP_PKG_MGR_OVERRIDE` short-circuit `uname` so Linux paths run on the macOS dev box; PATH-stubbed fake managers feed canned output. 23 new tests (44→67).
+- **Test seam over live faking.** `UPKEEP_OS_OVERRIDE`/`UPKEEP_PKG_MGR_OVERRIDE` short-circuit `uname` so Linux paths run on the macOS dev box; PATH-stubbed fake managers feed canned output. 29 new tests (44→73).
+- **Adversarial parser review found 4 real bugs** (fixed pre-merge, with regression tests): dnf "Obsoleting Packages" leaked phantom upgrades; apt from-less `Inst` line mis-read `[arch]` as version; flatpak showed display name not app ID; WSL2 `winget` only resolves as `winget.exe`. Lesson: stress parsers with *realistic* (messy) tool output, not idealized fixtures.
 
 ### Pending Todos
 
@@ -68,6 +69,6 @@ From v1.1 STATE.md, six runtime claims (R1, R8, N4, G1, G3, G4 runtime) have bee
 ## Session Continuity
 
 Last session: 2026-05-29
-Stopped at: v1.6 implemented; 67/67 tests green under bash 5 + bash 3.2; draft PR pending push.
+Stopped at: v1.6 implemented; 73/73 tests green under bash 5 + bash 3.2; draft PR pending push.
 Branch: `feat/v1.6-linux-fastpath`
 Plan file: `~/.claude/plans/radiant-nibbling-sifakis.md`

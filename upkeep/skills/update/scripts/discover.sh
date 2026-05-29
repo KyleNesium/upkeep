@@ -349,12 +349,18 @@ discover_native_linux() {
         local apt_raw
         apt_raw=$(apt-get upgrade --dry-run 2>/dev/null | grep '^Inst' || true)
         if [ -n "$apt_raw" ]; then
-          # "Inst <name> [<from>] (<to> <repo> [arch])"
+          # "Inst <name> [<from>] (<to> <repo> [arch])". The version bracket
+          # [<from>] sits BEFORE the "("; the arch bracket [amd64] sits
+          # INSIDE the parens. Split at the first "(" so a from-less line
+          # (new dep: "Inst x (1.0 ...)") doesn't mis-read [arch] as <from>.
           sys_upgradable=$(printf '%s\n' "$apt_raw" | awk '
             {
               name=$2; from=""; to=""
-              if (match($0, /\[[^]]*\]/)) { from=substr($0, RSTART+1, RLENGTH-2) }
-              if (match($0, /\([^ )]+/))  { to=substr($0, RSTART+1, RLENGTH-1) }
+              p=index($0, "(")
+              pre=(p>0)?substr($0,1,p-1):$0
+              post=(p>0)?substr($0,p):""
+              if (match(pre, /\[[^]]*\]/))  { from=substr(pre, RSTART+1, RLENGTH-2) }
+              if (match(post, /\([^ )]+/))  { to=substr(post, RSTART+1, RLENGTH-1) }
               printf "%s\t%s\t%s\n", name, from, to
             }' \
             | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
@@ -370,11 +376,17 @@ discover_native_linux() {
         if [ "$dnf_rc" != "0" ] && [ "$dnf_rc" != "100" ]; then
           errors=$(jq '. + ["dnf check-update failed"]' <<<"$errors")
         fi
-        # Rows: "name.arch  version-release  repo". Skip blanks, the
-        # metadata banner, and "Obsoleting"/"Security" section headers.
+        # Rows: "name.arch  version-release  repo". `dnf check-update`
+        # appends an "Obsoleting Packages" section after the upgrade list;
+        # those rows are NOT separate upgrades, so stop parsing once we hit
+        # that header (otherwise they double-count as phantom packages).
+        # Also skip the leading metadata banner.
         sys_upgradable=$(printf '%s\n' "$dnf_raw" \
-          | awk 'NF>=3 && $1 ~ /\./ && $1 !~ /^(Last|Obsoleting|Security|Installing)/ {
-              n=$1; sub(/\.[^.]*$/, "", n); printf "%s\t%s\n", n, $2 }' \
+          | awk '
+              /^Obsoleting/ { stop=1 }
+              stop { next }
+              NF>=3 && $1 ~ /\./ && $1 !~ /^(Last|Security|Installing)/ {
+                n=$1; sub(/\.[^.]*$/, "", n); printf "%s\t%s\n", n, $2 }' \
           | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
                      | {name:.[0], from:"", to:(.[1]//"")})')
       fi
@@ -409,12 +421,16 @@ discover_native_linux() {
   fi
 
   # ── flatpak (user-scoped, auto-appliable) ──
+  # `--columns=application` returns the stable app ID (e.g. org.gimp.GIMP),
+  # one per line. Without it, the default first column is the human display
+  # name ("GNU Image Manipulation Program"), which is unstable and may
+  # contain spaces. App ID is what the user recognises and what flatpak acts on.
   if command -v flatpak >/dev/null 2>&1; then
     flatpak_installed=true
     local fp_raw
-    fp_raw=$(flatpak remote-ls --updates 2>/dev/null || true)
+    fp_raw=$(flatpak remote-ls --updates --columns=application 2>/dev/null || true)
     flatpak_updatable=$(printf '%s\n' "$fp_raw" \
-      | awk -F'\t' 'NF>=1 && length($1)>0 { print $1 }' \
+      | awk 'NF>=1 && length($1)>0 { print $1 }' \
       | jq -Rsc 'split("\n") | map(select(length>0) | {name:.})')
   fi
 
@@ -424,8 +440,11 @@ discover_native_linux() {
     local mnt_c=false win_mgrs='[]'
     [ -d /mnt/c ] && mnt_c=true
     local m
+    # WSL interop exposes Windows executables WITH the .exe extension
+    # (`winget.exe`), not bare `winget`, so probe both forms and report the
+    # canonical name once if either resolves.
     for m in winget scoop choco; do
-      if command -v "$m" >/dev/null 2>&1; then
+      if command -v "$m" >/dev/null 2>&1 || command -v "$m.exe" >/dev/null 2>&1; then
         win_mgrs=$(jq --arg n "$m" '. + [$n]' <<<"$win_mgrs")
       fi
     done

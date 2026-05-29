@@ -42,6 +42,20 @@ pulls. On WSL2, Windows package managers (winget/scoop/choco) are audit-only.
 - **`diagnose.sh`** adds four Linux failure patterns — dpkg/apt lock held, dnf
   metadata/conflict, snap change-in-progress, flatpak runtime-missing — and
   allows `snap`/`flatpak` tool ids.
+
+### Parser hardening (pre-merge adversarial review)
+
+Stress-testing `discover_native_linux` against realistic (not idealized)
+package-manager output surfaced four real bugs, all fixed with regression tests:
+- **dnf:** the `Obsoleting Packages` section (common on Fedora) leaked into the
+  upgrade list as phantom packages. Parsing now stops at that header.
+- **apt:** a from-less `Inst` line (new dependency) mis-read the in-parens
+  `[arch]` as the version. The version bracket is now read only from the text
+  before `(`.
+- **flatpak:** the updatable list showed the human display name; it now pins
+  `--columns=application` to report the stable app ID (e.g. `org.gimp.GIMP`).
+- **WSL2:** Windows managers are exposed via interop as `winget.exe` (not bare
+  `winget`); detection now probes both forms.
 - **`SKILL.md`** routes all platforms to the fast path; the legacy v1.0
   sequential flow (old Steps 1–6, ~330 lines) is retired. Gate + report render
   now surface the manual sudo steps prominently.

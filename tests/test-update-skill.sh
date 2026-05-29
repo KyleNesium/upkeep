@@ -294,6 +294,8 @@ case "$*" in
     echo "Reading package lists..."
     echo "Inst libfoo [1.0.0] (1.1.0 Ubuntu:24.04 [amd64])"
     echo "Inst bar [2.0] (2.0.1 Ubuntu:24.04 [amd64])"
+    # from-less line (new dep) — the in-parens [all] must NOT be read as <from>
+    echo "Inst newdep (3.0 Ubuntu:24.04 [all])"
     echo "Conf libfoo (1.1.0 Ubuntu:24.04 [amd64])"
     ;;
 esac
@@ -307,6 +309,9 @@ case "$1" in
     echo "Last metadata expiration check: 0:10:00 ago."
     echo "vim-enhanced.x86_64    2:9.1.0-1.fc40    updates"
     echo "curl.x86_64            8.6.0-1.fc40      updates"
+    echo ""
+    echo "Obsoleting Packages"
+    echo "foo-legacy.noarch      2.0-1.fc40        updates"
     exit 100
     ;;
 esac
@@ -333,7 +338,8 @@ FAKE
 cat > "$LINUX_STUB/flatpak" <<'FAKE'
 #!/bin/sh
 case "$*" in
-  "remote-ls --updates") printf 'org.gimp.GIMP\t2.10.38\tstable\tflathub\n' ;;
+  *"remote-ls --updates"*"--columns=application"*) printf 'org.gimp.GIMP\n' ;;
+  *"remote-ls --updates"*) printf 'org.gimp.GIMP\t2.10.38\tstable\tflathub\n' ;;
   *"list"*) printf 'org.gimp.GIMP\n' ;;
 esac
 FAKE
@@ -352,12 +358,18 @@ _assert_eq "linux discover: native.system.manager=apt" \
   "$(echo "$LDISC" | jq -r '.native.system.manager')" "apt"
 _assert_eq "linux discover: apt upgradable count>=1" \
   "$(echo "$LDISC" | jq '.native.system.count >= 1')" "true"
+# Regression: a from-less Inst line must not mis-read the in-parens [arch]
+# as the <from> version (bug: newdep showed from="all").
+_assert_eq "linux discover: apt from-less line has empty from (not [arch])" \
+  "$(echo "$LDISC" | jq '[.native.system.upgradable[] | select(.from=="all" or .from=="amd64")] | length')" "0"
 _assert_eq "linux discover: apt requires_sudo true" \
   "$(echo "$LDISC" | jq -r '.native.system.requires_sudo')" "true"
 _assert_eq "linux discover: snap refreshable>=1" \
   "$(echo "$LDISC" | jq '(.native.snap.refreshable | length) >= 1')" "true"
 _assert_eq "linux discover: flatpak updatable>=1" \
   "$(echo "$LDISC" | jq '(.native.flatpak.updatable | length) >= 1')" "true"
+_assert_eq "linux discover: flatpak name is app ID (not display name)" \
+  "$(echo "$LDISC" | jq -r '.native.flatpak.updatable[0].name')" "org.gimp.GIMP"
 _assert_eq "linux discover: no brew key in native" \
   "$(echo "$LDISC" | jq 'has("native") and (.native | has("brew") | not)')" "true"
 
@@ -370,6 +382,11 @@ _assert_eq "dnf discover: count>=1 (exit 100 not treated as failure)" \
   "$(echo "$DDISC" | jq '.native.system.count >= 1')" "true"
 _assert_eq "dnf discover: no native error string" \
   "$(echo "$DDISC" | jq '.native.errors | length')" "0"
+# Regression: the "Obsoleting Packages" section must not count as upgrades.
+_assert_eq "dnf discover: count is exactly 2 (Obsoleting section excluded)" \
+  "$(echo "$DDISC" | jq '.native.system.count')" "2"
+_assert_eq "dnf discover: foo-legacy (obsoleting) not in upgradable" \
+  "$(echo "$DDISC" | jq '[.native.system.upgradable[] | select(.name=="foo-legacy")] | length')" "0"
 
 # --- 10c. plan: sudo boundary (apt → manual_steps, NOT ordered_groups) ---
 LPLAN=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt \
@@ -388,16 +405,24 @@ _assert_eq "linux plan: snap in ordered_groups tools" \
 _assert_eq "linux plan: flatpak in ordered_groups tools" \
   "$(echo "$LPLAN" | jq '[.ordered_groups[]?.tools[]?] | any(. == "flatpak")')" "true"
 
-# --- 10d. WSL2: windows audit manual step ---
-cat > "$LINUX_STUB/winget" <<'FAKE'
+# --- 10d. WSL2: windows audit (detected via .exe, surfaced as manual step) ---
+# Name the fake with the .exe extension only — WSL interop exposes Windows
+# binaries as `winget.exe`, not bare `winget`. Detection must still find it.
+cat > "$LINUX_STUB/winget.exe" <<'FAKE'
 #!/bin/sh
 echo "Name  Id  Version"
 FAKE
-chmod +x "$LINUX_STUB/winget"
+chmod +x "$LINUX_STUB/winget.exe"
+WDISC=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=wsl2 UPKEEP_PKG_MGR_OVERRIDE=apt \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "wsl2 discover: winget detected via .exe" \
+  "$(echo "$WDISC" | jq '.native.windows.managers | any(. == "winget")')" "true"
 WPLAN=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=wsl2 UPKEEP_PKG_MGR_OVERRIDE=apt \
   bash "$SCRIPTS/update.sh" plan all 2>/dev/null)
 _assert_eq "wsl2 plan: emits valid JSON" \
   "$(echo "$WPLAN" | jq -e 'type=="object"' >/dev/null 2>&1 && echo object || echo invalid)" "object"
+_assert_eq "wsl2 plan: windows-audit manual step present" \
+  "$(echo "$WPLAN" | jq '[.manual_steps[]? | select(.kind=="windows-audit")] | length >= 1')" "true"
 
 # --- 10e. apply allowlist: rejects sudo managers, accepts snap/flatpak ---
 LAPPLY_PLAN=$(mktemp /tmp/upkeep-linux-plan.XXXXXX)

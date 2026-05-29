@@ -226,16 +226,16 @@ All 15 phases, but **never offers to remove anything**. Pure report — shows wh
 
 ### Update
 
-Separate from cleanup entirely. On macOS, four parallel scout agents discover outdated tools, a compatibility synthesizer plans the upgrade order with cross-manager risk flags, and a single approval gate replaces per-category Y/N fatigue. On Linux & WSL2, the v1.0 sequential flow remains unchanged. Four sub-modes:
+Separate from cleanup entirely. As of v1.6 a single OS-aware shell orchestrator serves macOS, Linux, and WSL2: it discovers outdated tools, plans the upgrade order with cross-manager risk flags, and presents one approval gate instead of per-category Y/N fatigue. Four sub-modes:
 
 | Sub-mode | What it does |
 |----------|--------------|
 | `update audit` | Scan everything — show what's outdated, no changes |
 | `update skills` | Git-pull AI skills in `~/.claude/skills/` and `~/.codex/skills/` |
-| `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, bun, deno, mise, uv, mas, macOS |
-| `update all` | Skills first, then packages — full sweep, single approval gate on macOS |
+| `update packages` | macOS: brew, mas, macOS updates. Linux: snap, flatpak (apt/dnf/pacman as manual sudo steps). All: npm, pipx, gems, uv, bun |
+| `update all` | Skills first, then packages — full sweep, single approval gate |
 
-The macOS flow flags cross-manager risks before you approve (e.g. `brew:node` upgrade ⇒ npm globals may need rebuild; `brew:openssl` upgrade ⇒ ruby native gems like `nokogiri` need recompile; system Ruby 2.x ⇒ `gem update` auto-uses `--user-install`). Post-flight runs `brew doctor`, re-resolves PATH for upgraded binaries, and surfaces shadowed entries.
+On macOS the flow flags cross-manager risks before you approve (e.g. `brew:node` upgrade ⇒ npm globals may need rebuild; `brew:openssl` upgrade ⇒ ruby native gems like `nokogiri` need recompile; system Ruby 2.x ⇒ `gem update` auto-uses `--user-install`), and post-flight runs `brew doctor` + PATH-shadow re-check. On Linux/WSL2 the same gate surfaces apt/dnf/pacman upgrades as **manual `sudo …` steps** (never auto-run — upkeep never uses sudo) while snap, flatpak, and the language managers are auto-applied; WSL2 Windows managers are audit-only.
 
 Nothing applies without your approval. `softwareupdate` (macOS system updates) always gets an extra restart warning, even under "Apply all".
 
@@ -256,7 +256,7 @@ Four sub-modes:
 
 Everything is confirmation-gated. Nothing applies without your approval. Destructive or disruptive operations (macOS system updates, brew toolchain changes) get extra warnings.
 
-On macOS, v1.1 introduces a parallel discovery + compatibility-aware single-gate flow (see Update section above). Linux & WSL2 continue to use the v1.0 sequential per-category gates pending v1.1.x port.
+All three platforms (macOS, Linux, WSL2) use the same single-shot, single-gate flow as of v1.6 — see the version notes below.
 
 ### v1.3: AI update advisor (macOS)
 
@@ -290,7 +290,13 @@ The two enrichment agents (`changelog-reader`, `project-impact`) from v1.3 are n
 
 User-perceived pre-gate latency on a real machine drops from ~60–90s (v1.4 with multi-turn skill overhead) to **~5s on warm cache** — 12–18× speedup. All v1.2/v1.3/v1.4 security invariants preserved verbatim, plus three new ones in v1.5: canonical-path containment for skill repo pulls (rejects `../` and symlinks), TOCTOU-safe plan-file write via `mktemp -d` + atomic rename, and TSV-row validation in `diagnose.sh`.
 
-Linux/WSL2 still use the v1.0 sequential flow; fast-path port scheduled for v1.6.
+### v1.6: Linux/WSL2 fast-path port
+
+v1.5 only sped up macOS — Linux and WSL2 still ran the slow v1.0 sequential flow. v1.6 ports the single-shot orchestrator to **all three platforms**: `discover.sh` detects the OS (`uname` + `/etc/os-release`) and `update.sh`/`synthesize.sh` branch internally, so there is now one fast path and one approval-gate UX everywhere. The legacy sequential flow (old SKILL.md Steps 1–6, ~330 lines) is retired.
+
+The defining constraint is the **sudo boundary**: apt/dnf/pacman require root and upkeep never runs sudo, so those upgrades are surfaced as **manual `sudo …` steps** and are deliberately excluded from the apply dispatcher's allowlist (the allowlist guard is the hard guarantee a malformed plan can't smuggle a root command into execution). User-scoped managers — language tools, `snap refresh`, `flatpak update -y`, skills git pulls — are auto-applied. On WSL2, Windows package managers (winget/scoop/choco) are detected and surfaced **audit-only**. `scripts/diagnose.sh` gains four Linux failure patterns (dpkg/apt lock, dnf metadata/conflict, snap change-in-progress, flatpak runtime-missing).
+
+Linux/WSL2 paths are contract-tested via a `UPKEEP_OS_OVERRIDE` / `UPKEEP_PKG_MGR_OVERRIDE` seam plus PATH-stubbed fake package managers (the dev box is macOS); a pre-merge adversarial parser review fixed four real bugs in the package-manager output parsers. Live validation against a real Linux/WSL2 box is the remaining follow-up.
 
 When you run `/upkeep` it checks once per day whether a newer version is available. Both install layouts are supported: git-cloned skills compare `HEAD` against `origin/main`, and plugin-managed installs compare the installed `plugin.json` against the marketplace clone. If the check finds an update, you'll be asked whether to update first or continue with the current version. The narrow entrypoints (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`) skip the check — re-enter via `/upkeep` if you want the prompt.
 

@@ -91,11 +91,38 @@ Cross-platform phases that run everywhere: disk baseline (Phase 1), dev tool cac
 
 ## Install
 
-```bash
-claude plugin add KyleNesium/upkeep
+> **Status:** awaiting acceptance into the `claude-community` marketplace ([submission pending](https://claude.ai/settings/plugins/submit)). Until then, install directly from this repository as a personal marketplace.
+
+In Claude Code, run these two slash commands:
+
+```
+/plugin marketplace add KyleNesium/upkeep
+/plugin install upkeep@KyleNesium
 ```
 
-Restart Claude Code — the skill is then available as `/upkeep`.
+The first command registers this repository as a marketplace named `KyleNesium`. The second installs the `upkeep` plugin from it.
+
+Then run `/reload-plugins` (or restart Claude Code) — the skill is then available as `/upkeep` (and the namespaced variants `/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`, `/upkeep:update`).
+
+To update later:
+
+```
+/plugin update upkeep@KyleNesium
+```
+
+To remove:
+
+```
+/plugin uninstall upkeep@KyleNesium
+/plugin marketplace remove KyleNesium
+```
+
+Alternative for local hacking: `git clone` this repo and load it with `--plugin-dir` (no marketplace registration needed):
+
+```bash
+git clone https://github.com/KyleNesium/upkeep ~/src/upkeep
+claude --plugin-dir ~/src/upkeep/upkeep
+```
 
 ---
 

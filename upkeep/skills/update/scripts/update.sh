@@ -31,7 +31,11 @@ DATA_DIR="${UPKEEP_DATA_DIR:-$HOME/.claude/data}"
 # ── Common helpers ───────────────────────────────────────────────
 _require_jq() {
   if ! command -v jq >/dev/null 2>&1; then
-    echo '{"error":"jq required but not found"}' >&2
+    # v1.5.1: emit JSON to stdout (SKILL.md reads `.error`); prose
+    # diagnostic to stderr. Without this, SKILL.md would see empty
+    # stdout and have no programmatic way to surface the failure.
+    printf '%s\n' '{"error":"jq required but not found"}'
+    echo "update.sh: jq is required" >&2
     exit 1
   fi
 }
@@ -255,40 +259,53 @@ _cmd_apply() {
   mode=$(jq -r '.mode' "$plan_file")
 
   # ── Set up race-free accumulators (matches v1.4 Step 3m) ─────
-  local tmp_root
-  tmp_root=$(mktemp -d) || _die "mktemp -d failed"
-  local upgraded_formulas_file="$tmp_root/upgraded_formulas"
-  local upgraded_tools_file="$tmp_root/upgraded_tools"
-  local failure_log_file="$tmp_root/failure_log"
-  local deprecation_log="$tmp_root/deprecation_log"
-  local apply_log_root="$tmp_root/logs"
+  # v1.5.1: trap variables are script-scoped (not local) so the EXIT
+  # trap can still resolve them after the function returns. With
+  # `set -u` enabled, a local-scoped trap target becomes "unbound
+  # variable" at trap-fire time, which masks the real error.
+  TMP_ROOT_APPLY=$(mktemp -d) || _die "mktemp -d failed"
+  local upgraded_formulas_file="$TMP_ROOT_APPLY/upgraded_formulas"
+  local upgraded_tools_file="$TMP_ROOT_APPLY/upgraded_tools"
+  local failure_log_file="$TMP_ROOT_APPLY/failure_log"
+  local deprecation_log="$TMP_ROOT_APPLY/deprecation_log"
+  local apply_log_root="$TMP_ROOT_APPLY/logs"
   mkdir -p "$apply_log_root"
-  trap 'rm -rf -- "$tmp_root"' EXIT
+  trap 'rm -rf -- "${TMP_ROOT_APPLY:-/dev/null/_unset}"' EXIT
 
   touch "$upgraded_formulas_file" "$upgraded_tools_file" \
         "$failure_log_file" "$deprecation_log"
 
   # ── Dropped tools set (from gate's "drop categories" path) ───
-  # v1.5.1 (codex P2): parse CSV without word-splitting + pathname
-  # expansion. Prior version used `for t in $drop_csv` which globbed
-  # against the cwd — `--drop=*` could match filenames. Now: validate
-  # each token against the hardcoded allowlist; silently drop anything
-  # else so we never echo attacker-controlled bytes.
-  local -A dropped=()
+  # v1.5.1: bash 3.2 (macOS default) has no associative arrays. Encode
+  # the dropped set as a comma-delimited string with sentinel commas at
+  # both ends, then check membership via case-pattern match. Same
+  # allowlist semantics as the v1.5.0 `local -A` version but works on
+  # /bin/bash.
+  #
+  # codex P2: parse CSV without word-splitting + pathname expansion.
+  # Prior version used `for t in $drop_csv` which globbed against cwd.
+  local dropped=","
   if [ -n "$drop_csv" ]; then
     local _saved_ifs="$IFS"
     IFS=','
-    # Use `read -r -a` to split — no globbing, no command interpretation.
+    # `read -r -a` is bash 2.0+; it splits on $IFS, no globbing.
     local _drop_arr=()
     read -r -a _drop_arr <<<"$drop_csv"
     IFS="$_saved_ifs"
     for t in "${_drop_arr[@]}"; do
       case "$t" in
-        skills|brew|npm|pipx|gems|uv|bun|mas|macos) dropped[$t]=1 ;;
+        skills|brew|npm|pipx|gems|uv|bun|mas|macos) dropped="${dropped}${t}," ;;
         *) ;;  # silently ignore unknown tool ids
       esac
     done
   fi
+  # Membership helper: returns 0 if the tool is in the dropped set.
+  _is_dropped() {
+    case "$dropped" in
+      *",$1,"*) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
 
   # ── Validate tool ids against hardcoded allowlist ────────────
   local allowed="skills brew npm pipx gems uv bun mas macos"
@@ -386,7 +403,7 @@ _cmd_apply() {
     : > "$log"
     local rc=0
 
-    [ "${dropped[$tool]:-0}" = "1" ] && return 0
+    _is_dropped "$tool" && return 0
 
     case "$tool" in
       brew)
@@ -553,21 +570,35 @@ _cmd_apply() {
     local hist_lock="$DATA_DIR/upkeep-history.lock"
     mkdir -p "$DATA_DIR" 2>/dev/null
     local entry
+    # v1.5.1: .language.errors is an array (not an object), and
+    # `.value.outdated` on an array fails with "Cannot index array with
+    # string". Filter to object values first. Similarly defend the brew
+    # path against a missing .outdated key.
     entry=$(jq -n --arg ts "$(date -u +%FT%TZ)" \
-      --argjson formulas "$(jq '.native.brew.outdated | length' <<<"$discovery")" \
-      --argjson tools "$(jq '.language | [.[].outdated // [] | length] | add // 0' <<<"$discovery")" \
+      --argjson formulas "$(jq '(.native.brew.outdated // []) | length' <<<"$discovery")" \
+      --argjson tools "$(jq '.language | [.[] | select(type == "object") | (.outdated // []) | length] | add // 0' <<<"$discovery")" \
       '{ts:$ts, brew_count:$formulas, lang_count:$tools}')
     _write_history() {
-      local tmp
+      local tmp rc=0
       tmp=$(mktemp "${DATA_DIR}/.upkeep-history.XXXXXX") || return 1
       if [ -f "$hist_file" ]; then
-        jq --argjson e "$entry" '.runs += [$e]' "$hist_file" > "$tmp" \
-          && mv -- "$tmp" "$hist_file"
+        if ! jq --argjson e "$entry" '.runs += [$e]' "$hist_file" > "$tmp"; then rc=$?; fi
       else
-        jq -n --argjson e "$entry" '{schema_version:"1", runs:[$e]}' > "$tmp" \
-          && mv -- "$tmp" "$hist_file"
+        if ! jq -n --argjson e "$entry" '{schema_version:"1", runs:[$e]}' > "$tmp"; then rc=$?; fi
       fi
+      if [ "$rc" = "0" ]; then
+        mv -- "$tmp" "$hist_file" || rc=$?
+      fi
+      # v1.5.1: clean up the mktemp on any failure path so we don't
+      # leave 0-byte .upkeep-history.XXXXXX orphans in DATA_DIR.
+      if [ "$rc" != "0" ] && [ -f "$tmp" ]; then
+        rm -f -- "$tmp"
+      fi
+      return $rc
     }
+    # Sweep stale orphans (>1h old) — defense for prior buggy versions
+    # that left them behind. New code paths above no longer create them.
+    find "$DATA_DIR" -maxdepth 1 -name '.upkeep-history.*' -mmin +60 -delete 2>/dev/null
     if command -v flock >/dev/null 2>&1; then
       ( flock -x 9; _write_history ) 9>"$hist_lock"
     else
@@ -593,7 +624,7 @@ _cmd_apply() {
       skills: {applied: $skills_applied, skipped: $skills_skipped},
       upgraded_formulas: $upgraded_formulas,
       upgraded_tools: $upgraded_tools,
-      doctor: ($doctor | select(length > 0)),
+      doctor: (if ($doctor | length) > 0 then $doctor else null end),
       shadow_hits: $shadow_hits,
       resolution_failures: $resolution_failures,
       diagnoses: $diagnoses.diagnoses,
@@ -606,8 +637,9 @@ _cmd_apply() {
         end
       )'
 
-  # Plan file has served its purpose — remove. The trap on $tmp_root
-  # handles the apply workspace; the plan file lives in $DATA_DIR.
+  # Plan file has served its purpose — remove. The EXIT trap on
+  # $TMP_ROOT_APPLY handles the apply workspace; the plan file lives
+  # in $DATA_DIR and isn't covered by that trap.
   rm -f -- "$plan_file" 2>/dev/null
 }
 

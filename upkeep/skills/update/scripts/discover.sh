@@ -18,6 +18,10 @@ PLUGIN_CACHE_ROOT="${UPKEEP_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}"
 SCOUT_MAX_REPOS="${UPKEEP_MAX_REPOS:-200}"
 
 if ! command -v jq >/dev/null 2>&1; then
+  # v1.5.1: emit JSON to stdout (callers reading `.schema_version` see
+  # `null`; callers reading `.error` get a clear message); prose to
+  # stderr.
+  printf '%s\n' '{"error":"jq required but not found"}'
   echo "discover.sh: jq is required" >&2
   exit 1
 fi

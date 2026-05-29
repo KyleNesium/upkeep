@@ -182,9 +182,51 @@ and 5 P2 findings; all fixed in PR #16 before tagging.
   available); noted as future hardening (would need
   ownership/checksum verification on the sentinel).
 
-The codex review session is logged for traceability; the next codex
-pass (post-1.5.0) should focus on the apply path under real failure
-conditions once `/upkeep:update packages` has been live-run.
+### Post-codex audit pass
+
+After applying the codex fixes, a self-audit caught five more latent
+bugs that would have shipped to users:
+
+- **`local -A dropped=()` would have crashed `_cmd_apply` on macOS's
+  default `/bin/bash` 3.2** (associative arrays are bash 4+). Anyone
+  without brew bash installed would have hit
+  `local: -A: invalid option` the moment they approved an apply.
+  Replaced with a comma-delimited string + `_is_dropped()` helper
+  using `case` pattern match — same membership semantics, works on
+  bash 2.0+.
+- **The EXIT trap referenced `$tmp_root` (function-local), but with
+  `set -u` the trap fires AFTER local scope unwound** — turning every
+  apply failure into a confusing "unbound variable" instead of the
+  real error. Moved trap target to `TMP_ROOT_APPLY` (script-scoped)
+  with `${TMP_ROOT_APPLY:-/dev/null/_unset}` fallback so the trap
+  never crashes.
+- **History write was orphaning 0-byte `.upkeep-history.XXXXXX`
+  files in `$DATA_DIR`** when jq failed mid-write (then `mv` never
+  ran). Now cleans up on any failure path + sweeps stale orphans
+  (>1h) on each apply.
+- **History write was iterating `.language | .[]` to count `outdated`
+  arrays** but `.language.errors` is itself an array — produced
+  `Cannot index array with string "outdated"` and aborted the whole
+  apply with no report output. Filter to `select(type == "object")`
+  first.
+- **`select(length > 0)` inside `{doctor: (... | select(length > 0))}`
+  was eating the entire apply report when brew doctor was clean.**
+  jq's `select` filter inside an object construction terminates the
+  whole output expression when it rejects — switched to
+  `if length > 0 then ... else null end`.
+
+Plus two contract polish items:
+
+- All three scripts (`update.sh`, `discover.sh`, `diagnose.sh`) now
+  emit JSON to stdout on jq-missing so SKILL.md can parse `.error`
+  uniformly; prose diagnostic continues to stderr. Previously
+  inconsistent: some wrote JSON to stderr, some plain text.
+- `update.sh` apply now removes the plan file at the end (was leaking
+  the per-invocation plan file in `$DATA_DIR` after a successful
+  apply).
+
+All five regressions caught by manual integration tests under
+`/bin/bash` 3.2 + bash 5 (`env bash`) before tag.
 
 ### Not in v1.5 (deferred)
 

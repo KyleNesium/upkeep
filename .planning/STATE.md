@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.5
-milestone_name: Single-Shot Orchestrator (macOS Fast Path)
+milestone: v1.6
+milestone_name: Linux/WSL2 Fast-Path Port
 status: in_review
-stopped_at: PR #16 draft open 2026-05-28; awaiting codex review + live apply
-last_updated: "2026-05-28T19:10:00.000Z"
+stopped_at: feat/v1.6-linux-fastpath draft PR open 2026-05-29; 73/73 tests green; live Linux validation pending
+last_updated: "2026-05-29T00:00:00.000Z"
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -18,20 +18,21 @@ progress:
 
 See: `.planning/PROJECT.md`
 
-**Core value:** Every upkeep command gracefully handles macOS, Linux, and WSL2 without errors, with macOS as the bleeding edge.
-**Current focus:** v1.5 — make `/upkeep:update` actually fast enough for routine use, not just "8x faster than v1.3" on paper.
+**Core value:** Every upkeep command gracefully handles macOS, Linux, and WSL2 without errors. As of v1.6 the `update` fast path is unified across all three.
+**Current focus:** v1.6 — port the v1.5 single-shot orchestrator to Linux + WSL2 so all platforms share one fast path and one UX.
 
 ## Current Position
 
-Six milestones shipped since v1.0:
+Seven milestones since v1.0:
 - v1.0 (2026-04-19): Linux/WSL2 cross-platform
 - v1.1 (2026-05-07): macOS parallel discovery + synthesizer
 - v1.2 (2026-05-07, + v1.2.1, v1.2.2): security hardening
 - v1.3 (2026-05-11, + v1.3.1): update advisor
 - v1.4 (2026-05-18): fast discovery + synthesis scripts (8x speedup)
-- v1.5 (in PR #16, 2026-05-28): single-shot orchestrator + brew TTL cache + pattern-table diagnoser
+- v1.5 (2026-05-29): single-shot orchestrator + brew TTL cache + pattern-table diagnoser (shipped, tagged)
+- v1.6 (in PR, 2026-05-29): Linux/WSL2 fast-path port — one OS-aware orchestrator for all platforms
 
-v1.5 PR #16 is **draft**. Five of six v1.5 phases complete; Phase 5 (eager-discovery hook) deferred since acceptance targets hit without it.
+v1.6 is in a **draft PR** on `feat/v1.6-linux-fastpath`. All six phases complete (discover/synthesize/update/diagnose/SKILL/docs); 73/73 tests pass under bash 5 and bash 3.2.
 
 ## Accumulated Context
 
@@ -42,12 +43,19 @@ v1.5 PR #16 is **draft**. Five of six v1.5 phases complete; Phase 5 (eager-disco
 - **Failure diagnosis is pattern-matched, not LLM.** ~80% of failures match well-known patterns (Ruby version, native build deps, EACCES, pipx ImportError, dyld, arch, solver, brew post-install). Hand-authored case statement is faster (100x+), deterministic, easier to extend. LLM fallback only via "Investigate manually" diagnosis when no pattern matches.
 - **Enrichment is opt-in, not gated.** v1.3/v1.4 gated `changelog-reader` + `project-impact` on "brew major bump OR medium+ compat edge." Still added 30–60s for users with majors. v1.5 makes them strictly opt-in (`--advisor`) and moves them to after the gate, in parallel with apply.
 
+### Key Decisions (v1.6)
+
+- **One OS-aware orchestrator, not per-platform scripts.** `discover.sh`/`synthesize.sh`/`update.sh` branch internally on `os.type`. The shared `discover_skills`/`discover_language` are reused verbatim; only the native section differs. Exploited the `// []` jq idiom so macOS-only and Linux-only native keys are naturally inert on the other OS — minimizing macOS regression risk.
+- **The sudo boundary.** apt/dnf/pacman require root; upkeep never runs sudo. They are surfaced as `system-sudo` manual_steps and are deliberately excluded from the apply allowlist — the allowlist `_die` is the hard guarantee. snap/flatpak (user-scoped) ARE auto-applied.
+- **Test seam over live faking.** `UPKEEP_OS_OVERRIDE`/`UPKEEP_PKG_MGR_OVERRIDE` short-circuit `uname` so Linux paths run on the macOS dev box; PATH-stubbed fake managers feed canned output. 29 new tests (44→73).
+- **Adversarial parser review found 4 real bugs** (fixed pre-merge, with regression tests): dnf "Obsoleting Packages" leaked phantom upgrades; apt from-less `Inst` line mis-read `[arch]` as version; flatpak showed display name not app ID; WSL2 `winget` only resolves as `winget.exe`. Lesson: stress parsers with *realistic* (messy) tool output, not idealized fixtures.
+
 ### Pending Todos
 
-1. Run codex adversarial review on `scripts/update.sh` and `scripts/diagnose.sh` before merging PR #16. v1.3.1's five fixes came from this pattern.
-2. Once user runs `/plugin update upkeep` to pull v1.5 onto the live box, run a real `/upkeep:update packages` to exercise the apply path (dispatcher, post-flight, history write, diagnose.sh against actual gem failures on system Ruby 2.6).
-3. After merge: tag v1.5.0, write GitHub release notes from CHANGELOG section, delete `feat/v1.5-single-shot` branch.
-4. Plan v1.6 Linux/WSL2 fast-path port.
+1. Live-validate the Linux path on a real Debian/Fedora/Arch box (or WSL2) — current coverage is contract-tested only. Confirm real apt-get/dnf/pacman/snap/flatpak output parses as expected.
+2. Consider a codex adversarial review of the v1.6 `discover_native_linux` + synthesize Linux branch before merge (the v1.3.1/v1.5 pattern that found real bugs).
+3. After merge: tag v1.6.0, write GitHub release notes from CHANGELOG, delete `feat/v1.6-linux-fastpath` branch.
+4. Possible v1.7: Linux PATH-shadow detection (deferred from v1.6), Linux-specific compatibility.json edges, eager-discovery hook (deferred from v1.5).
 
 ### Carried-Forward Runtime Claims
 
@@ -55,13 +63,12 @@ From v1.1 STATE.md, six runtime claims (R1, R8, N4, G1, G3, G4 runtime) have bee
 
 ### Blockers/Concerns
 
-- v1.5 cannot be live-apply-tested until user runs `/plugin update upkeep` to install v1.5 over the still-present v1.3.0 plugin cache. (v1.4 was tagged but never landed on this machine for the same reason — `/plugin update` is opt-in.)
-- The 5s warm-cache floor in `discover.sh` is dominated by the parallel sections (skills walk + language scout + shadow walk). Further reduction needs either eager-discovery hook (deferred) or aggressive caching of skills git fetch / `gem outdated`.
+- v1.6 Linux/WSL2 paths are **contract-tested, not live-validated** — the dev box is macOS, so real apt/dnf/pacman/snap/flatpak behaviour is simulated via PATH stubs + the OS-override seam. Live validation on a real Linux box is the top follow-up.
+- macOS regression risk was the main concern; mitigated by keeping macOS code paths byte-for-byte and relying on the existing 44 tests (all still green) plus 2 explicit macOS-regression assertions in Section 10.
 
 ## Session Continuity
 
-Last session: 2026-05-28
-Stopped at: PR #16 draft opened; codex review + live apply pending.
-Branch: `feat/v1.5-single-shot`
-PR: https://github.com/KyleNesium/upkeep/pull/16
-Resume file: `.planning/milestones/v1.5-ROADMAP.md`
+Last session: 2026-05-29
+Stopped at: v1.6 implemented; 73/73 tests green under bash 5 + bash 3.2; draft PR pending push.
+Branch: `feat/v1.6-linux-fastpath`
+Plan file: `~/.claude/plans/radiant-nibbling-sifakis.md`

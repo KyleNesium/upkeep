@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-05-29
+
+### Added — Linux/WSL2 fast-path port
+
+v1.5 brought the single-shot orchestrator (`scripts/update.sh`) to macOS but
+Linux and WSL2 were still stuck on the slow v1.0 sequential SKILL.md flow
+(5–6 LLM turns, per-category gates). v1.6 ports the fast path to **all three
+platforms** with one OS-aware orchestrator — same two-turn contract, same
+single approval gate, everywhere.
+
+**The defining constraint — the sudo boundary.** Linux system package
+managers (apt/dnf/pacman) require root, and upkeep never runs sudo. So those
+upgrades are surfaced as **manual steps** (the exact `sudo …` command, for the
+user to run themselves) and are *never* placed in the apply dispatcher.
+User-scoped managers are auto-applied: language tools (npm/pipx/gems/uv/bun,
+already cross-platform), `snap refresh`, `flatpak update -y`, and skills git
+pulls. On WSL2, Windows package managers (winget/scoop/choco) are audit-only.
+
+- **`discover.sh`** is now OS-aware. New `_detect_os` (shared detection block:
+  `uname` → macos/linux/wsl2, `/etc/os-release` → apt/dnf/pacman) and
+  `discover_native_linux` (system manager audit + snap/flatpak + WSL2 Windows
+  managers). `os.type` in the discovery JSON is now dynamic. The brew-anchored
+  shadow scan is gated to macOS. Exit-code discipline added for `dnf
+  check-update` (exit 100 = updates available, not a failure) and
+  grep/pacman/snap no-match-returns-1 under `pipefail`.
+- **`synthesize.sh`** branches the plan by `os.type`. Linux emits a `user-apps`
+  group (snap/flatpak) plus `system-sudo` and `windows-audit` manual steps.
+  macOS path unchanged (Linux-only keys are absent there → naturally inert).
+- **`update.sh`** apply dispatcher gains `snap`/`flatpak` (hardcoded commands);
+  the allowlist adds them too. apt/dnf/pacman are **deliberately excluded** —
+  the allowlist `_die` is the hard guarantee a malformed plan can't smuggle a
+  sudo manager into the dispatcher. The `skills`-mode native stub is now
+  OS-matched. The macOS parallel-group drain is hardened against bash 3.2's
+  empty-array `set -u` abort.
+- **`diagnose.sh`** adds four Linux failure patterns — dpkg/apt lock held, dnf
+  metadata/conflict, snap change-in-progress, flatpak runtime-missing — and
+  allows `snap`/`flatpak` tool ids.
+
+### Parser hardening (pre-merge adversarial review)
+
+Stress-testing `discover_native_linux` against realistic (not idealized)
+package-manager output surfaced four real bugs, all fixed with regression tests:
+- **dnf:** the `Obsoleting Packages` section (common on Fedora) leaked into the
+  upgrade list as phantom packages. Parsing now stops at that header.
+- **apt:** a from-less `Inst` line (new dependency) mis-read the in-parens
+  `[arch]` as the version. The version bracket is now read only from the text
+  before `(`.
+- **flatpak:** the updatable list showed the human display name; it now pins
+  `--columns=application` to report the stable app ID (e.g. `org.gimp.GIMP`).
+- **WSL2:** Windows managers are exposed via interop as `winget.exe` (not bare
+  `winget`); detection now probes both forms.
+- **`SKILL.md`** routes all platforms to the fast path; the legacy v1.0
+  sequential flow (old Steps 1–6, ~330 lines) is retired. Gate + report render
+  now surface the manual sudo steps prominently.
+
+### Testing
+
+- Test suite grew from **44 → 67 tests**. New Section 10 exercises the Linux
+  path on the macOS dev box via a `UPKEEP_OS_OVERRIDE` / `UPKEEP_PKG_MGR_OVERRIDE`
+  test seam plus PATH-stubbed fake apt-get/dnf/pacman/snap/flatpak. Asserts the
+  sudo boundary (apt → manual_steps, never ordered_groups), snap/flatpak
+  auto-apply, allowlist rejection of sudo managers, dnf exit-100 handling, and
+  the new diagnose patterns — with a macOS regression guard.
+
+### Notes
+
+- Linux/WSL2 paths are contract-tested (JSON shapes + security invariants), not
+  live-validated against real apt/dnf/pacman — the dev box is macOS. Live
+  validation on a real Linux box is the follow-up.
+
 ## [1.5.0] - 2026-05-28
 
 ### Performance

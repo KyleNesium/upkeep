@@ -273,6 +273,203 @@ done
 
 rm -rf "$STUB_PATH" "$DENYLIST_FILTER"
 
+# ── 10. Linux/WSL2 fast-path (v1.6) ─────────────────────────────
+# The dev box is macOS (uname can't be faked), so Linux paths are
+# exercised via the UPKEEP_OS_OVERRIDE / UPKEEP_PKG_MGR_OVERRIDE test
+# seam + a PATH of fake package managers that emit canned output.
+echo
+echo "── 10. Linux/WSL2 fast path ──"
+
+# Build a fixture dir of executable fake managers. Unlike the no-jq test
+# (which REPLACES PATH to hide jq), here we PREPEND the fixture to the real
+# PATH so the fakes shadow any host binary while all real tools (grep, awk,
+# jq, git, …) stay available. LINUX_PATH is used for every invocation below.
+LINUX_STUB=$(mktemp -d /tmp/upkeep-linux-stub.XXXXXX)
+LINUX_PATH="$LINUX_STUB:$PATH"
+
+cat > "$LINUX_STUB/apt-get" <<'FAKE'
+#!/bin/sh
+case "$*" in
+  *"upgrade --dry-run"*)
+    echo "Reading package lists..."
+    echo "Inst libfoo [1.0.0] (1.1.0 Ubuntu:24.04 [amd64])"
+    echo "Inst bar [2.0] (2.0.1 Ubuntu:24.04 [amd64])"
+    # from-less line (new dep) — the in-parens [all] must NOT be read as <from>
+    echo "Inst newdep (3.0 Ubuntu:24.04 [all])"
+    echo "Conf libfoo (1.1.0 Ubuntu:24.04 [amd64])"
+    ;;
+esac
+FAKE
+
+cat > "$LINUX_STUB/dnf" <<'FAKE'
+#!/bin/sh
+case "$1" in
+  check-update)
+    echo ""
+    echo "Last metadata expiration check: 0:10:00 ago."
+    echo "vim-enhanced.x86_64    2:9.1.0-1.fc40    updates"
+    echo "curl.x86_64            8.6.0-1.fc40      updates"
+    echo ""
+    echo "Obsoleting Packages"
+    echo "foo-legacy.noarch      2.0-1.fc40        updates"
+    exit 100
+    ;;
+esac
+exit 0
+FAKE
+
+cat > "$LINUX_STUB/pacman" <<'FAKE'
+#!/bin/sh
+case "$1" in
+  -Qu) echo "linux 6.8.1-1 -> 6.8.2-1"; echo "vim 9.1.0-1 -> 9.1.1-1" ;;
+esac
+FAKE
+
+cat > "$LINUX_STUB/snap" <<'FAKE'
+#!/bin/sh
+case "$*" in
+  "refresh --list")
+    echo "Name  Version  Rev  Publisher  Notes"
+    echo "code  1.2.0    123  vscode     classic"
+    ;;
+esac
+FAKE
+
+cat > "$LINUX_STUB/flatpak" <<'FAKE'
+#!/bin/sh
+case "$*" in
+  *"remote-ls --updates"*"--columns=application"*) printf 'org.gimp.GIMP\n' ;;
+  *"remote-ls --updates"*) printf 'org.gimp.GIMP\t2.10.38\tstable\tflathub\n' ;;
+  *"list"*) printf 'org.gimp.GIMP\n' ;;
+esac
+FAKE
+
+chmod +x "$LINUX_STUB"/apt-get "$LINUX_STUB"/dnf "$LINUX_STUB"/pacman \
+         "$LINUX_STUB"/snap "$LINUX_STUB"/flatpak
+
+# --- 10a. discover.sh os.type + native shape (apt) ---
+LDISC=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "linux discover: schema_version 1" \
+  "$(echo "$LDISC" | jq -r '.schema_version')" "1"
+_assert_eq "linux discover: os.type=linux" \
+  "$(echo "$LDISC" | jq -r '.os.type')" "linux"
+_assert_eq "linux discover: native.system.manager=apt" \
+  "$(echo "$LDISC" | jq -r '.native.system.manager')" "apt"
+_assert_eq "linux discover: apt upgradable count>=1" \
+  "$(echo "$LDISC" | jq '.native.system.count >= 1')" "true"
+# Regression: a from-less Inst line must not mis-read the in-parens [arch]
+# as the <from> version (bug: newdep showed from="all").
+_assert_eq "linux discover: apt from-less line has empty from (not [arch])" \
+  "$(echo "$LDISC" | jq '[.native.system.upgradable[] | select(.from=="all" or .from=="amd64")] | length')" "0"
+_assert_eq "linux discover: apt requires_sudo true" \
+  "$(echo "$LDISC" | jq -r '.native.system.requires_sudo')" "true"
+_assert_eq "linux discover: snap refreshable>=1" \
+  "$(echo "$LDISC" | jq '(.native.snap.refreshable | length) >= 1')" "true"
+_assert_eq "linux discover: flatpak updatable>=1" \
+  "$(echo "$LDISC" | jq '(.native.flatpak.updatable | length) >= 1')" "true"
+_assert_eq "linux discover: flatpak name is app ID (not display name)" \
+  "$(echo "$LDISC" | jq -r '.native.flatpak.updatable[0].name')" "org.gimp.GIMP"
+_assert_eq "linux discover: no brew key in native" \
+  "$(echo "$LDISC" | jq 'has("native") and (.native | has("brew") | not)')" "true"
+
+# --- 10b. dnf exit-100 is not an error ---
+DDISC=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=dnf \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "dnf discover: manager=dnf" \
+  "$(echo "$DDISC" | jq -r '.native.system.manager')" "dnf"
+_assert_eq "dnf discover: count>=1 (exit 100 not treated as failure)" \
+  "$(echo "$DDISC" | jq '.native.system.count >= 1')" "true"
+_assert_eq "dnf discover: no native error string" \
+  "$(echo "$DDISC" | jq '.native.errors | length')" "0"
+# Regression: the "Obsoleting Packages" section must not count as upgrades.
+_assert_eq "dnf discover: count is exactly 2 (Obsoleting section excluded)" \
+  "$(echo "$DDISC" | jq '.native.system.count')" "2"
+_assert_eq "dnf discover: foo-legacy (obsoleting) not in upgradable" \
+  "$(echo "$DDISC" | jq '[.native.system.upgradable[] | select(.name=="foo-legacy")] | length')" "0"
+
+# --- 10c. plan: sudo boundary (apt → manual_steps, NOT ordered_groups) ---
+LPLAN=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt \
+  bash "$SCRIPTS/update.sh" plan all 2>/dev/null)
+_assert_eq "linux plan: apt surfaces as system-sudo manual step" \
+  "$(echo "$LPLAN" | jq '[.manual_steps[]? | select(.kind=="system-sudo")] | length >= 1')" "true"
+GROUP_TOOLS=$(echo "$LPLAN" | jq -r '[.ordered_groups[]?.tools[]?] | join(",")')
+case "$GROUP_TOOLS" in
+  *apt*|*dnf*|*pacman*)
+    _assert_eq "linux plan: NO sudo manager in ordered_groups" "leaked: $GROUP_TOOLS" "(none)" ;;
+  *)
+    _assert_eq "linux plan: NO sudo manager in ordered_groups" "ok" "ok" ;;
+esac
+_assert_eq "linux plan: snap in ordered_groups tools" \
+  "$(echo "$LPLAN" | jq '[.ordered_groups[]?.tools[]?] | any(. == "snap")')" "true"
+_assert_eq "linux plan: flatpak in ordered_groups tools" \
+  "$(echo "$LPLAN" | jq '[.ordered_groups[]?.tools[]?] | any(. == "flatpak")')" "true"
+
+# --- 10d. WSL2: windows audit (detected via .exe, surfaced as manual step) ---
+# Name the fake with the .exe extension only — WSL interop exposes Windows
+# binaries as `winget.exe`, not bare `winget`. Detection must still find it.
+cat > "$LINUX_STUB/winget.exe" <<'FAKE'
+#!/bin/sh
+echo "Name  Id  Version"
+FAKE
+chmod +x "$LINUX_STUB/winget.exe"
+WDISC=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=wsl2 UPKEEP_PKG_MGR_OVERRIDE=apt \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "wsl2 discover: winget detected via .exe" \
+  "$(echo "$WDISC" | jq '.native.windows.managers | any(. == "winget")')" "true"
+WPLAN=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=wsl2 UPKEEP_PKG_MGR_OVERRIDE=apt \
+  bash "$SCRIPTS/update.sh" plan all 2>/dev/null)
+_assert_eq "wsl2 plan: emits valid JSON" \
+  "$(echo "$WPLAN" | jq -e 'type=="object"' >/dev/null 2>&1 && echo object || echo invalid)" "object"
+_assert_eq "wsl2 plan: windows-audit manual step present" \
+  "$(echo "$WPLAN" | jq '[.manual_steps[]? | select(.kind=="windows-audit")] | length >= 1')" "true"
+
+# --- 10e. apply allowlist: rejects sudo managers, accepts snap/flatpak ---
+LAPPLY_PLAN=$(mktemp /tmp/upkeep-linux-plan.XXXXXX)
+cat > "$LAPPLY_PLAN" <<'PLAN'
+{"schema_version":"1","mode":"all","created_at":"2026-01-01T00:00:00Z","plan":{"schema_version":"1","summary":{"category_counts":{},"eta_minutes_p50":1,"eta_minutes_p90":2,"disk_free_gb":100},"warnings":[],"manual_steps":[],"ordered_groups":[{"name":"sys","parallelism":"serial","tools":["apt"],"item_count":1}],"tool_specs":{}},"discovery":{"schema_version":"1","os":{"type":"linux","arch":"x86_64"},"skills":{"git_repos":[],"managed":[],"info":{},"errors":[]},"native":{"system":{"manager":"apt","installed":true,"upgradable":[],"count":0,"requires_sudo":true},"snap":{"installed":false,"refreshable":[]},"flatpak":{"installed":false,"updatable":[]},"windows":{"wsl2":false,"managers":[]},"errors":[]},"language":{"npm":{"installed":false,"outdated":[]},"pipx":{"installed":false,"tools":[],"outdated_count":0},"gems":{"installed":false,"system_ruby":false,"outdated":[]},"uv":{"installed":false},"bun":{"installed":false},"deno":{"installed":false},"rustup":{"installed":false},"cargo":{"installed":false},"mise":{"installed":false},"errors":[]},"shadow":{"duplicates":[],"broken_symlinks":[],"errors":[]},"disk":{"free_gb":100,"warn_threshold_gb":10,"refuse_threshold_gb":5}}}
+PLAN
+APPLY_REJECT=$(bash "$SCRIPTS/update.sh" apply "$LAPPLY_PLAN" 2>/dev/null)
+_assert_eq "apply rejects apt in ordered_groups (allowlist _die)" \
+  "$(echo "$APPLY_REJECT" | jq -r 'has("error")')" "true"
+rm -f "$LAPPLY_PLAN"
+
+# Snap/flatpak plan is accepted (dispatcher runs, fakes succeed)
+LAPPLY_OK=$(mktemp /tmp/upkeep-linux-plan-ok.XXXXXX)
+cat > "$LAPPLY_OK" <<'PLAN'
+{"schema_version":"1","mode":"all","created_at":"2026-01-01T00:00:00Z","plan":{"schema_version":"1","summary":{"category_counts":{},"eta_minutes_p50":1,"eta_minutes_p90":2,"disk_free_gb":100},"warnings":[],"manual_steps":[],"ordered_groups":[{"name":"user-apps","parallelism":"serial","tools":["snap","flatpak"],"item_count":2}],"tool_specs":{}},"discovery":{"schema_version":"1","os":{"type":"linux","arch":"x86_64"},"skills":{"git_repos":[],"managed":[],"info":{},"errors":[]},"native":{"system":{"manager":"apt","installed":true,"upgradable":[],"count":0,"requires_sudo":true},"snap":{"installed":true,"refreshable":[]},"flatpak":{"installed":true,"updatable":[]},"windows":{"wsl2":false,"managers":[]},"errors":[]},"language":{"npm":{"installed":false,"outdated":[]},"pipx":{"installed":false,"tools":[],"outdated_count":0},"gems":{"installed":false,"system_ruby":false,"outdated":[]},"uv":{"installed":false},"bun":{"installed":false},"deno":{"installed":false},"rustup":{"installed":false},"cargo":{"installed":false},"mise":{"installed":false},"errors":[]},"shadow":{"duplicates":[],"broken_symlinks":[],"errors":[]},"disk":{"free_gb":100,"warn_threshold_gb":10,"refuse_threshold_gb":5}}}
+PLAN
+APPLY_OK=$(PATH="$LINUX_PATH" bash "$SCRIPTS/update.sh" apply "$LAPPLY_OK" 2>/dev/null)
+_assert_eq "apply accepts snap+flatpak (valid report JSON)" \
+  "$(echo "$APPLY_OK" | jq -e 'has("mode") and (has("error")|not)' >/dev/null 2>&1 && echo yes || echo no)" "yes"
+rm -f "$LAPPLY_OK"
+
+# --- 10f. diagnose.sh: snap/flatpak allowlist + Linux patterns ---
+TMP_DPKG=$(mktemp /tmp/upkeep-dpkg-log.XXXXXX)
+echo "E: Could not get lock /var/lib/dpkg/lock-frontend - open (11: Resource temporarily unavailable)" > "$TMP_DPKG"
+DIAG_SNAP=$(printf 'snap\t1\thard\t%s\n' "$TMP_DPKG" | bash "$SCRIPTS/diagnose.sh")
+_assert_eq "diagnose: snap is an allowed tool id" \
+  "$(echo "$DIAG_SNAP" | jq '.diagnoses | length')" "1"
+DIAG_FP=$(printf 'flatpak\t1\thard\t%s\n' "$TMP_DPKG" | bash "$SCRIPTS/diagnose.sh")
+_assert_eq "diagnose: flatpak is an allowed tool id" \
+  "$(echo "$DIAG_FP" | jq '.diagnoses | length')" "1"
+
+TMP_FP_LOG=$(mktemp /tmp/upkeep-fp-log.XXXXXX)
+echo "error: runtime/org.gnome.Platform/x86_64/46 not installed" > "$TMP_FP_LOG"
+DIAG_FP2=$(printf 'flatpak\t1\thard\t%s\n' "$TMP_FP_LOG" | bash "$SCRIPTS/diagnose.sh")
+_assert_eq "diagnose: flatpak runtime-missing pattern fires (not default)" \
+  "$(echo "$DIAG_FP2" | jq -r '.diagnoses[0].root_cause' | grep -ci 'runtime')" "1"
+rm -f "$TMP_DPKG" "$TMP_FP_LOG"
+
+rm -rf "$LINUX_STUB"
+
+# --- 10g. macOS regression: os.type still macos with no override ---
+MAC_DISC=$(bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "macOS regression: os.type=macos (no override)" \
+  "$(echo "$MAC_DISC" | jq -r '.os.type')" "macos"
+_assert_eq "macOS regression: native still has brew key" \
+  "$(echo "$MAC_DISC" | jq '.native | has("brew")')" "true"
+
 # ── Summary ────────────────────────────────────────────────────
 echo
 echo "════════════════════════════════════════"

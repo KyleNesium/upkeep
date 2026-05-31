@@ -1,19 +1,22 @@
 ---
 name: upkeep:update
-version: 1.5.0
+version: 1.6.0
 author: KyleNesium
 description: |
-  Update AI skills and package managers in one sweep. On macOS, the v1.5
-  fast path collapses discovery, plan synthesis, apply orchestration,
-  post-flight checks, and failure diagnosis into one shell script
-  (`scripts/update.sh`). The skill is a thin two-turn wrapper: turn 1
-  builds the plan and renders the approval gate; turn 2 runs apply and
-  renders the report. brew metadata is TTL-cached (1h default) so warm
-  runs hit the gate in <5s. The failure-diagnoser LLM agent from v1.3
-  is now a deterministic pattern table (`scripts/diagnose.sh`).
-  Enrichment (changelog summaries + project impact) is opt-in behind
-  `--advisor`. Linux & WSL2 still use the v1.0 sequential flow (port
-  scheduled for v1.6). Sub-modes: audit (no changes), skills (git-pull
+  Update AI skills and package managers in one sweep. The v1.6 fast path
+  collapses discovery, plan synthesis, apply orchestration, post-flight
+  checks, and failure diagnosis into one shell script
+  (`scripts/update.sh`) on macOS, Linux, AND WSL2. The skill is a thin
+  two-turn wrapper: turn 1 builds the plan and renders the approval gate;
+  turn 2 runs apply and renders the report. brew metadata is TTL-cached
+  (1h default) so warm runs hit the gate in <5s. The failure-diagnoser
+  LLM agent from v1.3 is now a deterministic pattern table
+  (`scripts/diagnose.sh`) covering macOS and Linux failures. On Linux,
+  user-scoped managers (language tools, snap, flatpak) are auto-applied;
+  apt/dnf/pacman upgrades are surfaced as manual sudo steps (never run —
+  upkeep never uses sudo). On WSL2, Windows package managers are
+  audit-only. Enrichment (changelog summaries + project impact) is opt-in
+  behind `--advisor`. Sub-modes: audit (no changes), skills (git-pull
   AI skills), packages (package managers only), all.
   Use when: "update upkeep", "update my AI skills", "update everything",
   "check for updates", "upgrade my packages", "update all my tools",
@@ -78,6 +81,7 @@ allowed-tools:
   - Bash(journalctl *)
   # Linux package managers
   - Bash(apt *)
+  - Bash(apt-get *)
   - Bash(dnf *)
   - Bash(pacman *)
   - Bash(snap *)
@@ -90,12 +94,13 @@ allowed-tools:
 
 # /upkeep:update — Update AI Skills & Package Managers
 
-You are a macOS update specialist. Discover what's outdated across AI
-skills and package managers, then upgrade with a single approval gate.
+You are a cross-platform update specialist (macOS, Linux, WSL2). Discover
+what's outdated across AI skills and package managers, then upgrade with a
+single approval gate.
 
 ### Hard Rule: plan and apply are separate turns
 
-The macOS fast path is exactly two LLM turns:
+The fast path is exactly two LLM turns on every platform:
 
 1. **Plan turn:** run `update.sh plan <mode>`, render the gate, end the
    turn at the `AskUserQuestion`.
@@ -105,9 +110,8 @@ The macOS fast path is exactly two LLM turns:
 Never print "Apply?" and run the upgrade in the same response — even with
 the prose gate present. Audit mode never reaches an apply step.
 
-The Linux/WSL2 sequential flow (Steps 1–6 at the bottom) has the same
-hard rule: each per-category gate ends the turn at the
-`AskUserQuestion`.
+`update.sh` is OS-aware: it auto-detects macOS / Linux / WSL2 and builds
+the matching plan. The same two-turn contract holds regardless of OS.
 
 Detect sub-mode from the user's request:
 - **audit** — check only, no changes
@@ -125,7 +129,11 @@ Announce (`Mode: Update / <sub-mode>`) before proceeding.
 
 ## Environment Detection
 
-Run this FIRST, before any step. It sets `$OS_TYPE` (macos / linux / wsl2), `$OS_DISTRO`, and `$PKG_MGR` — Step 2 and Step 5 of the Linux flow gate `mas` and `softwareupdate` on `$OS_TYPE = "macos"`.
+`update.sh` detects the OS itself (and emits `os.type` in the plan JSON), so
+you do not need to run detection before invoking it. This block is optional —
+run it only when you want to announce the environment or show the WSL2 banner
+before the plan. It sets `$OS_TYPE` (macos / linux / wsl2), `$OS_DISTRO`, and
+`$PKG_MGR`.
 
 ```bash
 # ── OS Detection (run once, export for all steps) ────────────────
@@ -177,20 +185,23 @@ If `$OS_TYPE` is `unknown`, report "Update skill requires macOS, Linux, or WSL2.
 
 ## Routing
 
+As of v1.6 there is **one path for all platforms** — the Fast Path below
+(Turn 1 + Turn 2). `update.sh` branches internally on the detected OS:
+
 ```
-if $OS_TYPE = "macos":
-   → run the macOS Fast Path below (Turn 1 + Turn 2)
-   → skip the v1.0 Sequential Flow (Steps 1–6)
-else:
-   → skip the macOS Fast Path
-   → run the v1.0 Sequential Flow (Steps 1–6, unchanged for Linux/WSL2)
+macos → brew / mas / softwareupdate + language tools + skills
+linux → snap / flatpak + language tools + skills;
+        apt|dnf|pacman surfaced as MANUAL sudo steps (never auto-run)
+wsl2  → same as linux + Windows package managers shown audit-only
 ```
 
-Linux/WSL2 fast-path port is scheduled for v1.6.
+The legacy v1.0 sequential flow (per-category gates) was retired in v1.6;
+all platforms now get the single-gate UX. If `$OS_TYPE` is `unknown`, report
+"Update skill requires macOS, Linux, or WSL2." and stop.
 
 ---
 
-## macOS Fast Path (v1.5)
+## Fast Path (v1.6 — all platforms)
 
 ### Turn 1: Plan
 
@@ -253,35 +264,57 @@ Render the plan compactly as a report (no apply). Stop.
 If `needs_approval == false` for any other reason (empty
 `ordered_groups`):
 
-Render `Everything is up to date.` Surface any `manual_steps[]` as
-informational. Stop.
+- If `manual_steps[]` contains a `system-sudo` entry (Linux: apt/dnf/pacman
+  has pending upgrades that upkeep can't auto-apply), do **not** say
+  "everything is up to date" — that would be wrong. Instead render:
+  `Nothing to auto-apply, but N system package(s) need a manual upgrade:`
+  then the literal `sudo …` command from that step, plus any other
+  `manual_steps[]`. Stop.
+- Otherwise render `Everything is up to date.`, surface any remaining
+  `manual_steps[]` as informational, and stop.
 
 #### D. Approval gate render
 
-Otherwise render the plan as the gate. Use this layout, populated from
-the JSON:
+Otherwise render the plan as the gate. Show only the rows whose
+`summary.category_counts` value is non-zero. macOS surfaces brew / mas /
+macOS rows; Linux/WSL2 surface snap / flatpak / system rows. Language and
+skills rows are shared.
 
 ```
 Plan:
   Skills (N):     <git_repos applied> (from manual_steps for dirty/untrusted)
+  # macOS native
   brew  (N):      ⚠ major: <names> | minor: <count> | patch: <count>
+  mas   (N):      <names>
+  macOS (N):      <updates>          [restart] if restart_required=true
+  # Linux/WSL2 native (auto-applied — user-scoped, no sudo)
+  snap  (N):      <names>
+  flatpak (N):    <names>
+  # Shared language managers
   npm   (N):      <names>
   pipx  (N):      <names>
   gems  (N):      <major bumps>     [--user-install: gems_user_install=true]
   uv    (self):   <from> → latest
   bun   (self):   <from> → latest
-  mas   (N):      <names>
-  macOS (N):      <updates>          [restart] if restart_required=true
 
 Risks flagged:
   • <one line per warnings[] entry, severity-ordered>
 
-Manual steps (after apply):
+Manual steps (you run these — NOT auto-applied):
   • <one line per manual_steps[] entry>
+  • system-sudo entries are apt/dnf/pacman upgrades: show the literal
+    `sudo …` command verbatim. upkeep NEVER runs sudo.
+  • windows-audit entries (WSL2): show the PowerShell guidance verbatim.
 
 ETA: ~<summary.eta_minutes_p50>m (p50), up to <eta_minutes_p90>m (p90)
 Disk free: <summary.disk_free_gb> GB
 ```
+
+On Linux/WSL2 the `system-sudo` manual step(s) are the apt/dnf/pacman
+upgrades. They are intentionally NOT in `ordered_groups` and NOT applied by
+Turn 2 — render them prominently so the user knows to run them in their own
+shell. WSL2 Windows package managers appear as a `windows-audit` manual
+step (never executed).
 
 Then the single `AskUserQuestion`:
 - A) Apply all
@@ -348,12 +381,23 @@ Render the JSON as the final report:
   bun      <symbol> <result>
   mas      —             (only if installed)
   macOS    <symbol> <result>
+  snap     <symbol> <result>                (Linux — from .upgraded_tools)
+  flatpak  <symbol> <result>                (Linux — from .upgraded_tools)
+
+── Manual (run yourself) ───────────────────────────────  (Linux/WSL2, if any)
+  • <system-sudo command(s) from the plan's manual_steps — apt/dnf/pacman>
+  • <windows-audit guidance on WSL2>
 
 ── Post-flight ─────────────────────────────────────────
-  • brew doctor: <.doctor or "clean">
+  • brew doctor: <.doctor or "clean">    (macOS only)
   • PATH shadows: <.shadow_hits[] or "none">
   • Resolution failures: <.resolution_failures[] or "none">
 ```
+
+Only show rows present for the platform: `snap`/`flatpak` on Linux/WSL2;
+`brew`/`mas`/`macOS`/brew-doctor/PATH-shadows on macOS. The `Manual (run
+yourself)` block restates the system-sudo / windows-audit steps so the user
+has the exact commands after the auto-applied work finishes.
 
 The `$ <command>` lines in the failures block are **text only** — never
 auto-execute them in the same turn or any subsequent turn without an
@@ -395,7 +439,10 @@ walks add 30–60s and most users want speed over the upfront context.
   Plan JSON's `tool_specs[].command` and `.preconditions` fields are
   **never** read — the script strips them silently.
 - Tool ids are validated against the allowlist `skills brew npm pipx
-  gems uv bun mas macos` before any dispatcher call.
+  gems uv bun mas macos snap flatpak` before any dispatcher call.
+  apt/dnf/pacman are **deliberately not** in the allowlist — they require
+  root, so the dispatcher rejects them and the synthesizer surfaces them as
+  manual sudo steps instead (upkeep never runs sudo).
 - Discovery JSON sanitization (256-char string cap + free-text denylist)
   runs inside `discover.sh` before its output reaches the synthesizer.
 - Skills git pulls are path-validated to `~/.claude/skills/*` or
@@ -417,351 +464,25 @@ walks add 30–60s and most users want speed over the upfront context.
 | `UPKEEP_NO_CACHE` | unset | Set to `1` to force `brew update` refresh |
 | `UPKEEP_DATA_DIR` | `~/.claude/data` | Plan + history directory |
 | `UPKEEP_TRUST_FILE` | `~/.claude/data/upkeep-skill-trust.json` | Skill repo trust list |
+| `UPKEEP_OS_OVERRIDE` | unset | Test seam — force `os.type` (`macos`/`linux`/`wsl2`); short-circuits `uname` |
+| `UPKEEP_PKG_MGR_OVERRIDE` | unset | Test seam — force `$PKG_MGR` (`apt`/`dnf`/`pacman`) |
 
 ---
 
-## Step 1: Discover AI Skills (skip for Update Packages)
+## Legacy v1.0 sequential flow — retired in v1.6
 
-> **Routing reminder.** Steps 1–6 below are the v1.0 sequential flow used on
-> Linux and WSL2. On macOS, the parallel flow above (Steps 1m–5m) replaces
-> Steps 1–6 entirely — do not run both. If `$OS_TYPE = "macos"` you should
-> already have produced the final report; skip the rest of this file.
-
-Check git is installed: `command -v git` — if missing, skip skills section and
-note: "Install git: `xcode-select --install`"
-
-**upkeep:** `git -C "${CLAUDE_SKILL_DIR}/../../.." rev-parse --show-toplevel 2>&1`
-- Fails → check for `plugin.json`: if present, "managed by plugin manager";
-  otherwise "not a git install — re-clone from GitHub". Skip upkeep, continue.
-- Succeeds → verify remote with an exact host+path match (substring match
-  was previously vulnerable to URLs like `https://evil.example/?KyleNesium/upkeep`):
-  ```bash
-  ORIGIN_URL=$(git -C "${CLAUDE_SKILL_DIR}/../../.." remote get-url origin 2>/dev/null)
-  case "$ORIGIN_URL" in
-    https://github.com/KyleNesium/upkeep|\
-    https://github.com/KyleNesium/upkeep.git|\
-    git@github.com:KyleNesium/upkeep|\
-    git@github.com:KyleNesium/upkeep.git)
-      ;;
-    *)
-      echo "Skipping upkeep: unexpected remote URL: $ORIGIN_URL"
-      ;;
-  esac
-  ```
-  Only the four canonical forms above are accepted. Anything else skips.
-
-**Other Claude skills (discovery-based):**
-```bash
-for d in ~/.claude/skills/*/; do [ -d "$d/.git" ] && echo "$d"; done
-```
-
-**First-encounter approval for third-party skill repos.** Before fetching,
-build a per-skill record showing the remote URL and (if available) the most
-recent tagged version. Read `~/.claude/data/upkeep-skill-trust.json` for
-prior approvals; for any new remote URL, surface it via `AskUserQuestion`:
-
-> Skill `<name>` at `<path>` has remote `<url>`. Fetch updates from it?
-> A) Trust this remote (remember for future runs)
-> B) Skip this skill
-
-v1.3.1: this gate matches the macOS flow's storage format and option set
-exactly. The trust file is **keyed by exact-match remote URL** (NOT by
-repo path) so a trust decision survives the user moving the skill between
-directories and does not transfer trust if they re-clone a different
-remote at the same path. The pre-1.3.1 path-keyed Linux/WSL2 format would
-have caused trust drift between the two flows — a remote trusted on
-macOS would not be honored on Linux against the same skill, and vice
-versa.
-
-On A, append to `upkeep-skill-trust.json` keyed by the remote URL.
-Do not fetch from a remote that has not been explicitly trusted. This makes
-the supply-chain trust decision visible and reversible (delete the entry to
-re-prompt) instead of implicit.
-
-For each trusted skill: `git -C "$d" fetch --tags -q origin 2>/dev/null` then
-`git -C "$d" log HEAD..origin/$(git -C "$d" symbolic-ref --short HEAD 2>/dev/null || echo main) --oneline 2>/dev/null`
-
-**Report only (no git):**
-- Claude Code marketplace plugins: `ls ~/.claude/plugins/cache/ 2>/dev/null | wc -l`
-- Codex skills: `ls ~/.codex/skills/ 2>/dev/null | grep -vc '\.bak$'`
-
-## Step 2: Discover Packages (skip for Update Skills)
-
-Use `command -v <tool>` before each — skip silently if not installed.
-
-```bash
-brew outdated 2>/dev/null
-npm outdated -g 2>/dev/null
-pipx list --short 2>/dev/null
-gem outdated 2>/dev/null
-rustup check 2>/dev/null
-cargo install-update --list 2>/dev/null
-command -v uv >/dev/null 2>&1 && uv self version 2>/dev/null
-command -v bun >/dev/null 2>&1 && bun --version 2>/dev/null
-command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null
-command -v mise >/dev/null 2>&1 && mise outdated 2>/dev/null
-if [ "$OS_TYPE" = "macos" ]; then
-  mas outdated 2>/dev/null                                   # App Store
-  softwareupdate -l 2>/dev/null | grep -E "^\s*\*"           # macOS updates
-else
-  echo "mas: skipped (macOS only)"
-  echo "softwareupdate: skipped (macOS only)"
-fi
-```
-
-### Windows package managers (WSL2 only — audit only)
-
-```bash
-if [ "$OS_TYPE" = "wsl2" ]; then
-  if [ ! -d "/mnt/c" ]; then
-    echo "Windows package managers: /mnt/c not mounted — skipping."
-  else
-    echo "=== Windows package managers (audit — no upgrades run) ==="
-    if command -v winget >/dev/null 2>&1; then
-      echo "--- winget ---"
-      winget list 2>/dev/null | head -5 || echo "(winget accessible but list failed)"
-    else
-      echo "winget: not on PATH"
-    fi
-    if command -v scoop >/dev/null 2>&1; then
-      echo "--- scoop ---"
-      scoop list 2>/dev/null | head -5 || echo "(scoop accessible but list failed)"
-    else
-      echo "scoop: not on PATH"
-    fi
-    if command -v choco >/dev/null 2>&1; then
-      echo "--- choco ---"
-      choco list 2>/dev/null | head -5 || echo "(choco accessible but list failed)"
-    else
-      echo "choco: not on PATH"
-    fi
-  fi
-fi
-```
-
-> Audit only. This block NEVER runs `winget upgrade`, `scoop update`, or `choco upgrade`. Those require a Windows shell (PowerShell or CMD) — running them from WSL2 has permission and UAC implications that `update` intentionally avoids. When one or more Windows package managers are detected, display this exact guidance after the Windows package manager output:
->
-> "To upgrade these, open a Windows PowerShell (as administrator if needed) and run `winget upgrade --all`, `scoop update *`, or `choco upgrade all -y` respectively."
-
-## Step 3: Overview Table
-
-Always present before touching anything:
-```
-── AI Skills ──────────────────────────────
-  upkeep    N commits behind
-  gstack       up to date
-── Packages ───────────────────────────────
-  brew         N outdated      npm globals  N outdated
-  pipx         N tools         gems  N outdated
-  rustup       <status>        cargo  <status>
-  uv           <version>       bun  <version>
-  deno         <version>       mise  N outdated
-  mas          N outdated      macOS  N updates
-── Informational ──────────────────────────
-  Claude plugins  N (Claude Code manages)
-  Codex skills    N (manual update)
-── Windows Packages (WSL2 only — audit only) ──
-  winget       N installed  (upgrade via Windows PowerShell)
-  scoop        N installed  (upgrade via Windows PowerShell)
-  choco        N installed  (upgrade via Windows PowerShell)
-```
-Omit any row where the tool is not installed.
-On Linux or WSL2 (`$OS_TYPE != "macos"`), also omit the `mas` and `macOS` rows — those are macOS-only. The final report in Step 6 shows them as `skipped (macOS only)` so the user sees they were intentionally excluded.
-
-On macOS or plain Linux, omit the entire "Windows Packages" group — it appears only when $OS_TYPE = "wsl2". For each Windows tool not found via command -v, omit that row. Windows package managers are labeled "audit only" because update never invokes winget upgrade, scoop update, or choco upgrade — surface guidance for the user to run those from a Windows shell instead.
-
-**Update Audit:** stop here. "Audit complete — nothing changed."
-If nothing needs updating: "Everything is up to date." — stop.
-
-**Gate 0 (Update All only):**
-> "Update N skill(s) + N package category(ies)?
-> A) Update all   B) Choose per-category   C) Cancel"
-
-v1.3.1: "Choose per-category" is **intent only**. End this turn at Gate 0.
-
-- On `A) Update all`, proceed to Step 4 in the next turn against every
-  category surfaced in Step 3's overview table.
-- On `B) Choose per-category`, end this turn at a second multi-select
-  `AskUserQuestion` with one option per category (skills, brew, npm,
-  pipx, gems, uv, bun, mas, macOS, apt, dnf, pacman, snap, flatpak —
-  only the ones that returned non-empty discovery in Step 3). End the
-  turn again. In the next turn re-render the overview table filtered
-  to the user's selection and end at a final
-  `Apply filtered plan / Cancel` `AskUserQuestion`. Proceed to Step 4
-  only on `Apply filtered plan`.
-- On `C) Cancel`, stop here.
-
-The three-gate shape matches the macOS Step 3m approval gate so Linux
-users see the same "every Apply is bracketed by the exact plan summary
-just shown" contract. Pre-1.3.1, the Linux flow specified Option B
-without defining what should happen next, so the LLM was free to apply
-immediately after the multi-select with stale overview context.
-
-## Step 4: Apply Skill Updates
-
-For each repo with commits behind, show changelog first:
-`git -C "$d" log HEAD..origin/<branch> --format="%h %s"` and CHANGELOG.md sections
-if present. Ask: "Apply updates to <tool>? A) Yes  B) Skip"
-
-Before pulling, check:
-1. `git -C "$d" status --porcelain` — if dirty, show `git status --short` output,
-   warn about conflicts, ask "Continue anyway? A) Yes  B) Skip this tool"
-2. `git -C "$d" symbolic-ref --quiet HEAD` — if detached, "Run: `git -C <dir> checkout main`
-   then retry" — skip this tool, continue others.
-
-Apply: `git -C "$d" pull --ff-only origin <branch> 2>&1`
-If non-fast-forward: surface error + "To reset (WARNING — discards local commits):
-`cd <dir> && git fetch origin && git reset --hard origin/main`" — never auto-reset.
-On success: read `plugin.json` / `VERSION` for old → new version string.
-
-## Step 5: Apply Package Updates
-
-Each category has its own gate. Skipping one does NOT cancel others.
-
-On Linux or WSL2, skip the `mas` and `macOS` rows below — do not run `mas upgrade` or `softwareupdate -ia`. Mark both as `skipped (macOS only)` in the Step 6 final report.
-
-On WSL2, the Step 2 "Windows package managers" block is audit-only — this Step 5 table does NOT include winget, scoop, or choco. Upgrades for those require a Windows PowerShell session and are intentionally out of scope for update. The Step 6 final report lists each detected Windows package manager under "Windows Packages" with status "audit only" so the skip is visible rather than silent.
-
-### Linux system packages (apt / dnf / pacman)
-
-Only runs on `$OS_TYPE` of `linux` or `wsl2`. Skipped silently on macOS. Each package manager has its own dry-run preview and approval gate — skipping one never affects the snap/flatpak gates that follow.
-
-```bash
-if [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
-  case "$PKG_MGR" in
-    apt)
-      echo "=== apt — pending upgrades ==="
-      _APT_COUNT=$(apt-get upgrade --dry-run 2>/dev/null | grep -c "^Inst")
-      echo "$_APT_COUNT package(s) to upgrade"
-      apt-get upgrade --dry-run 2>/dev/null | grep "^Inst" | head -20
-      ;;
-    dnf)
-      echo "=== dnf — pending upgrades ==="
-      dnf check-update 2>/dev/null | grep -vE "^(Last metadata|$)" | head -20
-      ;;
-    pacman)
-      echo "=== pacman — pending upgrades ==="
-      pacman -Qu 2>/dev/null | head -20
-      ;;
-    *)
-      echo "Linux system packages: unsupported distro ($OS_DISTRO) — skipping"
-      ;;
-  esac
-fi
-```
-
-After the preview, ask per-manager:
-> "Upgrade system packages via $PKG_MGR? A) Yes  B) Skip $PKG_MGR"
-
-On "Yes", the actual upgrade requires root. Never run these from the skill — surface them as Manual Steps prose for the user to run in their own shell:
-
-> To apply the upgrade, run in your own terminal:
-> - apt: `sudo apt-get update && sudo apt-get upgrade -y`
-> - dnf: `sudo dnf upgrade -y`
-> - pacman: `sudo pacman -Syu --noconfirm`
->
-> After the user confirms completion, record the outcome in the Step 6 final report as `apt  ✓ upgraded  N packages` (or `↷ skipped`).
-
-### Snap packages (where installed)
-
-Only runs if `snap` is on `$PATH`. No sudo required for `snap refresh --list`; `snap refresh` itself may prompt for authentication via polkit on Linux — that prompt appears in the user's own terminal session.
-
-```bash
-if command -v snap >/dev/null 2>&1; then
-  echo "=== snap — pending refreshes ==="
-  snap refresh --list 2>/dev/null || echo "(no pending snap refreshes)"
-fi
-```
-
-Ask:
-> "Refresh snap packages? A) Yes  B) Skip snap"
-
-On "Yes", run:
-
-```bash
-if command -v snap >/dev/null 2>&1; then
-  snap refresh 2>&1
-fi
-```
-
-Report outcome in Step 6 as `snap  ✓ refreshed  N packages` (or `↷ skipped`). If `snap refresh` exits non-zero with a polkit/authentication error, surface the exact command for the user to run manually (`sudo snap refresh`) as a Manual Steps prose line — never re-run from the skill.
-
-### Flatpak applications (where installed)
-
-Only runs if `flatpak` is on `$PATH`. Flatpak updates do not require root when the flatpak runtime is user-scoped; system-scoped updates require root and are surfaced as Manual Steps only.
-
-```bash
-if command -v flatpak >/dev/null 2>&1; then
-  echo "=== flatpak — pending updates ==="
-  flatpak remote-ls --updates 2>/dev/null | head -20 || flatpak list --app 2>/dev/null | head -10
-fi
-```
-
-Ask:
-> "Update flatpak applications? A) Yes  B) Skip flatpak"
-
-On "Yes", run:
-
-```bash
-if command -v flatpak >/dev/null 2>&1; then
-  flatpak update -y 2>&1
-fi
-```
-
-Report outcome in Step 6 as `flatpak  ✓ updated  N apps` (or `↷ skipped`). For system-scoped installs requiring root, surface `sudo flatpak update -y` as a Manual Steps prose line — never run from the skill.
-
-| Tool | Audit command | Apply command | Extra warning |
-|------|--------------|---------------|---------------|
-| brew | `brew outdated` | `brew upgrade` | May affect pinned toolchains |
-| npm | `npm outdated -g` | `npm update -g` | |
-| pipx | _(list already shown)_ | `pipx upgrade-all` | |
-| gems | `gem outdated` | `gem update` | |
-| rustup | `rustup check` | `rustup update` | |
-| cargo | `cargo install-update --list` | `cargo install-update -a` | Only if cargo-update installed |
-| uv | `uv self version` | `uv self update` | Python package manager replacement |
-| bun | `bun --version` | `bun upgrade` | |
-| deno | `deno --version` | `deno upgrade` | |
-| mise | `mise outdated` | `mise upgrade` | Language version manager |
-| mas | `mas outdated` | `mas upgrade` | |
-| macOS | `softwareupdate -l` | `softwareupdate -ia` | ⚠ Check for `[restart]` in listing — if restart required, warn explicitly before asking |
-
-Gate per category: "Upgrade <tool>? A) Yes  B) Skip <tool>"
-macOS with restart: "⚠ This update requires a restart. Save your work.
-Apply? A) Yes  B) Skip macOS updates"
-
-## Step 6: Final Report
-
-```
-── Update Report ────────────────────────────────
-  upkeep   ✓ updated    v1.0.0 → v1.0.1
-  gstack   ✓ updated    0.17.0 → 0.18.0
-  brew     ✓ upgraded   12 packages
-  npm      ↷ skipped
-  pipx     ✓ upgraded   2 tools
-  bun      ✓ upgraded   1.1.0 → 1.2.0
-  mise     ✓ upgraded   3 runtimes
-  mas      ✓ upgraded   1 app
-  apt      ✓ upgraded   N packages     (Linux only)
-  snap     ✓ refreshed  N packages     (where installed)
-  flatpak  ✓ updated    N apps         (where installed)
-── Informational ────────────────────────────────
-  Claude plugins  9  (managed by Claude Code)
-  Codex skills   12  (manual update required)
-── Windows Packages (WSL2 only) ─────────────────
-  winget   ⓘ audit only    N installed
-  scoop    ⓘ audit only    N installed
-  choco    ⓘ audit only    N installed
-```
-Omit rows for tools not installed on this machine.
-On Linux or WSL2, show both `mas  ↷ skipped (macOS only)` and `macOS  ↷ skipped (macOS only)` rows in the report so the skip is visible rather than silent.
-On Linux/WSL2, show the apt/dnf/pacman row for the detected $PKG_MGR (omit the other two). Show snap and flatpak rows only when those tools were detected via command -v in Step 5. Omit all three on macOS unless snap or flatpak is installed there via third-party means.
-
-Omit the entire "Windows Packages" group on macOS or plain Linux. In WSL2, omit any row whose tool was not detected by command -v in Step 2.
+The per-category sequential flow (old Steps 1–6) that Linux/WSL2 used
+through v1.5 has been removed. All platforms now use the single-shot Fast
+Path above (`update.sh plan|apply`). The behaviour it encoded is preserved:
+system packages (apt/dnf/pacman) are surfaced as manual sudo steps,
+snap/flatpak are auto-applied, and WSL2 Windows package managers are
+audit-only — now driven by `discover.sh` + `synthesize.sh` instead of prose.
 
 ## Rules
 
-- Never run sudo
+- Never run sudo — apt/dnf/pacman upgrades are surfaced as manual steps, never executed
 - Never auto-reset dirty repos — always ask first
 - Never auto-reset non-fast-forward pulls — surface the command for the user
-- Each package category has its own confirmation gate — skipping one never skips others
+- One approval gate covers the whole plan; "Drop categories" lets the user exclude tools before apply
 - macOS updates with `[restart]` always get an explicit restart warning before running
+- The `$ <command>` lines in diagnosis fix-options and the manual sudo steps are text only — never auto-executed

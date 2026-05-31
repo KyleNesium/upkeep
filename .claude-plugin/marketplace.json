@@ -9,8 +9,8 @@
     {
       "name": "upkeep",
       "source": "./upkeep",
-      "description": "Cross-platform system cleanup and updater for macOS 14+, Linux (Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Discovery-based disk audit catches orphaned app data and stale caches a hardcoded list would miss. Update mode collapses brew, npm globals, pipx, gems, uv, bun, mas, and macOS updates into one approval gate; v1.5 on macOS reaches the gate in ~5s on warm cache (12-18x faster than v1.4). All v1.2/v1.3/v1.4/v1.5 security invariants preserved: hardcoded dispatcher, discovery JSON sanitization, exact-match remote URL validation, trust-on-first-use for skill repos, plan/apply turn separation, canonical-path containment for skill pulls, TOCTOU-safe plan-file write, and a deterministic pattern-table failure diagnoser. Five entry points: /upkeep, /upkeep:audit, /upkeep:cleandeep, /upkeep:cleanquick, /upkeep:update.",
-      "version": "1.5.0",
+      "description": "Cross-platform system cleanup and updater for macOS 14+, Linux (Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Discovery-based disk audit catches orphaned app data and stale caches a hardcoded list would miss. Update mode collapses brew, npm globals, pipx, gems, uv, bun, mas, macOS updates, snap, and flatpak into one approval gate; v1.6 brings the single-shot fast path to Linux and WSL2 (one OS-aware orchestrator for all platforms). apt/dnf/pacman upgrades are surfaced as manual sudo steps (never run — upkeep never uses sudo); WSL2 Windows package managers are audit-only. All v1.2-v1.5 security invariants preserved: hardcoded dispatcher allowlist (apt/dnf/pacman excluded by design), discovery JSON sanitization, exact-match remote URL validation, trust-on-first-use for skill repos, plan/apply turn separation, canonical-path containment for skill pulls, TOCTOU-safe plan-file write, and a deterministic pattern-table failure diagnoser covering macOS and Linux failures. Five entry points: /upkeep, /upkeep:audit, /upkeep:cleandeep, /upkeep:cleanquick, /upkeep:update.",
+      "version": "1.6.0",
       "category": "developer tools",
       "keywords": [
         "macos",

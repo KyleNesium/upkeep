@@ -121,6 +121,31 @@ MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
     {kind: "path-shadow",
      message: ("PATH shadow: " + .binary + " — first match " + .primary
                + " shadows " + (.shadowed | join(",")))} ]
+  # Linux system packages (apt/dnf/pacman) → MANUAL sudo step. Never
+  # auto-applied (no-sudo rule). Inert on macOS (.native.system absent →
+  # count // 0 == 0). The command string is hardcoded per manager.
+  + ( if (($d.native.system.count // 0) > 0)
+      then ($d.native.system.manager) as $mgr
+        | { apt:    "sudo apt-get update && sudo apt-get upgrade -y",
+            dnf:    "sudo dnf upgrade -y",
+            pacman: "sudo pacman -Syu --noconfirm" } as $cmds
+        | [ { kind: "system-sudo",
+              manager: $mgr,
+              count: ($d.native.system.count // 0),
+              message: ("Upgrade " + (($d.native.system.count // 0)|tostring)
+                        + " system package(s) via " + $mgr
+                        + " — run in your own terminal (requires root): "
+                        + ($cmds[$mgr] // ("sudo " + $mgr + " upgrade"))) } ]
+      else [] end )
+  # WSL2 Windows package managers → audit-only guidance. Never executed.
+  + ( if ($d.os.type == "wsl2") and (($d.native.windows.managers // []) | length > 0)
+      then [ { kind: "windows-audit",
+               managers: ($d.native.windows.managers // []),
+               message: ("Windows packages detected ("
+                         + (($d.native.windows.managers // []) | join(", "))
+                         + ") — upgrade from a Windows PowerShell: "
+                         + "winget upgrade --all / scoop update * / choco upgrade all -y") } ]
+      else [] end )
 ')
 
 # ── Build ordered_groups[] ───────────────────────────────────────
@@ -136,6 +161,11 @@ ORDERED_GROUPS=$(jq -nc --argjson d "$DISCOVERY" '
   ($d.native.mas.outdated // []) as $mas |
   ($d.native.softwareupdate.updates // []) as $macos |
   ($d.native.softwareupdate.restart_required // false) as $restart |
+  # Linux user-scoped apps (auto-appliable, no sudo). Absent on macOS →
+  # null // [] → empty → no group emitted. apt/dnf/pacman are NOT here:
+  # they require root and are surfaced as manual_steps only.
+  ($d.native.snap.refreshable // []) as $snap |
+  ($d.native.flatpak.updatable // []) as $flatpak |
   ( (if ($skills_actionable | length) > 0
        then [{name: "skills", parallelism: "serial",
               tools: ["skills"], item_count: ($skills_actionable | length)}]
@@ -163,6 +193,14 @@ ORDERED_GROUPS=$(jq -nc --argjson d "$DISCOVERY" '
                tools: $store_tools,
                item_count: (($mas | length) + ($macos | length)),
                restart_required: $restart}]
+        else [] end)
+    +
+    ( ( [ if ($snap | length)    > 0 then "snap"    else empty end,
+          if ($flatpak | length) > 0 then "flatpak" else empty end ] ) as $app_tools |
+      if ($app_tools | length) > 0
+        then [{name: "user-apps", parallelism: "serial",
+               tools: $app_tools,
+               item_count: (($snap | length) + ($flatpak | length))}]
         else [] end)
   )
 ')
@@ -195,9 +233,13 @@ ETA_JSON=$(jq -nc \
   ($d.native.softwareupdate.updates // [] | length) as $macos_n |
   (if $d.language.uv.installed  then 1 else 0 end) as $uv_n |
   (if $d.language.bun.installed then 1 else 0 end) as $bun_n |
-  # Total seconds
+  ($d.native.snap.refreshable // [] | length) as $snap_n |
+  ($d.native.flatpak.updatable // [] | length) as $flatpak_n |
+  # Total seconds. apt/dnf/pacman are NOT counted — they are manual steps
+  # the user runs themselves, not apply-phase work. snap ~12s, flatpak ~20s.
   (($brew_n * 25) + ($npm_n * 30) + ($pipx_n * 20) + ($gems_n * 15)
-   + ($skills_n * 3) + ($mas_n * 30) + ($macos_n * 300) + ($uv_n * 5) + ($bun_n * 5)) as $p50_s |
+   + ($skills_n * 3) + ($mas_n * 30) + ($macos_n * 300) + ($uv_n * 5) + ($bun_n * 5)
+   + ($snap_n * 12) + ($flatpak_n * 20)) as $p50_s |
   # p90 ~ 1.5x p50, rounded up
   (($p50_s * 3 / 2) | ceil) as $p90_s |
   # Convert to minutes (ceil)
@@ -217,7 +259,10 @@ SUMMARY=$(jq -nc \
     uv:     (if $d.language.uv.installed  then 1 else 0 end),
     bun:    (if $d.language.bun.installed then 1 else 0 end),
     mas:    ($d.native.mas.outdated // [] | length),
-    macos:  ($d.native.softwareupdate.updates // [] | length)
+    macos:  ($d.native.softwareupdate.updates // [] | length),
+    system: ($d.native.system.count // 0),
+    snap:   ($d.native.snap.refreshable // [] | length),
+    flatpak:($d.native.flatpak.updatable // [] | length)
    },
    eta_minutes_p50: $eta.p50_minutes,
    eta_minutes_p90: $eta.p90_minutes,

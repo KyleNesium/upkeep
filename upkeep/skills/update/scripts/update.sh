@@ -503,7 +503,10 @@ _cmd_apply() {
           _pname=$(jq -r '.name // "?"' <<<"$_pj")
           _mpath=$(jq -r '.marketplace_path // ""' <<<"$_pj")
           [ -z "$_mpath" ] && continue
+          # Record before any branch so a repeated path — valid OR refused —
+          # is handled exactly once (no duplicate rows in the report).
           case "$_mp_seen" in *" $_mpath "*) continue ;; esac
+          _mp_seen="$_mp_seen$_mpath "
           _resolved=$(cd -P -- "$_mpath" 2>/dev/null && pwd -P)
           _mroot=$(cd -P -- "$MARKETPLACES_ROOT" 2>/dev/null && pwd -P)
           _ok=0
@@ -515,7 +518,6 @@ _cmd_apply() {
             printf '%s\trefused\n' "$_mpath" >> "$plugins_refreshed_file"
             continue
           fi
-          _mp_seen="$_mp_seen$_mpath "
           if [ ! -d "$_resolved/.git" ]; then
             printf '%s\tnot-git\n' "$_mpath" >> "$plugins_refreshed_file"
             continue

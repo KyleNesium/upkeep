@@ -217,7 +217,12 @@ discover_skills() {
 
       # Decide outdated. Skip when we can't compare (no marketplace data).
       local is_outdated=0
-      if [ -z "$pl_available" ]; then
+      if [ -z "$pl_available" ] || [ "$pl_available" = "unknown" ]; then
+        # No comparable marketplace version (missing, or the literal sentinel
+        # Claude Code writes for un-versioned plugins). `sort -V` orders the
+        # string "unknown" AFTER any real semver, so without this guard a
+        # plugin installed at e.g. 2.0.0 against a marketplace declaring
+        # "unknown" would be mis-flagged as "2.0.0 → unknown".
         is_outdated=0
       elif [ "$pl_installed" = "$pl_available" ]; then
         is_outdated=0
@@ -247,8 +252,11 @@ discover_skills() {
       plugins_outdated_count=$((plugins_outdated_count + 1))
     done < <(jq -r '
       (.plugins // {}) | to_entries[]
-      | (.key | split("@")) as $k
-      | [$k[0], ($k[1] // "unknown"), (.value[0].version // "unknown")]
+      | (.key | (rindex("@")) as $i
+         | if $i == null then {n: ., m: "unknown"}
+           else {n: .[0:$i], m: .[$i+1:]} end) as $p
+      | [$p.n, (if ($p.m | length) > 0 then $p.m else "unknown" end),
+         (.value[0].version // "unknown")]
       | @tsv' "$INSTALLED_PLUGINS_FILE" 2>/dev/null)
   fi
 

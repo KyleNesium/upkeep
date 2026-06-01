@@ -506,6 +506,24 @@ _assert_eq "discover: foo carries installed→available versions" \
 _assert_eq "discover: plugins_outdated count = 1" \
   "$(echo "$V17_DISC" | jq '.skills.info.plugins_outdated')" "1"
 
+# 11a-bis. Regression: a marketplace declaring version "unknown" against a
+# real installed version must NOT be mis-flagged as "X → unknown" (sort -V
+# orders "unknown" after any semver). Also exercises last-"@" key parsing.
+mkdir -p "$V17_SB/mkts/quux/.claude-plugin"
+cat > "$V17_SB/mkts/quux/.claude-plugin/marketplace.json" <<'MJ'
+{"name":"quux","plugins":[{"name":"zed","version":"unknown"}]}
+MJ
+cat > "$V17_SB/installed2.json" <<'IP'
+{"version":2,"plugins":{"zed@quux":[{"version":"3.1.0"}]}}
+IP
+V17_DISC2=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V17_SB/cs" UPKEEP_CODEX_SKILLS="$V17_SB/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_SB/installed2.json" \
+  UPKEEP_PLUGIN_MARKETPLACES="$V17_SB/mkts" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "discover: real-version vs marketplace 'unknown' NOT flagged" \
+  "$(echo "$V17_DISC2" | jq '[.skills.managed[] | select(.name=="zed")] | length')" "0"
+
 # 11b. synthesize.sh — plugins group + manual step + risk_categories
 V17_SYNTH_DISC='{"schema_version":"1","os":{"type":"macos","arch":"arm64"},
 "skills":{"git_repos":[],"managed":[{"name":"foo","manager":"claude-code-plugin","marketplace":"acme","installed_version":"1.0.0","available_version":"2.0.0","marketplace_path":"/x/acme","marketplace_is_git":true,"update_command":"/plugin update foo"}],"info":{},"errors":[]},

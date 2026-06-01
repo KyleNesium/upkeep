@@ -63,12 +63,24 @@ step — it never rewrites `installed_plugins.json` or mutates the cache.
 
 ### Tests
 
-- 73 → **94 tests**. New section 11 covers plugin outdated detection
-  (outdated flagged, current/absent skipped, version surfacing, counts),
-  `risk_categories` computation (cause mapping, empty-when-no-warning,
-  intersection guard), plan-output surfacing, packages-mode exclusion, and
-  apply-phase marketplace pull (ff-only success, path-containment refusal,
-  `--drop=plugins` skip-but-still-hand-off). Green on bash 5 and bash 3.2.
+- 73 → **95 tests**. New section 11 covers plugin outdated detection
+  (outdated flagged, current/absent skipped, real-version-vs-marketplace-
+  `"unknown"` not mis-flagged, version surfacing, counts), `risk_categories`
+  computation (cause mapping, empty-when-no-warning, intersection guard),
+  plan-output surfacing, packages-mode exclusion, and apply-phase marketplace
+  pull (ff-only success, path-containment refusal, `--drop=plugins`
+  skip-but-still-hand-off). Green on bash 5 and bash 3.2.
+
+### Fixed (adversarial review pass)
+
+- Plugin no longer mis-flagged as `X → unknown` when its marketplace.json
+  declares a non-comparable version (the literal `"unknown"` sentinel) —
+  `sort -V` orders `"unknown"` after any semver, so a guard now skips the
+  comparison on both the installed and available sides.
+- `installed_plugins.json` key parsing splits on the **last** `@` (matching
+  the documented `<plugin>@<marketplace>` contract) instead of the first.
+- Plugin marketplace dedup records each path before the containment branch,
+  so a repeated out-of-root path can't produce duplicate `refused` report rows.
 
 ## [1.6.0] - 2026-05-29
 

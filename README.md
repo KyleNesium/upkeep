@@ -420,7 +420,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**94 tests** across 1 automated test file (`tests/test-update-skill.sh`),
+**95 tests** across 1 automated test file (`tests/test-update-skill.sh`),
 covering the `update` skill's shell orchestrator. Run with
 `bash tests/test-update-skill.sh` (also passes under `/bin/bash`, macOS 3.2.57).
 The cleanup skills (`cleandeep`/`cleanquick`/`audit`/`upkeep`) remain
@@ -437,7 +437,7 @@ prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
 | `update.sh apply` contract | ~5 | Empty/`--drop` CSV safety, report JSON shape, plan-file cleanup |
 | `jq`-missing contract | 2 | `{"error":…}` to stdout when `jq` absent |
 | Linux/WSL2 fast path (v1.6) | ~29 | OS-detection seam, `discover_native_linux` shape, dnf exit-100 + Obsoleting-section exclusion, apt from-less line parsing, flatpak app-ID column, WSL2 `winget.exe` detection, sudo boundary (apt → manual steps not ordered_groups), snap/flatpak auto-apply, allowlist rejection of sudo managers, Linux diagnose patterns, macOS regression guard |
-| Plugin updates + risk gate (v1.7) | 21 | Outdated-plugin detection (installed_plugins.json vs marketplace version: outdated flagged, current/absent skipped, version surfacing, `plugins_outdated` count); `risk_categories` computation (cause→category mapping, empty-when-no-warning, intersection-with-groups guard); plan-output surfacing; packages-mode plugin-group exclusion; apply-phase marketplace pull (ff-only success + HEAD advance, path-containment refusal, `--drop=plugins` skip-but-still-hand-off) |
+| Plugin updates + risk gate (v1.7) | 22 | Outdated-plugin detection (installed_plugins.json vs marketplace version: outdated flagged, current/absent skipped, real-version-vs-marketplace-"unknown" not mis-flagged, version surfacing, `plugins_outdated` count); `risk_categories` computation (cause→category mapping, empty-when-no-warning, intersection-with-groups guard); plan-output surfacing; packages-mode plugin-group exclusion; apply-phase marketplace pull (ff-only success + HEAD advance, path-containment refusal, `--drop=plugins` skip-but-still-hand-off) |
 
 ### Skill-level coverage (live invocation)
 

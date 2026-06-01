@@ -15,6 +15,12 @@ TRUST_FILE="${UPKEEP_TRUST_FILE:-$HOME/.claude/data/upkeep-skill-trust.json}"
 CLAUDE_SKILLS_ROOT="${UPKEEP_CLAUDE_SKILLS:-$HOME/.claude/skills}"
 CODEX_SKILLS_ROOT="${UPKEEP_CODEX_SKILLS:-$HOME/.codex/skills}"
 PLUGIN_CACHE_ROOT="${UPKEEP_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}"
+# v1.7: plugin update detection reads the authoritative install state
+# (installed_plugins.json) and compares each plugin's active version against
+# the version declared in its marketplace's on-disk marketplace.json. Test
+# seams let the suite point these at fixtures.
+INSTALLED_PLUGINS_FILE="${UPKEEP_INSTALLED_PLUGINS:-$HOME/.claude/plugins/installed_plugins.json}"
+MARKETPLACES_ROOT="${UPKEEP_PLUGIN_MARKETPLACES:-$HOME/.claude/plugins/marketplaces}"
 SCOUT_MAX_REPOS="${UPKEEP_MAX_REPOS:-200}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -175,28 +181,75 @@ discover_skills() {
     done
   done
 
-  # ── Plugin-cache-managed plugins ──
-  if [ -d "$PLUGIN_CACHE_ROOT" ]; then
-    local owner_dir plugin_dir version_dir plugin_json name version
-    for owner_dir in "$PLUGIN_CACHE_ROOT"/*/; do
-      [ -d "$owner_dir" ] || continue
-      for plugin_dir in "$owner_dir"*/; do
-        [ -d "$plugin_dir" ] || continue
-        # Find the most-recent version directory under the plugin
-        version_dir=$(find "$plugin_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-          | sort -V | tail -1)
-        [ -z "$version_dir" ] && version_dir="$plugin_dir"
-        plugin_json="$version_dir/.claude-plugin/plugin.json"
-        [ -f "$plugin_json" ] || continue
-        name=$(jq -r '.name // empty' "$plugin_json" 2>/dev/null)
-        version=$(jq -r '.version // "unknown"' "$plugin_json" 2>/dev/null)
-        [ -z "$name" ] && name=$(basename "$plugin_dir")
-        managed=$(jq --arg name "$name" --arg version "$version" \
-          '. + [{name:$name, manager:"claude-code-plugin", version:$version,
-                update_command:("/plugin update " + $name)}]' <<<"$managed")
-        claude_plugins_count=$((claude_plugins_count + 1))
-      done
-    done
+  # ── Claude Code plugins — OUTDATED detection (v1.7) ──
+  # Prior versions (≤1.6) walked the plugin cache and emitted EVERY
+  # installed plugin as a "/plugin update" manual step, regardless of
+  # whether it was actually behind. That told users to update 18 plugins
+  # when maybe two were stale.
+  #
+  # v1.7 compares the authoritative active version (installed_plugins.json)
+  # against the version each plugin's marketplace declares on disk
+  # (marketplace.json). Only genuinely-behind plugins land in `managed`.
+  #
+  # Hard limit (verified against Claude Code internals): there is NO
+  # supported headless way to APPLY a plugin update — `/plugin update` is
+  # interactive and the reinstall needs a Claude Code relaunch. So `managed`
+  # is a "prep + hand off" list: the apply phase refreshes the marketplace
+  # git source (safe, ff-only), and the user runs the consolidated
+  # `/plugin update` command + relaunches to finish.
+  local plugins_outdated_count=0
+  if [ -f "$INSTALLED_PLUGINS_FILE" ]; then
+    # Rows: name<TAB>marketplace<TAB>installed_version. The installed_plugins
+    # key is "<plugin>@<marketplace>"; plugin names never contain "@", and
+    # everything after the last "@" is the marketplace id.
+    local pl_name pl_market pl_installed mp_json pl_available mp_path mp_is_git
+    while IFS=$'\t' read -r pl_name pl_market pl_installed; do
+      [ -z "$pl_name" ] && continue
+      mp_path="$MARKETPLACES_ROOT/$pl_market"
+      mp_json="$mp_path/.claude-plugin/marketplace.json"
+      pl_available=""
+      if [ -f "$mp_json" ]; then
+        pl_available=$(jq -r --arg p "$pl_name" \
+          '.plugins[]? | select(.name == $p) | .version // empty' "$mp_json" 2>/dev/null \
+          | head -1)
+      fi
+      claude_plugins_count=$((claude_plugins_count + 1))
+
+      # Decide outdated. Skip when we can't compare (no marketplace data).
+      local is_outdated=0
+      if [ -z "$pl_available" ]; then
+        is_outdated=0
+      elif [ "$pl_installed" = "$pl_available" ]; then
+        is_outdated=0
+      elif [ "$pl_installed" = "unknown" ] || [ -z "$pl_installed" ]; then
+        # Active version unknowable but marketplace has a concrete version →
+        # flag it so the user can reconcile.
+        is_outdated=1
+      else
+        local _highest
+        _highest=$(printf '%s\n%s\n' "$pl_installed" "$pl_available" | sort -V | tail -1)
+        if [ "$_highest" = "$pl_available" ] && [ "$_highest" != "$pl_installed" ]; then
+          is_outdated=1
+        fi
+      fi
+      [ "$is_outdated" = "1" ] || continue
+
+      mp_is_git=false
+      [ -d "$mp_path/.git" ] && mp_is_git=true
+
+      managed=$(jq --arg name "$pl_name" --arg market "$pl_market" \
+        --arg installed "$pl_installed" --arg available "$pl_available" \
+        --arg mp_path "$mp_path" --argjson mp_is_git "$mp_is_git" \
+        '. + [{name:$name, manager:"claude-code-plugin", marketplace:$market,
+               installed_version:$installed, available_version:$available,
+               marketplace_path:$mp_path, marketplace_is_git:$mp_is_git,
+               update_command:("/plugin update " + $name)}]' <<<"$managed")
+      plugins_outdated_count=$((plugins_outdated_count + 1))
+    done < <(jq -r '
+      (.plugins // {}) | to_entries[]
+      | (.key | split("@")) as $k
+      | [$k[0], ($k[1] // "unknown"), (.value[0].version // "unknown")]
+      | @tsv' "$INSTALLED_PLUGINS_FILE" 2>/dev/null)
   fi
 
   # Counts
@@ -208,10 +261,12 @@ discover_skills() {
     --argjson git_repos "$git_repos" \
     --argjson managed "$managed" \
     --argjson claude_plugins "$claude_plugins_count" \
+    --argjson plugins_outdated "${plugins_outdated_count:-0}" \
     --argjson codex_total "$codex_total" \
     --argjson codex_git "$codex_git" \
     '{git_repos:$git_repos, managed:$managed,
-      info:{claude_plugins:$claude_plugins, codex_skills_total:$codex_total, codex_skills_git:$codex_git},
+      info:{claude_plugins:$claude_plugins, plugins_outdated:$plugins_outdated,
+            codex_skills_total:$codex_total, codex_skills_git:$codex_git},
       errors:[]}'
 }
 

@@ -470,6 +470,148 @@ _assert_eq "macOS regression: os.type=macos (no override)" \
 _assert_eq "macOS regression: native still has brew key" \
   "$(echo "$MAC_DISC" | jq '.native | has("brew")')" "true"
 
+# ── 11. v1.7: plugin update detection + risk-exclusion gate ────
+echo
+echo "── 11. v1.7 plugin updates + risk_categories ──"
+
+# 11a. Plugin OUTDATED detection (discover.sh) — fixture-driven, OS forced
+#      to linux so brew is skipped and the run is fast + deterministic.
+V17_SB=$(mktemp -d /tmp/upkeep-v17.XXXXXX)
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+mkdir -p "$V17_SB/mkts/acme/.claude-plugin" "$V17_SB/cs" "$V17_SB/xs"
+cat > "$V17_SB/mkts/acme/.claude-plugin/marketplace.json" <<'MJ'
+{"name":"acme","plugins":[{"name":"foo","version":"2.0.0"},{"name":"bar","version":"2.0.0"}]}
+MJ
+( cd "$V17_SB/mkts/acme" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init )
+cat > "$V17_SB/installed.json" <<'IP'
+{"version":2,"plugins":{
+  "foo@acme":[{"version":"1.0.0"}],
+  "bar@acme":[{"version":"2.0.0"}],
+  "qux@acme":[{"version":"1.0.0"}]
+}}
+IP
+V17_DISC=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V17_SB/cs" UPKEEP_CODEX_SKILLS="$V17_SB/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_SB/installed.json" \
+  UPKEEP_PLUGIN_MARKETPLACES="$V17_SB/mkts" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "discover: only outdated plugin (foo) flagged" \
+  "$(echo "$V17_DISC" | jq -r '[.skills.managed[].name] | join(",")')" "foo"
+_assert_eq "discover: current plugin (bar) NOT flagged" \
+  "$(echo "$V17_DISC" | jq '[.skills.managed[] | select(.name=="bar")] | length')" "0"
+_assert_eq "discover: plugin absent from marketplace (qux) NOT flagged" \
+  "$(echo "$V17_DISC" | jq '[.skills.managed[] | select(.name=="qux")] | length')" "0"
+_assert_eq "discover: foo carries installed→available versions" \
+  "$(echo "$V17_DISC" | jq -r '.skills.managed[] | select(.name=="foo") | (.installed_version+"→"+.available_version)')" "1.0.0→2.0.0"
+_assert_eq "discover: plugins_outdated count = 1" \
+  "$(echo "$V17_DISC" | jq '.skills.info.plugins_outdated')" "1"
+
+# 11b. synthesize.sh — plugins group + manual step + risk_categories
+V17_SYNTH_DISC='{"schema_version":"1","os":{"type":"macos","arch":"arm64"},
+"skills":{"git_repos":[],"managed":[{"name":"foo","manager":"claude-code-plugin","marketplace":"acme","installed_version":"1.0.0","available_version":"2.0.0","marketplace_path":"/x/acme","marketplace_is_git":true,"update_command":"/plugin update foo"}],"info":{},"errors":[]},
+"native":{"brew":{"installed":true,"outdated":[{"name":"node","from":"20.0.0","to":"21.0.0","bump":"major"}]},"mas":{"installed":false,"outdated":[]},"softwareupdate":{"installed":false,"updates":[],"restart_required":false},"errors":[]},
+"language":{"npm":{"installed":false,"outdated":[]},"pipx":{"installed":false,"tools":[],"outdated_count":0},"gems":{"installed":false,"system_ruby":false,"outdated":[]},"uv":{"installed":false},"bun":{"installed":false},"deno":{"installed":false},"rustup":{"installed":false},"cargo":{"installed":false},"mise":{"installed":false},"errors":[]},
+"shadow":{"duplicates":[],"broken_symlinks":[],"errors":[]},
+"disk":{"free_gb":100,"warn_threshold_gb":10,"refuse_threshold_gb":5}}'
+V17_PLAN=$(echo "$V17_SYNTH_DISC" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: plugins group present in ordered_groups" \
+  "$(echo "$V17_PLAN" | jq '[.ordered_groups[] | select(.name=="plugins")] | length')" "1"
+_assert_eq "synthesize: plugin-update manual step present" \
+  "$(echo "$V17_PLAN" | jq '[.manual_steps[] | select(.kind=="plugin-update")] | length')" "1"
+_assert_eq "synthesize: category_counts.plugins = 1" \
+  "$(echo "$V17_PLAN" | jq '.summary.category_counts.plugins')" "1"
+# node major bump → brew is the flagged-risk CAUSE; brew is in groups.
+_assert_eq "synthesize: risk_categories = [brew] (node major)" \
+  "$(echo "$V17_PLAN" | jq -rc '.risk_categories')" '["brew"]'
+
+# 11c. risk_categories empty when there are no warnings
+V17_NOWARN=$(echo "$V17_SYNTH_DISC" | jq '.native.brew.outdated=[{"name":"jq","from":"1.7.0","to":"1.7.1","bump":"patch"}]')
+V17_PLAN2=$(echo "$V17_NOWARN" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: risk_categories empty when no compat warning" \
+  "$(echo "$V17_PLAN2" | jq -rc '.risk_categories')" '[]'
+
+# 11d. risk_categories never names a category absent from ordered_groups.
+#      system-ruby warning would map to gems, but gems isn't outdated here.
+V17_RUBY=$(echo "$V17_SYNTH_DISC" | jq '.language.gems={"installed":true,"system_ruby":true,"ruby_version":"2.6","outdated":[]}')
+V17_PLAN3=$(echo "$V17_RUBY" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: risk_categories excludes gems (not in groups)" \
+  "$(echo "$V17_PLAN3" | jq -r 'if (.risk_categories | index("gems")) then "present" else "absent" end')" "absent"
+
+# 11e. update.sh plan surfaces risk_categories in its SKILL.md-facing JSON
+V17_PLANOUT=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V17_SB/cs" UPKEEP_CODEX_SKILLS="$V17_SB/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_SB/installed.json" \
+  UPKEEP_PLUGIN_MARKETPLACES="$V17_SB/mkts" \
+  bash "$SCRIPTS/update.sh" plan all 2>/dev/null)
+_assert_eq "plan output exposes risk_categories key" \
+  "$(echo "$V17_PLANOUT" | jq 'has("risk_categories")')" "true"
+_assert_eq "plan output: plugins group present (foo outdated)" \
+  "$(echo "$V17_PLANOUT" | jq '[.ordered_groups[] | select(.name=="plugins")] | length')" "1"
+rm -f "$(echo "$V17_PLANOUT" | jq -r '.plan_file')" 2>/dev/null
+
+# 11f. packages mode excludes the plugins group entirely
+V17_PKG=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V17_SB/cs" UPKEEP_CODEX_SKILLS="$V17_SB/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_SB/installed.json" \
+  UPKEEP_PLUGIN_MARKETPLACES="$V17_SB/mkts" \
+  bash "$SCRIPTS/update.sh" plan packages 2>/dev/null)
+_assert_eq "packages mode excludes plugins group" \
+  "$(echo "$V17_PKG" | jq '[.ordered_groups[]? | select(.name=="plugins")] | length')" "0"
+rm -f "$(echo "$V17_PKG" | jq -r '.plan_file')" 2>/dev/null
+
+# 11g. apply: marketplace ff-only pull succeeds → status "pulled"
+V17_AB=$(mktemp -d /tmp/upkeep-v17ab.XXXXXX)
+git init -q -b main --bare "$V17_AB/origin.git"
+git clone -q "$V17_AB/origin.git" "$V17_AB/mkts/acme" 2>/dev/null
+( cd "$V17_AB/mkts/acme" && git config user.email t@t && git config user.name t && \
+  echo '{"name":"acme"}' > m.json && git add -A && git commit -qm v1 && git push -q origin main )
+git clone -q "$V17_AB/origin.git" "$V17_AB/ahead" 2>/dev/null
+( cd "$V17_AB/ahead" && git config user.email t@t && git config user.name t && \
+  echo x > f && git add -A && git commit -qm v2 && git push -q origin main )
+V17_BEFORE=$(git -C "$V17_AB/mkts/acme" rev-parse HEAD)
+_mk_plugin_plan() {  # $1=marketplace_path  → echoes a plan-file path
+  local mp="$1" pf; pf=$(mktemp /tmp/upkeep-v17plan.XXXXXX)
+  jq -n --arg mp "$mp" '{schema_version:"1",mode:"all",created_at:"2026-01-01T00:00:00Z",
+    plan:{schema_version:"1",summary:{category_counts:{},eta_minutes_p50:1,eta_minutes_p90:1,disk_free_gb:100},warnings:[],manual_steps:[],ordered_groups:[{name:"plugins",parallelism:"serial",tools:["plugins"],item_count:1}],tool_specs:{},risk_categories:[]},
+    discovery:{schema_version:"1",os:{type:"linux",arch:"x86_64"},
+      skills:{git_repos:[],managed:[{name:"foo",manager:"claude-code-plugin",marketplace:"acme",installed_version:"1.0.0",available_version:"2.0.0",marketplace_path:$mp,marketplace_is_git:true,update_command:"/plugin update foo"}],info:{},errors:[]},
+      native:{system:{manager:"unknown",installed:false,upgradable:[],count:0,requires_sudo:true},snap:{installed:false,refreshable:[]},flatpak:{installed:false,updatable:[]},windows:{wsl2:false,managers:[]},errors:[]},
+      language:{npm:{installed:false,outdated:[]},pipx:{installed:false,tools:[],outdated_count:0},gems:{installed:false,system_ruby:false,outdated:[]},uv:{installed:false},bun:{installed:false},deno:{installed:false},rustup:{installed:false},cargo:{installed:false},mise:{installed:false},errors:[]},
+      shadow:{duplicates:[],broken_symlinks:[],errors:[]},
+      disk:{free_gb:100,warn_threshold_gb:10,refuse_threshold_gb:5}}}' > "$pf"
+  echo "$pf"
+}
+V17_PF=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+V17_APPLY=$(UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" UPKEEP_DATA_DIR="$V17_AB/data" \
+  bash "$SCRIPTS/update.sh" apply "$V17_PF" 2>/dev/null)
+_assert_eq "apply: marketplace pulled (status=pulled)" \
+  "$(echo "$V17_APPLY" | jq -r '.plugins.marketplaces_refreshed[0].status')" "pulled"
+_assert_ne "apply: marketplace HEAD advanced after pull" \
+  "$(git -C "$V17_AB/mkts/acme" rev-parse HEAD)" "$V17_BEFORE"
+_assert_eq "apply: outdated hand-off list retained" \
+  "$(echo "$V17_APPLY" | jq -r '.plugins.outdated[0].update_command')" "/plugin update foo"
+
+# 11h. apply: marketplace path OUTSIDE the root is refused (containment)
+V17_PF2=$(_mk_plugin_plan "/tmp/evil-marketplace")
+V17_APPLY2=$(UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" UPKEEP_DATA_DIR="$V17_AB/data" \
+  bash "$SCRIPTS/update.sh" apply "$V17_PF2" 2>/dev/null)
+_assert_eq "apply: path outside marketplaces root refused" \
+  "$(echo "$V17_APPLY2" | jq -r '.plugins.marketplaces_refreshed[0].status')" "refused"
+
+# 11i. apply: dropping the plugins category skips the pull but keeps hand-off
+V17_BEFORE2=$(git -C "$V17_AB/mkts/acme" rev-parse HEAD)
+V17_PF3=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+V17_APPLY3=$(UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" UPKEEP_DATA_DIR="$V17_AB/data" \
+  bash "$SCRIPTS/update.sh" apply "$V17_PF3" --drop=plugins 2>/dev/null)
+_assert_eq "apply: --drop=plugins performs no marketplace pull" \
+  "$(echo "$V17_APPLY3" | jq '.plugins.marketplaces_refreshed | length')" "0"
+_assert_eq "apply: --drop=plugins leaves marketplace HEAD untouched" \
+  "$(git -C "$V17_AB/mkts/acme" rev-parse HEAD)" "$V17_BEFORE2"
+_assert_eq "apply: --drop=plugins still surfaces /plugin update hand-off" \
+  "$(echo "$V17_APPLY3" | jq -r '.plugins.outdated[0].name')" "foo"
+
+rm -rf "$V17_SB" "$V17_AB" "$V17_PF2" 2>/dev/null
+
 # ── Summary ────────────────────────────────────────────────────
 echo
 echo "════════════════════════════════════════"

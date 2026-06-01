@@ -27,6 +27,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="${UPKEEP_DATA_DIR:-$HOME/.claude/data}"
+# v1.7: canonical root the plugin marketplace git-pull is fenced to. The
+# apply phase refuses any marketplace_path that doesn't resolve under it
+# (mirrors the skills-root containment check). Test seam overrides it.
+MARKETPLACES_ROOT="${UPKEEP_PLUGIN_MARKETPLACES:-$HOME/.claude/plugins/marketplaces}"
 
 # ── Common helpers ───────────────────────────────────────────────
 _require_jq() {
@@ -260,6 +264,7 @@ _cmd_plan() {
       warnings: $plan.warnings,
       manual_steps: $plan.manual_steps,
       ordered_groups: $plan.ordered_groups,
+      risk_categories: ($plan.risk_categories // []),
       restart_required: ($plan.tool_specs.macos.restart_required // false),
       gems_user_install: ($plan.tool_specs.gems.user_install // false),
       untrusted_repos: $untrusted
@@ -306,6 +311,7 @@ _cmd_apply() {
   TMP_ROOT_APPLY=$(mktemp -d) || _die "mktemp -d failed"
   local upgraded_formulas_file="$TMP_ROOT_APPLY/upgraded_formulas"
   local upgraded_tools_file="$TMP_ROOT_APPLY/upgraded_tools"
+  local plugins_refreshed_file="$TMP_ROOT_APPLY/plugins_refreshed"
   local failure_log_file="$TMP_ROOT_APPLY/failure_log"
   local deprecation_log="$TMP_ROOT_APPLY/deprecation_log"
   local apply_log_root="$TMP_ROOT_APPLY/logs"
@@ -313,7 +319,7 @@ _cmd_apply() {
   trap 'rm -rf -- "${TMP_ROOT_APPLY:-/dev/null/_unset}"' EXIT
 
   touch "$upgraded_formulas_file" "$upgraded_tools_file" \
-        "$failure_log_file" "$deprecation_log"
+        "$plugins_refreshed_file" "$failure_log_file" "$deprecation_log"
 
   # ── Dropped tools set (from gate's "drop categories" path) ───
   # v1.5.1: bash 3.2 (macOS default) has no associative arrays. Encode
@@ -334,7 +340,7 @@ _cmd_apply() {
     IFS="$_saved_ifs"
     for t in "${_drop_arr[@]}"; do
       case "$t" in
-        skills|brew|npm|pipx|gems|uv|bun|mas|macos|snap|flatpak) dropped="${dropped}${t}," ;;
+        skills|plugins|brew|npm|pipx|gems|uv|bun|mas|macos|snap|flatpak) dropped="${dropped}${t}," ;;
         *) ;;  # silently ignore unknown tool ids
       esac
     done
@@ -353,7 +359,7 @@ _cmd_apply() {
   # surfaced as manual_steps by the synthesizer; this _die is the hard
   # guarantee that a malformed plan can never smuggle a sudo manager into
   # the dispatcher.
-  local allowed="skills brew npm pipx gems uv bun mas macos snap flatpak"
+  local allowed="skills plugins brew npm pipx gems uv bun mas macos snap flatpak"
   local tool
   while read -r tool; do
     [ -z "$tool" ] && continue
@@ -481,6 +487,56 @@ _cmd_apply() {
       # the user's own session; flatpak update -y operates on the user install.
       snap)    snap refresh >> "$log" 2>&1; rc=$? ;;
       flatpak) flatpak update -y >> "$log" 2>&1; rc=$? ;;
+      plugins)
+        # v1.7: refresh the marketplace git source for each OUTDATED plugin.
+        # This is the ONLY part of a plugin update that is safe to automate —
+        # the reinstall (`/plugin update` + relaunch) has no headless path and
+        # is surfaced as a manual step. Each marketplace is pulled once
+        # (ff-only), dirty/detached trees are skipped, and the path is fenced
+        # to MARKETPLACES_ROOT via canonical containment. A pull failure is
+        # recorded per-marketplace and never fails the group (we don't want
+        # the diagnoser firing on a source-refresh miss).
+        local _mp_seen=" "
+        local _pj _pname _mpath _resolved _mroot _ok
+        while read -r _pj; do
+          [ -z "$_pj" ] && continue
+          _pname=$(jq -r '.name // "?"' <<<"$_pj")
+          _mpath=$(jq -r '.marketplace_path // ""' <<<"$_pj")
+          [ -z "$_mpath" ] && continue
+          case "$_mp_seen" in *" $_mpath "*) continue ;; esac
+          _resolved=$(cd -P -- "$_mpath" 2>/dev/null && pwd -P)
+          _mroot=$(cd -P -- "$MARKETPLACES_ROOT" 2>/dev/null && pwd -P)
+          _ok=0
+          if [ -n "$_resolved" ] && [ -n "$_mroot" ]; then
+            case "$_resolved/" in "$_mroot/"*) _ok=1 ;; esac
+          fi
+          if [ "$_ok" != "1" ]; then
+            echo "plugins: refusing marketplace path outside root: $_mpath" >> "$log"
+            printf '%s\trefused\n' "$_mpath" >> "$plugins_refreshed_file"
+            continue
+          fi
+          _mp_seen="$_mp_seen$_mpath "
+          if [ ! -d "$_resolved/.git" ]; then
+            printf '%s\tnot-git\n' "$_mpath" >> "$plugins_refreshed_file"
+            continue
+          fi
+          if [ -n "$(git -C "$_resolved" status --porcelain 2>/dev/null)" ]; then
+            echo "plugins: $_pname marketplace dirty — skipped ($_mpath)" >> "$log"
+            printf '%s\tdirty-skipped\n' "$_mpath" >> "$plugins_refreshed_file"
+            continue
+          fi
+          if ! git -C "$_resolved" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+            printf '%s\tdetached-skipped\n' "$_mpath" >> "$plugins_refreshed_file"
+            continue
+          fi
+          if git -C "$_resolved" pull --ff-only >> "$log" 2>&1; then
+            printf '%s\tpulled\n' "$_mpath" >> "$plugins_refreshed_file"
+          else
+            printf '%s\tpull-failed\n' "$_mpath" >> "$plugins_refreshed_file"
+          fi
+        done < <(jq -c '.skills.managed[]?' <<<"$discovery")
+        rc=0
+        ;;
       skills) rc=0 ;;  # already ran above
       *)
         echo "refusing unknown tool: $tool" >> "$log"
@@ -489,7 +545,10 @@ _cmd_apply() {
     esac
 
     if [ "$rc" = "0" ]; then
-      [ "$tool" != "brew" ] && [ "$tool" != "skills" ] && echo "$tool" >> "$upgraded_tools_file"
+      # brew/skills/plugins keep their own accounting (formula list, skills
+      # phase, plugins_refreshed_file) — don't double-count the literal id.
+      [ "$tool" != "brew" ] && [ "$tool" != "skills" ] && [ "$tool" != "plugins" ] \
+        && echo "$tool" >> "$upgraded_tools_file"
     else
       printf '%s\t%s\thard\t%s\n' "$tool" "$rc" "$log" >> "$failure_log_file"
     fi
@@ -662,12 +721,29 @@ _cmd_apply() {
   fi
 
   # ────────────────────────────────────────────────────────────
+  # PLUGINS REPORT DATA (v1.7)
+  # ────────────────────────────────────────────────────────────
+  # `outdated` is the full hand-off list (survives even if the user dropped
+  # the plugins category — they still need the /plugin update commands).
+  # `marketplaces_refreshed` reflects what the apply phase actually pulled.
+  local plugins_outdated_json plugins_refreshed_json
+  plugins_outdated_json=$(jq -c '[.skills.managed[]?
+    | {name, installed_version, available_version, update_command}]' <<<"$discovery")
+  plugins_refreshed_json=$(awk -F'\t' 'NF>=2 {n=$1; sub(/.*\//,"",n); printf "%s\t%s\n", n, $2}' \
+      "$plugins_refreshed_file" 2>/dev/null \
+    | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
+               | {marketplace:.[0], status:.[1]})')
+  [ -z "$plugins_refreshed_json" ] && plugins_refreshed_json='[]'
+
+  # ────────────────────────────────────────────────────────────
   # REPORT JSON for SKILL.md to render
   # ────────────────────────────────────────────────────────────
   jq -n \
     --arg mode "$mode" \
     --argjson skills_applied "$skills_applied" \
     --argjson skills_skipped "$skills_skipped" \
+    --argjson plugins_outdated "$plugins_outdated_json" \
+    --argjson plugins_refreshed "$plugins_refreshed_json" \
     --argjson upgraded_formulas "$(echo "$upgraded_formulas" | tr ' ' '\n' | grep -v '^$' | jq -R '.' | jq -s -c '.')" \
     --argjson upgraded_tools "$(echo "$upgraded_tools" | tr ' ' '\n' | grep -v '^$' | jq -R '.' | jq -s -c '.')" \
     --argjson diagnoses "$diagnoses_json" \
@@ -677,6 +753,13 @@ _cmd_apply() {
     '{
       mode: $mode,
       skills: {applied: $skills_applied, skipped: $skills_skipped},
+      plugins: {
+        outdated: $plugins_outdated,
+        marketplaces_refreshed: $plugins_refreshed,
+        note: (if ($plugins_outdated | length) > 0
+               then "Marketplace sources refreshed where possible. To finish each update, run the listed /plugin update command(s) then relaunch Claude Code — the plugin cache reinstall has no headless path."
+               else null end)
+      },
       upgraded_formulas: $upgraded_formulas,
       upgraded_tools: $upgraded_tools,
       doctor: (if ($doctor | length) > 0 then $doctor else null end),

@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-06-01
+
+### Added — real Claude Code plugin handling + risk-exclusion gate
+
+Through v1.6, `/upkeep:update` listed **every** installed Claude Code plugin
+as a `/plugin update <name>` manual step on every run — whether or not it was
+actually behind — and never touched them. v1.7 makes plugins first-class:
+upkeep now detects which plugins are genuinely outdated, auto-refreshes the
+marketplace source it safely can, and hands off only the part that has no
+headless path.
+
+**Why plugins can't be fully auto-updated (verified against Claude Code
+internals).** A plugin update is: pull the marketplace repo → reinstall the
+new version into the plugin cache → repoint `installed_plugins.json`. Only the
+first step is scriptable. `/plugin update` is interactive-only; pulling the
+marketplace alone does **not** reinstall; and the cache reinstall + state
+rewrite needs a Claude Code **relaunch** to take effect. So upkeep automates
+the safe prefix (marketplace git pull) and hands off the rest as a manual
+step — it never rewrites `installed_plugins.json` or mutates the cache.
+
+- **Outdated detection (`discover.sh`).** Reads `installed_plugins.json` for
+  the active version of each `<plugin>@<marketplace>` and compares it
+  (`sort -V`) against the version declared in that marketplace's on-disk
+  `.claude-plugin/marketplace.json`. Only behind-version plugins land in
+  `skills.managed`; a plugin absent from its marketplace manifest, or already
+  current, is silently skipped. New `info.plugins_outdated` count. New test
+  seams `UPKEEP_INSTALLED_PLUGINS` and `UPKEEP_PLUGIN_MARKETPLACES`.
+- **Marketplace refresh (`update.sh` apply).** A new `plugins` category (a
+  droppable `ordered_groups` entry) does a `git pull --ff-only` on each
+  outdated plugin's marketplace, **once per marketplace**, fenced to
+  `~/.claude/plugins/marketplaces/*` by canonical-path containment (same
+  guard as skills), skipping dirty/detached trees. A pull miss is recorded
+  per-marketplace and never fails the run. The report's `plugins` block
+  carries `marketplaces_refreshed[]`, the `outdated[]` hand-off list (which
+  survives even if the user drops the category), and a `note` spelling out
+  the `/plugin update` + relaunch finish step.
+- **"Apply all except flagged risks" gate option.** `synthesize.sh` now emits
+  `risk_categories[]` — the categories a materialised compat warning
+  implicates (the **cause** side: every compat edge originates at a brew
+  formula, so it maps to `brew`; the system-Ruby warning maps to `gems`),
+  intersected with the categories actually in the plan. The gate offers
+  "apply all except flagged risks" (drops `risk_categories`) as the default
+  when risks exist, plus an "apply **including** flagged risks" path guarded
+  by an explicit "are you sure?" confirmation. Dropping is whole-category
+  (the apply dispatcher is per-category by design).
+- **Standing compatibility disclaimer.** The gate always warns that the risk
+  matrix is not exhaustive — "no risks flagged" means none were found in the
+  matrix, not that none exist.
+
+### Security
+
+- Plugin marketplace pulls reuse the v1.5.1 canonical-path containment guard,
+  fenced to `~/.claude/plugins/marketplaces/*`; `--ff-only`; dirty/detached
+  skipped; deduped per marketplace. upkeep never rewrites Claude Code's
+  `installed_plugins.json` or plugin cache.
+
+### Tests
+
+- 73 → **94 tests**. New section 11 covers plugin outdated detection
+  (outdated flagged, current/absent skipped, version surfacing, counts),
+  `risk_categories` computation (cause mapping, empty-when-no-warning,
+  intersection guard), plan-output surfacing, packages-mode exclusion, and
+  apply-phase marketplace pull (ff-only success, path-containment refusal,
+  `--drop=plugins` skip-but-still-hand-off). Green on bash 5 and bash 3.2.
+
 ## [1.6.0] - 2026-05-29
 
 ### Added — Linux/WSL2 fast-path port

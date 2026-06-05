@@ -524,6 +524,31 @@ V17_DISC2=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
 _assert_eq "discover: real-version vs marketplace 'unknown' NOT flagged" \
   "$(echo "$V17_DISC2" | jq '[.skills.managed[] | select(.name=="zed")] | length')" "0"
 
+# 11a-ter. Version fallback: marketplace.json omits the plugin version and
+# points at a `source` subdir; the available version comes from that plugin's
+# own plugin.json. (Also covers source="./" → marketplace root.)
+mkdir -p "$V17_SB/mkts/srcmkt/.claude-plugin" "$V17_SB/mkts/srcmkt/sub/.claude-plugin"
+cat > "$V17_SB/mkts/srcmkt/.claude-plugin/marketplace.json" <<'MJ'
+{"name":"srcmkt","plugins":[{"name":"subp","source":"./sub"},{"name":"rootp","source":"./"}]}
+MJ
+echo '{"name":"subp","version":"2.0.0"}' > "$V17_SB/mkts/srcmkt/sub/.claude-plugin/plugin.json"
+echo '{"name":"rootp","version":"5.0.0"}' > "$V17_SB/mkts/srcmkt/.claude-plugin/plugin.json"
+cat > "$V17_SB/installed3.json" <<'IP'
+{"version":2,"plugins":{
+  "subp@srcmkt":[{"version":"1.0.0"}],
+  "rootp@srcmkt":[{"version":"5.0.0"}]
+}}
+IP
+V17_DISC3=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V17_SB/cs" UPKEEP_CODEX_SKILLS="$V17_SB/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_SB/installed3.json" \
+  UPKEEP_PLUGIN_MARKETPLACES="$V17_SB/mkts" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "discover: version from plugin.json under source subdir (subp 1.0.0→2.0.0)" \
+  "$(echo "$V17_DISC3" | jq -r '.skills.managed[] | select(.name=="subp") | (.installed_version+"→"+.available_version)')" "1.0.0→2.0.0"
+_assert_eq "discover: source='./' root plugin.json, equal version NOT flagged" \
+  "$(echo "$V17_DISC3" | jq '[.skills.managed[] | select(.name=="rootp")] | length')" "0"
+
 # 11b. synthesize.sh — plugins group + manual step + risk_categories
 V17_SYNTH_DISC='{"schema_version":"1","os":{"type":"macos","arch":"arm64"},
 "skills":{"git_repos":[],"managed":[{"name":"foo","manager":"claude-code-plugin","marketplace":"acme","installed_version":"1.0.0","available_version":"2.0.0","marketplace_path":"/x/acme","marketplace_is_git":true,"update_command":"/plugin update foo"}],"info":{},"errors":[]},

@@ -279,6 +279,7 @@ ETA_JSON=$(jq -nc \
   ($d.language.pipx.tools   // [] | length) as $pipx_n |
   ($d.language.gems.outdated // [] | length) as $gems_n |
   ($d.skills.git_repos // [] | map(select((.commits_behind // 0) > 0)) | length) as $skills_n |
+  ($d.skills.managed // [] | length) as $plugins_n |
   ($d.native.mas.outdated   // [] | length) as $mas_n |
   ($d.native.softwareupdate.updates // [] | length) as $macos_n |
   (if $d.language.uv.installed  then 1 else 0 end) as $uv_n |
@@ -288,7 +289,8 @@ ETA_JSON=$(jq -nc \
   # Total seconds. apt/dnf/pacman are NOT counted — they are manual steps
   # the user runs themselves, not apply-phase work. snap ~12s, flatpak ~20s.
   (($brew_n * 25) + ($npm_n * 30) + ($pipx_n * 20) + ($gems_n * 15)
-   + ($skills_n * 3) + ($mas_n * 30) + ($macos_n * 300) + ($uv_n * 5) + ($bun_n * 5)
+   + ($skills_n * 3) + ($plugins_n * 4) + ($mas_n * 30) + ($macos_n * 300)
+   + ($uv_n * 5) + ($bun_n * 5)
    + ($snap_n * 12) + ($flatpak_n * 20)) as $p50_s |
   # p90 ~ 1.5x p50, rounded up
   (($p50_s * 3 / 2) | ceil) as $p90_s |

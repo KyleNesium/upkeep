@@ -44,6 +44,29 @@ disk_json=$(jq -n \
 # ── Helpers ──────────────────────────────────────────────────────
 _jq_string() { jq -Rs '.' <<<"$1"; }
 
+# Plugin version resolution helpers (v1.7.1). A marketplace.json entry may
+# declare a plugin's version inline, OR omit it and rely on the plugin's own
+# plugin.json under its `source` subdir. These parse marketplace.json CONTENT
+# (string in $1) for plugin name ($2).
+_mp_inline_version() {
+  jq -r --arg p "$2" '.plugins[]? | select(.name == $p) | .version // empty' \
+    <<<"$1" 2>/dev/null | head -1
+}
+# Source subdir for a plugin, normalized: leading "./" and trailing "/"
+# stripped, so "./" → "" (marketplace root), "./foo/" → "foo".
+_mp_plugin_source() {
+  local s
+  s=$(jq -r --arg p "$2" '.plugins[]? | select(.name == $p) | .source // "./"' \
+    <<<"$1" 2>/dev/null | head -1)
+  s="${s#./}"; s="${s%/}"
+  printf '%s' "$s"
+}
+# Relative path to a plugin's own plugin.json given its (normalized) source.
+_pj_relpath() {
+  if [ -n "$1" ]; then printf '%s/.claude-plugin/plugin.json' "$1"
+  else printf '.claude-plugin/plugin.json'; fi
+}
+
 # Detect arch
 ARCH=$(uname -m 2>/dev/null || echo unknown)
 
@@ -216,27 +239,37 @@ discover_skills() {
       mp_json="$mp_path/.claude-plugin/marketplace.json"
       pl_available=""
       # Prefer the upstream manifest under --fresh; fetch each marketplace
-      # at most once per run.
+      # at most once per run. Version comes from the marketplace.json inline
+      # `version`, or — when that's omitted — the plugin's own plugin.json
+      # under its `source` subdir.
       if [ "$fresh_mps" = "1" ] && [ -d "$mp_path/.git" ]; then
         case "$_fetched_mps" in
           *" $mp_path "*) ;;  # already fetched this marketplace this run
           *) git -C "$mp_path" fetch -q 2>/dev/null
              _fetched_mps="$_fetched_mps$mp_path " ;;
         esac
-        local _up_json
+        local _up_json _src _pj
         _up_json=$(git -C "$mp_path" show "@{u}:.claude-plugin/marketplace.json" 2>/dev/null)
         if [ -n "$_up_json" ]; then
-          pl_available=$(jq -r --arg p "$pl_name" \
-            '.plugins[]? | select(.name == $p) | .version // empty' <<<"$_up_json" 2>/dev/null \
-            | head -1)
+          pl_available=$(_mp_inline_version "$_up_json" "$pl_name")
+          if [ -z "$pl_available" ]; then
+            _src=$(_mp_plugin_source "$_up_json" "$pl_name")
+            _pj=$(git -C "$mp_path" show "@{u}:$(_pj_relpath "$_src")" 2>/dev/null)
+            [ -n "$_pj" ] && pl_available=$(jq -r '.version // empty' <<<"$_pj" 2>/dev/null)
+          fi
         fi
       fi
       # Fall back to the on-disk manifest when not fresh, or when fresh
       # yielded nothing (no upstream, non-git marketplace, fetch failure).
       if [ -z "$pl_available" ] && [ -f "$mp_json" ]; then
-        pl_available=$(jq -r --arg p "$pl_name" \
-          '.plugins[]? | select(.name == $p) | .version // empty' "$mp_json" 2>/dev/null \
-          | head -1)
+        local _mp_content _src2 _pj_file
+        _mp_content=$(cat "$mp_json" 2>/dev/null)
+        pl_available=$(_mp_inline_version "$_mp_content" "$pl_name")
+        if [ -z "$pl_available" ]; then
+          _src2=$(_mp_plugin_source "$_mp_content" "$pl_name")
+          _pj_file="$mp_path/$(_pj_relpath "$_src2")"
+          [ -f "$_pj_file" ] && pl_available=$(jq -r '.version // empty' "$_pj_file" 2>/dev/null)
+        fi
       fi
       claude_plugins_count=$((claude_plugins_count + 1))
 

@@ -63,15 +63,31 @@ step — it never rewrites `installed_plugins.json` or mutates the cache.
 
 ### Tests
 
-- 73 → **100 tests**. New section 11 covers plugin outdated detection
+- 73 → **102 tests**. New section 11 covers plugin outdated detection
   (outdated flagged, current/absent skipped, real-version-vs-marketplace-
-  `"unknown"` not mis-flagged, version surfacing, counts), `--fresh`
+  `"unknown"` not mis-flagged, version resolved from the plugin's own
+  plugin.json under `source`/`./`, version surfacing, counts), `--fresh`
   upstream-manifest fetch (stale local clone hides the update without it,
   detected with it), `risk_categories` computation (cause mapping,
   empty-when-no-warning, intersection guard), plan-contract field/type
   guards, plan-output surfacing, packages-mode exclusion, and apply-phase
   marketplace pull (ff-only success, path-containment refusal,
   `--drop=plugins` skip-but-still-hand-off). Green on bash 5 and bash 3.2.
+
+### Added — version-resolution fallback + plugins in ETA (follow-up)
+
+- Plugin available-version now resolves from the plugin's **own
+  `plugin.json`** (under its marketplace `source` subdir, `./` = root) when
+  the marketplace manifest omits an inline `version` — previously such a
+  plugin was silently never flagged. Applies to both the on-disk and
+  `--fresh` (upstream `git show`) paths.
+- `synthesize.sh` ETA now includes the plugins group (~4s/plugin marketplace
+  refresh) instead of omitting it.
+- Held: reading marketplace `installLocation` from `known_marketplaces.json`.
+  For all real installs `installLocation` == `marketplaces/<key>` (what's
+  used today), and trusting an arbitrary `installLocation` would diverge from
+  `update.sh`'s deliberately-pinned `~/.claude/plugins/marketplaces/*`
+  containment fence — a confusing false "refused" for zero current benefit.
 
 ### Added — `--fresh` marketplace freshness (follow-up)
 

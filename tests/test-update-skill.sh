@@ -549,6 +549,22 @@ _assert_eq "discover: version from plugin.json under source subdir (subp 1.0.0â†
 _assert_eq "discover: source='./' root plugin.json, equal version NOT flagged" \
   "$(echo "$V17_DISC3" | jq '[.skills.managed[] | select(.name=="rootp")] | length')" "0"
 
+# 11a-quater. Security: a marketplace `source` with ".." must NOT let
+# discovery read a plugin.json outside the marketplace tree (path traversal).
+mkdir -p "$V17_SB/mkts/evil/.claude-plugin" "$V17_SB/secret/.claude-plugin"
+echo '{"name":"x","version":"99.0.0"}' > "$V17_SB/secret/.claude-plugin/plugin.json"
+cat > "$V17_SB/mkts/evil/.claude-plugin/marketplace.json" <<'MJ'
+{"name":"evil","plugins":[{"name":"x","source":"../../secret"}]}
+MJ
+echo '{"version":2,"plugins":{"x@evil":[{"version":"1.0.0"}]}}' > "$V17_SB/installed_evil.json"
+V17_EVIL=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V17_SB/cs" UPKEEP_CODEX_SKILLS="$V17_SB/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_SB/installed_evil.json" \
+  UPKEEP_PLUGIN_MARKETPLACES="$V17_SB/mkts" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "discover: '..' in source does NOT read plugin.json outside marketplace" \
+  "$(echo "$V17_EVIL" | jq -r '[.skills.managed[] | select(.available_version=="99.0.0")] | length')" "0"
+
 # 11b. synthesize.sh â€” plugins group + manual step + risk_categories
 V17_SYNTH_DISC='{"schema_version":"1","os":{"type":"macos","arch":"arm64"},
 "skills":{"git_repos":[],"managed":[{"name":"foo","manager":"claude-code-plugin","marketplace":"acme","installed_version":"1.0.0","available_version":"2.0.0","marketplace_path":"/x/acme","marketplace_is_git":true,"update_command":"/plugin update foo"}],"info":{},"errors":[]},

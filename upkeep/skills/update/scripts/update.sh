@@ -427,7 +427,7 @@ _cmd_apply() {
       continue
     fi
 
-    if git -C "$repo_path" pull --ff-only origin "$branch" >> "$skills_log" 2>&1; then
+    if GIT_TERMINAL_PROMPT=0 git -C "$repo_path" pull --ff-only origin "$branch" >> "$skills_log" 2>&1; then
       local new_version
       new_version=$(tr -d '[:space:]' < "$repo_path/VERSION" 2>/dev/null \
         || grep -m1 '"version"' "$repo_path/.claude-plugin/plugin.json" 2>/dev/null \
@@ -531,7 +531,7 @@ _cmd_apply() {
             printf '%s\tdetached-skipped\n' "$_mpath" >> "$plugins_refreshed_file"
             continue
           fi
-          if git -C "$_resolved" pull --ff-only >> "$log" 2>&1; then
+          if GIT_TERMINAL_PROMPT=0 git -C "$_resolved" pull --ff-only >> "$log" 2>&1; then
             printf '%s\tpulled\n' "$_mpath" >> "$plugins_refreshed_file"
           else
             printf '%s\tpull-failed\n' "$_mpath" >> "$plugins_refreshed_file"

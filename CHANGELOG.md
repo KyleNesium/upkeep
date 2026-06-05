@@ -63,7 +63,7 @@ step — it never rewrites `installed_plugins.json` or mutates the cache.
 
 ### Tests
 
-- 73 → **102 tests**. New section 11 covers plugin outdated detection
+- 73 → **103 tests**. New section 11 covers plugin outdated detection
   (outdated flagged, current/absent skipped, real-version-vs-marketplace-
   `"unknown"` not mis-flagged, version resolved from the plugin's own
   plugin.json under `source`/`./`, version surfacing, counts), `--fresh`
@@ -99,6 +99,18 @@ step — it never rewrites `installed_plugins.json` or mutates the cache.
   marketplace is fetched at most once per run; falls back to the on-disk
   manifest when there's no upstream / fetch fails. Same fetch-during-discovery
   precedent as the trusted-skill section. Off by default (network latency).
+
+### Security (second review pass)
+
+- The plugin's `plugin.json` version fallback (above) builds a path from the
+  marketplace-controlled `source` field. `_mp_plugin_source` now rejects any
+  `source` containing a `..` path segment or an absolute path, so a malicious
+  marketplace can't make discovery read a `plugin.json` outside its own tree
+  (verified: `../../x`, `/etc`, `a/../../b` blocked; `..foo`/`foo..bar`
+  allowed). On rejection it falls back to the marketplace-root manifest.
+- All `git fetch`/`git pull` invocations (skills + plugin marketplaces, in
+  both discovery and apply) now run with `GIT_TERMINAL_PROMPT=0` so a remote
+  requiring interactive auth fails fast instead of hanging the run.
 
 ### Fixed (adversarial review pass)
 

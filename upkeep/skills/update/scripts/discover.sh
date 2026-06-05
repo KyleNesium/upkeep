@@ -54,11 +54,19 @@ _mp_inline_version() {
 }
 # Source subdir for a plugin, normalized: leading "./" and trailing "/"
 # stripped, so "./" → "" (marketplace root), "./foo/" → "foo".
+#
+# `source` is a marketplace-controlled field, so it is treated as untrusted:
+# a value containing a ".." path segment or an absolute path is REJECTED
+# (returns empty) so it can't make discovery read a plugin.json outside the
+# marketplace tree. Empty → caller reads the marketplace-root plugin.json,
+# which is always contained within the marketplace dir.
 _mp_plugin_source() {
   local s
   s=$(jq -r --arg p "$2" '.plugins[]? | select(.name == $p) | .source // "./"' \
     <<<"$1" 2>/dev/null | head -1)
   s="${s#./}"; s="${s%/}"
+  case "/$s/" in */../*) s="" ;; esac   # reject any ".." segment
+  case "$s"    in /*)     s="" ;; esac   # reject absolute path
   printf '%s' "$s"
 }
 # Relative path to a plugin's own plugin.json given its (normalized) source.
@@ -162,7 +170,7 @@ discover_skills() {
       subjects='[]'
       breaking_lines='[]'
       if [ "$trusted" = "true" ] && [ "$detached" = "false" ] && [ -n "$branch" ]; then
-        git -C "$path" fetch --tags -q origin 2>/dev/null
+        GIT_TERMINAL_PROMPT=0 git -C "$path" fetch --tags -q origin 2>/dev/null
         behind=$(git -C "$path" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)
         if [ "$behind" -gt 0 ]; then
           subjects=$(git -C "$path" log "HEAD..origin/$branch" --format='%s' -5 2>/dev/null \
@@ -245,7 +253,7 @@ discover_skills() {
       if [ "$fresh_mps" = "1" ] && [ -d "$mp_path/.git" ]; then
         case "$_fetched_mps" in
           *" $mp_path "*) ;;  # already fetched this marketplace this run
-          *) git -C "$mp_path" fetch -q 2>/dev/null
+          *) GIT_TERMINAL_PROMPT=0 git -C "$mp_path" fetch -q 2>/dev/null
              _fetched_mps="$_fetched_mps$mp_path " ;;
         esac
         local _up_json _src _pj

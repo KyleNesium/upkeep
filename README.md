@@ -237,7 +237,7 @@ Separate from cleanup entirely. As of v1.6 a single OS-aware shell orchestrator 
 
 On macOS the flow flags cross-manager risks before you approve (e.g. `brew:node` upgrade ⇒ npm globals may need rebuild; `brew:openssl` upgrade ⇒ ruby native gems like `nokogiri` need recompile; system Ruby 2.x ⇒ `gem update` auto-uses `--user-install`), and post-flight runs `brew doctor` + PATH-shadow re-check. On Linux/WSL2 the same gate surfaces apt/dnf/pacman upgrades as **manual `sudo …` steps** (never auto-run — upkeep never uses sudo) while snap, flatpak, and the language managers are auto-applied; WSL2 Windows managers are audit-only.
 
-**Claude Code plugins (v1.7).** upkeep flags only the plugins that are genuinely behind — it compares each plugin's active version in `installed_plugins.json` against the version its marketplace declares, so you no longer get told to "update all N plugins" on every run. During apply it refreshes the marketplace git source (`--ff-only`, fenced to `~/.claude/plugins/marketplaces/*`). The actual cache reinstall has **no headless path** — completing a plugin update needs `/plugin update <name>` plus a Claude Code relaunch — so upkeep hands that off as a manual step with the exact commands, and never rewrites Claude Code's plugin state itself.
+**Claude Code plugins (v1.7).** upkeep flags only the plugins that are genuinely behind — it compares each plugin's active version in `installed_plugins.json` against the version its marketplace declares, so you no longer get told to "update all N plugins" on every run. By default it reads the marketplace clone already on disk; add **`--fresh`** (e.g. `/upkeep:update all --fresh`) to git-fetch each marketplace first and compare against its upstream manifest, catching updates the local clone hasn't pulled yet. During apply it refreshes the marketplace git source (`--ff-only`, fenced to `~/.claude/plugins/marketplaces/*`). The actual cache reinstall has **no headless path** — completing a plugin update needs `/plugin update <name>` plus a Claude Code relaunch — so upkeep hands that off as a manual step with the exact commands, and never rewrites Claude Code's plugin state itself.
 
 **Risk handling (v1.7).** When the plan carries flagged compatibility risks, the gate offers **"apply all except flagged risks"** (drops the categories a warning implicates) as the default, alongside an "apply *including* flagged risks" path guarded by an explicit confirmation. A standing disclaimer reminds you the risk matrix is **not exhaustive** — an unflagged upgrade can still break something.
 
@@ -420,7 +420,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**95 tests** across 1 automated test file (`tests/test-update-skill.sh`),
+**100 tests** across 1 automated test file (`tests/test-update-skill.sh`),
 covering the `update` skill's shell orchestrator. Run with
 `bash tests/test-update-skill.sh` (also passes under `/bin/bash`, macOS 3.2.57).
 The cleanup skills (`cleandeep`/`cleanquick`/`audit`/`upkeep`) remain
@@ -437,7 +437,7 @@ prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
 | `update.sh apply` contract | ~5 | Empty/`--drop` CSV safety, report JSON shape, plan-file cleanup |
 | `jq`-missing contract | 2 | `{"error":…}` to stdout when `jq` absent |
 | Linux/WSL2 fast path (v1.6) | ~29 | OS-detection seam, `discover_native_linux` shape, dnf exit-100 + Obsoleting-section exclusion, apt from-less line parsing, flatpak app-ID column, WSL2 `winget.exe` detection, sudo boundary (apt → manual steps not ordered_groups), snap/flatpak auto-apply, allowlist rejection of sudo managers, Linux diagnose patterns, macOS regression guard |
-| Plugin updates + risk gate (v1.7) | 22 | Outdated-plugin detection (installed_plugins.json vs marketplace version: outdated flagged, current/absent skipped, real-version-vs-marketplace-"unknown" not mis-flagged, version surfacing, `plugins_outdated` count); `risk_categories` computation (cause→category mapping, empty-when-no-warning, intersection-with-groups guard); plan-output surfacing; packages-mode plugin-group exclusion; apply-phase marketplace pull (ff-only success + HEAD advance, path-containment refusal, `--drop=plugins` skip-but-still-hand-off) |
+| Plugin updates + risk gate (v1.7) | 27 | Outdated-plugin detection (installed_plugins.json vs marketplace version: outdated flagged, current/absent skipped, real-version-vs-marketplace-"unknown" not mis-flagged, version surfacing, `plugins_outdated` count); `--fresh` upstream-manifest fetch (stale local clone hides update without it, detected with it); `risk_categories` computation (cause→category mapping, empty-when-no-warning, intersection-with-groups guard); plan-contract field/type guards; plan-output surfacing; packages-mode plugin-group exclusion; apply-phase marketplace pull (ff-only success + HEAD advance, path-containment refusal, `--drop=plugins` skip-but-still-hand-off) |
 
 ### Skill-level coverage (live invocation)
 

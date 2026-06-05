@@ -628,7 +628,50 @@ _assert_eq "apply: --drop=plugins leaves marketplace HEAD untouched" \
 _assert_eq "apply: --drop=plugins still surfaces /plugin update hand-off" \
   "$(echo "$V17_APPLY3" | jq -r '.plugins.outdated[0].name')" "foo"
 
-rm -rf "$V17_SB" "$V17_AB" "$V17_PF2" 2>/dev/null
+# 11j. --fresh: detection compares against the UPSTREAM manifest, catching an
+#      update the local marketplace clone hasn't pulled yet.
+V17_FR=$(mktemp -d /tmp/upkeep-v17fr.XXXXXX)
+git init -q -b main --bare "$V17_FR/origin.git"
+git clone -q "$V17_FR/origin.git" "$V17_FR/mkts/acme" 2>/dev/null
+( cd "$V17_FR/mkts/acme" && git config user.email t@t && git config user.name t && \
+  mkdir -p .claude-plugin && echo '{"name":"acme","plugins":[{"name":"foo","version":"1.0.0"}]}' > .claude-plugin/marketplace.json && \
+  git add -A && git commit -qm v1 && git push -q origin main )
+# Advance upstream to foo=2.0.0; the local clone still shows 1.0.0 on disk.
+git clone -q "$V17_FR/origin.git" "$V17_FR/ahead" 2>/dev/null
+( cd "$V17_FR/ahead" && git config user.email t@t && git config user.name t && \
+  echo '{"name":"acme","plugins":[{"name":"foo","version":"2.0.0"}]}' > .claude-plugin/marketplace.json && \
+  git add -A && git commit -qm v2 && git push -q origin main )
+mkdir -p "$V17_FR/cs" "$V17_FR/xs"
+echo '{"version":2,"plugins":{"foo@acme":[{"version":"1.0.0"}]}}' > "$V17_FR/installed.json"
+# On-disk manifest still says 1.0.0 == installed → WITHOUT --fresh, not flagged.
+V17_STALE=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V17_FR/cs" UPKEEP_CODEX_SKILLS="$V17_FR/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_FR/installed.json" UPKEEP_PLUGIN_MARKETPLACES="$V17_FR/mkts" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "discover: without --fresh, stale local manifest hides the update" \
+  "$(echo "$V17_STALE" | jq '.skills.managed | length')" "0"
+# WITH --fresh: fetch upstream → foo 1.0.0 → 2.0.0 flagged.
+V17_FRESH=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_FRESH_MARKETPLACES=1 \
+  UPKEEP_CLAUDE_SKILLS="$V17_FR/cs" UPKEEP_CODEX_SKILLS="$V17_FR/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V17_FR/installed.json" UPKEEP_PLUGIN_MARKETPLACES="$V17_FR/mkts" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "discover: --fresh detects upstream-only update (1.0.0 → 2.0.0)" \
+  "$(echo "$V17_FRESH" | jq -r '.skills.managed[] | select(.name=="foo") | (.installed_version+"→"+.available_version)')" "1.0.0→2.0.0"
+
+# 11k. Plan-contract: the SKILL.md gate render depends on these plan fields
+#      always being present with the right types. Guard the prose↔script
+#      contract that isn't otherwise unit-testable.
+V17_CONTRACT=$(echo "$V17_SYNTH_DISC" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "contract: risk_categories is an array" \
+  "$(echo "$V17_CONTRACT" | jq -r '.risk_categories | type')" "array"
+_assert_eq "contract: summary.category_counts.plugins is a number" \
+  "$(echo "$V17_CONTRACT" | jq -r '.summary.category_counts.plugins | type')" "number"
+_assert_eq "contract: every plugin-update manual step has name + update_command" \
+  "$(echo "$V17_CONTRACT" | jq '[.manual_steps[] | select(.kind=="plugin-update") | select((.name|type=="string") and (.update_command|type=="string"))] | length')" \
+  "$(echo "$V17_CONTRACT" | jq '[.manual_steps[] | select(.kind=="plugin-update")] | length')"
+
+rm -rf "$V17_SB" "$V17_AB" "$V17_FR" "$V17_PF2" 2>/dev/null
 
 # ── Summary ────────────────────────────────────────────────────
 echo

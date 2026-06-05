@@ -206,9 +206,12 @@ wsl2  → same as linux + Windows package managers shown audit-only
 
 Plugins (all platforms): only OUTDATED Claude Code plugins are flagged
 (`installed_plugins.json` version vs the marketplace's declared version).
-Apply refreshes the trusted marketplace git source (ff-only); the cache
-reinstall is NOT auto-appliable — `/plugin update <name>` + a relaunch is
-handed off as a manual step.
+By default this compares against the marketplace clone already on disk; pass
+`--fresh` (`/upkeep:update <mode> --fresh`) to git-fetch each marketplace
+first and compare against its upstream manifest, catching updates the local
+clone hasn't pulled yet. Apply refreshes the trusted marketplace git source
+(ff-only); the cache reinstall is NOT auto-appliable — `/plugin update
+<name>` + a relaunch is handed off as a manual step.
 
 The legacy v1.0 sequential flow (per-category gates) was retired in v1.6;
 all platforms now get the single-gate UX. If `$OS_TYPE` is `unknown`, report
@@ -545,6 +548,7 @@ walks add 30–60s and most users want speed over the upfront context.
 | `UPKEEP_PKG_MGR_OVERRIDE` | unset | Test seam — force `$PKG_MGR` (`apt`/`dnf`/`pacman`) |
 | `UPKEEP_INSTALLED_PLUGINS` | `~/.claude/plugins/installed_plugins.json` | Active-plugin state read for outdated detection |
 | `UPKEEP_PLUGIN_MARKETPLACES` | `~/.claude/plugins/marketplaces` | Marketplace git-source root; apply fences the ff-only pull to it |
+| `UPKEEP_FRESH_MARKETPLACES` | unset | `1` (or `--fresh`) — git-fetch each plugin marketplace during discovery and compare against its upstream manifest, not the local clone |
 
 ---
 

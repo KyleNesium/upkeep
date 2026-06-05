@@ -63,13 +63,26 @@ step — it never rewrites `installed_plugins.json` or mutates the cache.
 
 ### Tests
 
-- 73 → **95 tests**. New section 11 covers plugin outdated detection
+- 73 → **100 tests**. New section 11 covers plugin outdated detection
   (outdated flagged, current/absent skipped, real-version-vs-marketplace-
-  `"unknown"` not mis-flagged, version surfacing, counts), `risk_categories`
-  computation (cause mapping, empty-when-no-warning, intersection guard),
-  plan-output surfacing, packages-mode exclusion, and apply-phase marketplace
-  pull (ff-only success, path-containment refusal, `--drop=plugins`
-  skip-but-still-hand-off). Green on bash 5 and bash 3.2.
+  `"unknown"` not mis-flagged, version surfacing, counts), `--fresh`
+  upstream-manifest fetch (stale local clone hides the update without it,
+  detected with it), `risk_categories` computation (cause mapping,
+  empty-when-no-warning, intersection guard), plan-contract field/type
+  guards, plan-output surfacing, packages-mode exclusion, and apply-phase
+  marketplace pull (ff-only success, path-containment refusal,
+  `--drop=plugins` skip-but-still-hand-off). Green on bash 5 and bash 3.2.
+
+### Added — `--fresh` marketplace freshness (follow-up)
+
+- Outdated detection compares against the marketplace clone on disk by
+  default. New `--fresh` flag (env `UPKEEP_FRESH_MARKETPLACES=1`) git-fetches
+  each marketplace hosting an installed plugin and reads the available
+  version from its upstream tracking ref (`@{u}:.claude-plugin/marketplace.json`)
+  instead — catching updates the local clone hasn't pulled yet. Each
+  marketplace is fetched at most once per run; falls back to the on-disk
+  manifest when there's no upstream / fetch fails. Same fetch-during-discovery
+  precedent as the trusted-skill section. Off by default (network latency).
 
 ### Fixed (adversarial review pass)
 

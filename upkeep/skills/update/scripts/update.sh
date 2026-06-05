@@ -55,10 +55,11 @@ _die() {
 _cmd_plan() {
   local mode="${1:-all}"
   shift || true
-  local no_cache=0
+  local no_cache=0 fresh=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-cache) no_cache=1 ;;
+      --fresh)    fresh=1 ;;
       *) ;;
     esac
     shift
@@ -66,15 +67,14 @@ _cmd_plan() {
 
   _require_jq
 
-  # Run discovery (with optional cache bypass)
+  # Run discovery. --no-cache bypasses the brew-update TTL cache; --fresh
+  # git-fetches plugin marketplaces so outdated detection compares against
+  # the upstream manifest rather than the local clone. Both default off;
+  # passing 0 is inert (discover.sh treats only "1" as enabled).
   local discovery
-  if [ "$no_cache" = "1" ]; then
-    discovery=$(UPKEEP_NO_CACHE=1 bash "$SCRIPT_DIR/discover.sh" 2>/dev/null) \
-      || _die "discover.sh failed"
-  else
-    discovery=$(bash "$SCRIPT_DIR/discover.sh" 2>/dev/null) \
-      || _die "discover.sh failed"
-  fi
+  discovery=$(UPKEEP_NO_CACHE="$no_cache" UPKEEP_FRESH_MARKETPLACES="$fresh" \
+    bash "$SCRIPT_DIR/discover.sh" 2>/dev/null) \
+    || _die "discover.sh failed"
 
   if ! jq -e '.schema_version == "1"' <<<"$discovery" >/dev/null 2>&1; then
     _die "discover.sh produced invalid JSON"
@@ -794,13 +794,15 @@ case "${1:-}" in
 upkeep/update.sh — single-shot orchestrator (v1.5)
 
 Usage:
-  update.sh plan <audit|skills|packages|all> [--no-cache]
+  update.sh plan <audit|skills|packages|all> [--no-cache] [--fresh]
   update.sh apply <plan-file> [--drop=tool1,tool2] [--advisor]
 
 Environment:
-  UPKEEP_BREW_TTL    brew update cache TTL in seconds (default 3600)
-  UPKEEP_NO_CACHE    set to 1 to force brew update refresh
-  UPKEEP_DATA_DIR    plan/history directory (default ~/.claude/data)
+  UPKEEP_BREW_TTL             brew update cache TTL in seconds (default 3600)
+  UPKEEP_NO_CACHE             set to 1 to force brew update refresh
+  UPKEEP_FRESH_MARKETPLACES   set to 1 (or pass --fresh) to git-fetch plugin
+                              marketplaces and compare against upstream
+  UPKEEP_DATA_DIR             plan/history directory (default ~/.claude/data)
 EOF
     exit 64
     ;;

@@ -197,6 +197,13 @@ discover_skills() {
   # is a "prep + hand off" list: the apply phase refreshes the marketplace
   # git source (safe, ff-only), and the user runs the consolidated
   # `/plugin update` command + relaunches to finish.
+  # UPKEEP_FRESH_MARKETPLACES=1 (the `--fresh` flag) fetches each
+  # marketplace and reads the available version from its upstream tracking
+  # ref instead of the on-disk manifest — catching updates the local clone
+  # hasn't pulled yet. Off by default (network latency); same
+  # fetch-during-discovery precedent as the trusted-skill section above.
+  local fresh_mps="${UPKEEP_FRESH_MARKETPLACES:-0}"
+  local _fetched_mps=" "
   local plugins_outdated_count=0
   if [ -f "$INSTALLED_PLUGINS_FILE" ]; then
     # Rows: name<TAB>marketplace<TAB>installed_version. The installed_plugins
@@ -208,7 +215,25 @@ discover_skills() {
       mp_path="$MARKETPLACES_ROOT/$pl_market"
       mp_json="$mp_path/.claude-plugin/marketplace.json"
       pl_available=""
-      if [ -f "$mp_json" ]; then
+      # Prefer the upstream manifest under --fresh; fetch each marketplace
+      # at most once per run.
+      if [ "$fresh_mps" = "1" ] && [ -d "$mp_path/.git" ]; then
+        case "$_fetched_mps" in
+          *" $mp_path "*) ;;  # already fetched this marketplace this run
+          *) git -C "$mp_path" fetch -q 2>/dev/null
+             _fetched_mps="$_fetched_mps$mp_path " ;;
+        esac
+        local _up_json
+        _up_json=$(git -C "$mp_path" show "@{u}:.claude-plugin/marketplace.json" 2>/dev/null)
+        if [ -n "$_up_json" ]; then
+          pl_available=$(jq -r --arg p "$pl_name" \
+            '.plugins[]? | select(.name == $p) | .version // empty' <<<"$_up_json" 2>/dev/null \
+            | head -1)
+        fi
+      fi
+      # Fall back to the on-disk manifest when not fresh, or when fresh
+      # yielded nothing (no upstream, non-git marketplace, fetch failure).
+      if [ -z "$pl_available" ] && [ -f "$mp_json" ]; then
         pl_available=$(jq -r --arg p "$pl_name" \
           '.plugins[]? | select(.name == $p) | .version // empty' "$mp_json" 2>/dev/null \
           | head -1)

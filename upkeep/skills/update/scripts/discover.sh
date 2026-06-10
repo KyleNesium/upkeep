@@ -15,6 +15,12 @@ TRUST_FILE="${UPKEEP_TRUST_FILE:-$HOME/.claude/data/upkeep-skill-trust.json}"
 CLAUDE_SKILLS_ROOT="${UPKEEP_CLAUDE_SKILLS:-$HOME/.claude/skills}"
 CODEX_SKILLS_ROOT="${UPKEEP_CODEX_SKILLS:-$HOME/.codex/skills}"
 PLUGIN_CACHE_ROOT="${UPKEEP_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}"
+# v1.7: plugin update detection reads the authoritative install state
+# (installed_plugins.json) and compares each plugin's active version against
+# the version declared in its marketplace's on-disk marketplace.json. Test
+# seams let the suite point these at fixtures.
+INSTALLED_PLUGINS_FILE="${UPKEEP_INSTALLED_PLUGINS:-$HOME/.claude/plugins/installed_plugins.json}"
+MARKETPLACES_ROOT="${UPKEEP_PLUGIN_MARKETPLACES:-$HOME/.claude/plugins/marketplaces}"
 SCOUT_MAX_REPOS="${UPKEEP_MAX_REPOS:-200}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -37,6 +43,37 @@ disk_json=$(jq -n \
 
 # ── Helpers ──────────────────────────────────────────────────────
 _jq_string() { jq -Rs '.' <<<"$1"; }
+
+# Plugin version resolution helpers (v1.7.1). A marketplace.json entry may
+# declare a plugin's version inline, OR omit it and rely on the plugin's own
+# plugin.json under its `source` subdir. These parse marketplace.json CONTENT
+# (string in $1) for plugin name ($2).
+_mp_inline_version() {
+  jq -r --arg p "$2" '.plugins[]? | select(.name == $p) | .version // empty' \
+    <<<"$1" 2>/dev/null | head -1
+}
+# Source subdir for a plugin, normalized: leading "./" and trailing "/"
+# stripped, so "./" → "" (marketplace root), "./foo/" → "foo".
+#
+# `source` is a marketplace-controlled field, so it is treated as untrusted:
+# a value containing a ".." path segment or an absolute path is REJECTED
+# (returns empty) so it can't make discovery read a plugin.json outside the
+# marketplace tree. Empty → caller reads the marketplace-root plugin.json,
+# which is always contained within the marketplace dir.
+_mp_plugin_source() {
+  local s
+  s=$(jq -r --arg p "$2" '.plugins[]? | select(.name == $p) | .source // "./"' \
+    <<<"$1" 2>/dev/null | head -1)
+  s="${s#./}"; s="${s%/}"
+  case "/$s/" in */../*) s="" ;; esac   # reject any ".." segment
+  case "$s"    in /*)     s="" ;; esac   # reject absolute path
+  printf '%s' "$s"
+}
+# Relative path to a plugin's own plugin.json given its (normalized) source.
+_pj_relpath() {
+  if [ -n "$1" ]; then printf '%s/.claude-plugin/plugin.json' "$1"
+  else printf '.claude-plugin/plugin.json'; fi
+}
 
 # Detect arch
 ARCH=$(uname -m 2>/dev/null || echo unknown)
@@ -133,7 +170,7 @@ discover_skills() {
       subjects='[]'
       breaking_lines='[]'
       if [ "$trusted" = "true" ] && [ "$detached" = "false" ] && [ -n "$branch" ]; then
-        git -C "$path" fetch --tags -q origin 2>/dev/null
+        GIT_TERMINAL_PROMPT=0 git -C "$path" fetch --tags -q origin 2>/dev/null
         behind=$(git -C "$path" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)
         if [ "$behind" -gt 0 ]; then
           subjects=$(git -C "$path" log "HEAD..origin/$branch" --format='%s' -5 2>/dev/null \
@@ -175,28 +212,118 @@ discover_skills() {
     done
   done
 
-  # ── Plugin-cache-managed plugins ──
-  if [ -d "$PLUGIN_CACHE_ROOT" ]; then
-    local owner_dir plugin_dir version_dir plugin_json name version
-    for owner_dir in "$PLUGIN_CACHE_ROOT"/*/; do
-      [ -d "$owner_dir" ] || continue
-      for plugin_dir in "$owner_dir"*/; do
-        [ -d "$plugin_dir" ] || continue
-        # Find the most-recent version directory under the plugin
-        version_dir=$(find "$plugin_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-          | sort -V | tail -1)
-        [ -z "$version_dir" ] && version_dir="$plugin_dir"
-        plugin_json="$version_dir/.claude-plugin/plugin.json"
-        [ -f "$plugin_json" ] || continue
-        name=$(jq -r '.name // empty' "$plugin_json" 2>/dev/null)
-        version=$(jq -r '.version // "unknown"' "$plugin_json" 2>/dev/null)
-        [ -z "$name" ] && name=$(basename "$plugin_dir")
-        managed=$(jq --arg name "$name" --arg version "$version" \
-          '. + [{name:$name, manager:"claude-code-plugin", version:$version,
-                update_command:("/plugin update " + $name)}]' <<<"$managed")
-        claude_plugins_count=$((claude_plugins_count + 1))
-      done
-    done
+  # ── Claude Code plugins — OUTDATED detection (v1.7) ──
+  # Prior versions (≤1.6) walked the plugin cache and emitted EVERY
+  # installed plugin as a "/plugin update" manual step, regardless of
+  # whether it was actually behind. That told users to update 18 plugins
+  # when maybe two were stale.
+  #
+  # v1.7 compares the authoritative active version (installed_plugins.json)
+  # against the version each plugin's marketplace declares on disk
+  # (marketplace.json). Only genuinely-behind plugins land in `managed`.
+  #
+  # Hard limit (verified against Claude Code internals): there is NO
+  # supported headless way to APPLY a plugin update — `/plugin update` is
+  # interactive and the reinstall needs a Claude Code relaunch. So `managed`
+  # is a "prep + hand off" list: the apply phase refreshes the marketplace
+  # git source (safe, ff-only), and the user runs the consolidated
+  # `/plugin update` command + relaunches to finish.
+  # UPKEEP_FRESH_MARKETPLACES=1 (the `--fresh` flag) fetches each
+  # marketplace and reads the available version from its upstream tracking
+  # ref instead of the on-disk manifest — catching updates the local clone
+  # hasn't pulled yet. Off by default (network latency); same
+  # fetch-during-discovery precedent as the trusted-skill section above.
+  local fresh_mps="${UPKEEP_FRESH_MARKETPLACES:-0}"
+  local _fetched_mps=" "
+  local plugins_outdated_count=0
+  if [ -f "$INSTALLED_PLUGINS_FILE" ]; then
+    # Rows: name<TAB>marketplace<TAB>installed_version. The installed_plugins
+    # key is "<plugin>@<marketplace>"; plugin names never contain "@", and
+    # everything after the last "@" is the marketplace id.
+    local pl_name pl_market pl_installed mp_json pl_available mp_path mp_is_git
+    while IFS=$'\t' read -r pl_name pl_market pl_installed; do
+      [ -z "$pl_name" ] && continue
+      mp_path="$MARKETPLACES_ROOT/$pl_market"
+      mp_json="$mp_path/.claude-plugin/marketplace.json"
+      pl_available=""
+      # Prefer the upstream manifest under --fresh; fetch each marketplace
+      # at most once per run. Version comes from the marketplace.json inline
+      # `version`, or — when that's omitted — the plugin's own plugin.json
+      # under its `source` subdir.
+      if [ "$fresh_mps" = "1" ] && [ -d "$mp_path/.git" ]; then
+        case "$_fetched_mps" in
+          *" $mp_path "*) ;;  # already fetched this marketplace this run
+          *) GIT_TERMINAL_PROMPT=0 git -C "$mp_path" fetch -q 2>/dev/null
+             _fetched_mps="$_fetched_mps$mp_path " ;;
+        esac
+        local _up_json _src _pj
+        _up_json=$(git -C "$mp_path" show "@{u}:.claude-plugin/marketplace.json" 2>/dev/null)
+        if [ -n "$_up_json" ]; then
+          pl_available=$(_mp_inline_version "$_up_json" "$pl_name")
+          if [ -z "$pl_available" ]; then
+            _src=$(_mp_plugin_source "$_up_json" "$pl_name")
+            _pj=$(git -C "$mp_path" show "@{u}:$(_pj_relpath "$_src")" 2>/dev/null)
+            [ -n "$_pj" ] && pl_available=$(jq -r '.version // empty' <<<"$_pj" 2>/dev/null)
+          fi
+        fi
+      fi
+      # Fall back to the on-disk manifest when not fresh, or when fresh
+      # yielded nothing (no upstream, non-git marketplace, fetch failure).
+      if [ -z "$pl_available" ] && [ -f "$mp_json" ]; then
+        local _mp_content _src2 _pj_file
+        _mp_content=$(cat "$mp_json" 2>/dev/null)
+        pl_available=$(_mp_inline_version "$_mp_content" "$pl_name")
+        if [ -z "$pl_available" ]; then
+          _src2=$(_mp_plugin_source "$_mp_content" "$pl_name")
+          _pj_file="$mp_path/$(_pj_relpath "$_src2")"
+          [ -f "$_pj_file" ] && pl_available=$(jq -r '.version // empty' "$_pj_file" 2>/dev/null)
+        fi
+      fi
+      claude_plugins_count=$((claude_plugins_count + 1))
+
+      # Decide outdated. Skip when we can't compare (no marketplace data).
+      local is_outdated=0
+      if [ -z "$pl_available" ] || [ "$pl_available" = "unknown" ]; then
+        # No comparable marketplace version (missing, or the literal sentinel
+        # Claude Code writes for un-versioned plugins). `sort -V` orders the
+        # string "unknown" AFTER any real semver, so without this guard a
+        # plugin installed at e.g. 2.0.0 against a marketplace declaring
+        # "unknown" would be mis-flagged as "2.0.0 → unknown".
+        is_outdated=0
+      elif [ "$pl_installed" = "$pl_available" ]; then
+        is_outdated=0
+      elif [ "$pl_installed" = "unknown" ] || [ -z "$pl_installed" ]; then
+        # Active version unknowable but marketplace has a concrete version →
+        # flag it so the user can reconcile.
+        is_outdated=1
+      else
+        local _highest
+        _highest=$(printf '%s\n%s\n' "$pl_installed" "$pl_available" | sort -V | tail -1)
+        if [ "$_highest" = "$pl_available" ] && [ "$_highest" != "$pl_installed" ]; then
+          is_outdated=1
+        fi
+      fi
+      [ "$is_outdated" = "1" ] || continue
+
+      mp_is_git=false
+      [ -d "$mp_path/.git" ] && mp_is_git=true
+
+      managed=$(jq --arg name "$pl_name" --arg market "$pl_market" \
+        --arg installed "$pl_installed" --arg available "$pl_available" \
+        --arg mp_path "$mp_path" --argjson mp_is_git "$mp_is_git" \
+        '. + [{name:$name, manager:"claude-code-plugin", marketplace:$market,
+               installed_version:$installed, available_version:$available,
+               marketplace_path:$mp_path, marketplace_is_git:$mp_is_git,
+               update_command:("/plugin update " + $name)}]' <<<"$managed")
+      plugins_outdated_count=$((plugins_outdated_count + 1))
+    done < <(jq -r '
+      (.plugins // {}) | to_entries[]
+      | (.key | (rindex("@")) as $i
+         | if $i == null then {n: ., m: "unknown"}
+           else {n: .[0:$i], m: .[$i+1:]} end) as $p
+      | [$p.n, (if ($p.m | length) > 0 then $p.m else "unknown" end),
+         (.value[0].version // "unknown")]
+      | @tsv' "$INSTALLED_PLUGINS_FILE" 2>/dev/null)
   fi
 
   # Counts
@@ -208,10 +335,12 @@ discover_skills() {
     --argjson git_repos "$git_repos" \
     --argjson managed "$managed" \
     --argjson claude_plugins "$claude_plugins_count" \
+    --argjson plugins_outdated "${plugins_outdated_count:-0}" \
     --argjson codex_total "$codex_total" \
     --argjson codex_git "$codex_git" \
     '{git_repos:$git_repos, managed:$managed,
-      info:{claude_plugins:$claude_plugins, codex_skills_total:$codex_total, codex_skills_git:$codex_git},
+      info:{claude_plugins:$claude_plugins, plugins_outdated:$plugins_outdated,
+            codex_skills_total:$codex_total, codex_skills_git:$codex_git},
       errors:[]}'
 }
 

@@ -1,23 +1,32 @@
 ---
 name: upkeep:update
-version: 1.6.0
+version: 1.7.0
 author: KyleNesium
 description: |
-  Update AI skills and package managers in one sweep. The v1.6 fast path
-  collapses discovery, plan synthesis, apply orchestration, post-flight
-  checks, and failure diagnosis into one shell script
-  (`scripts/update.sh`) on macOS, Linux, AND WSL2. The skill is a thin
-  two-turn wrapper: turn 1 builds the plan and renders the approval gate;
-  turn 2 runs apply and renders the report. brew metadata is TTL-cached
-  (1h default) so warm runs hit the gate in <5s. The failure-diagnoser
-  LLM agent from v1.3 is now a deterministic pattern table
-  (`scripts/diagnose.sh`) covering macOS and Linux failures. On Linux,
-  user-scoped managers (language tools, snap, flatpak) are auto-applied;
-  apt/dnf/pacman upgrades are surfaced as manual sudo steps (never run —
-  upkeep never uses sudo). On WSL2, Windows package managers are
-  audit-only. Enrichment (changelog summaries + project impact) is opt-in
-  behind `--advisor`. Sub-modes: audit (no changes), skills (git-pull
-  AI skills), packages (package managers only), all.
+  Update AI skills, Claude Code plugins, and package managers in one
+  sweep. The fast path collapses discovery, plan synthesis, apply
+  orchestration, post-flight checks, and failure diagnosis into one shell
+  script (`scripts/update.sh`) on macOS, Linux, AND WSL2. The skill is a
+  thin two-turn wrapper: turn 1 builds the plan and renders the approval
+  gate; turn 2 runs apply and renders the report. brew metadata is
+  TTL-cached (1h default) so warm runs hit the gate in <5s. v1.7 adds
+  real Claude Code plugin handling: discovery compares installed_plugins.json
+  against each marketplace's declared version so only GENUINELY-OUTDATED
+  plugins are flagged (no more "update all 18"); apply refreshes the
+  trusted marketplace git source (ff-only); and because the plugin cache
+  reinstall has no headless path, the consolidated `/plugin update`
+  command + relaunch is handed off as a manual step. v1.7 also adds an
+  "apply all except flagged risks" gate option (drops categories a compat
+  warning implicates) and a standing compatibility disclaimer — an absent
+  risk flag is not a guarantee of safety. The failure-diagnoser is a
+  deterministic pattern table (`scripts/diagnose.sh`) covering macOS and
+  Linux failures. On Linux, user-scoped managers (language tools, snap,
+  flatpak) are auto-applied; apt/dnf/pacman upgrades are surfaced as
+  manual sudo steps (never run — upkeep never uses sudo). On WSL2, Windows
+  package managers are audit-only. Enrichment (changelog summaries +
+  project impact) is opt-in behind `--advisor`. Sub-modes: audit (no
+  changes), skills (git-pull AI skills + plugins), packages (package
+  managers only), all.
   Use when: "update upkeep", "update my AI skills", "update everything",
   "check for updates", "upgrade my packages", "update all my tools",
   "is upkeep up to date", "self-update", "upgrade brew", "update skills".
@@ -115,15 +124,15 @@ the matching plan. The same two-turn contract holds regardless of OS.
 
 Detect sub-mode from the user's request:
 - **audit** — check only, no changes
-- **skills** — git repos only
+- **skills** — AI skills (git-cloned) + Claude Code plugins only
 - **packages** — package managers only
-- **all** — both skills and packages
+- **all** — skills, plugins, and packages
 
 If no sub-mode is specified, ask:
 > A) Audit — check what's outdated, no changes
-> B) Skills — update AI skills only
+> B) Skills — update AI skills + Claude Code plugins only
 > C) Packages — upgrade package managers only
-> D) All — skills first, then packages
+> D) All — skills + plugins first, then packages
 
 Announce (`Mode: Update / <sub-mode>`) before proceeding.
 
@@ -189,11 +198,20 @@ As of v1.6 there is **one path for all platforms** — the Fast Path below
 (Turn 1 + Turn 2). `update.sh` branches internally on the detected OS:
 
 ```
-macos → brew / mas / softwareupdate + language tools + skills
-linux → snap / flatpak + language tools + skills;
+macos → brew / mas / softwareupdate + language tools + skills + plugins
+linux → snap / flatpak + language tools + skills + plugins;
         apt|dnf|pacman surfaced as MANUAL sudo steps (never auto-run)
 wsl2  → same as linux + Windows package managers shown audit-only
 ```
+
+Plugins (all platforms): only OUTDATED Claude Code plugins are flagged
+(`installed_plugins.json` version vs the marketplace's declared version).
+By default this compares against the marketplace clone already on disk; pass
+`--fresh` (`/upkeep:update <mode> --fresh`) to git-fetch each marketplace
+first and compare against its upstream manifest, catching updates the local
+clone hasn't pulled yet. Apply refreshes the trusted marketplace git source
+(ff-only); the cache reinstall is NOT auto-appliable — `/plugin update
+<name>` + a relaunch is handed off as a manual step.
 
 The legacy v1.0 sequential flow (per-category gates) was retired in v1.6;
 all platforms now get the single-gate UX. If `$OS_TYPE` is `unknown`, report
@@ -282,7 +300,8 @@ skills rows are shared.
 
 ```
 Plan:
-  Skills (N):     <git_repos applied> (from manual_steps for dirty/untrusted)
+  Skills  (N):    <git_repos applied> (from manual_steps for dirty/untrusted)
+  Plugins (N):    refresh marketplace source for <names>  [reinstall is manual — see below]
   # macOS native
   brew  (N):      ⚠ major: <names> | minor: <count> | patch: <count>
   mas   (N):      <names>
@@ -310,20 +329,64 @@ ETA: ~<summary.eta_minutes_p50>m (p50), up to <eta_minutes_p90>m (p90)
 Disk free: <summary.disk_free_gb> GB
 ```
 
+**Always** print this compatibility disclaimer directly above the
+`AskUserQuestion`, regardless of whether any risks were flagged:
+
+```
+⚠ Compatibility note: upkeep's risk flags come from a fixed compat matrix
+  (brew → language-runtime ABI edges, system-Ruby gem bumps). They are NOT
+  exhaustive. Any upgrade — flagged or not — can break a tool, a project
+  build, or a workflow. "No risks flagged" means upkeep found none in its
+  matrix, not that none exist. Review the plan before applying.
+```
+
+When `summary.category_counts.plugins > 0`, also restate the plugin hand-off
+limitation in the gate (one line): refreshing the marketplace source is the
+only part upkeep can automate — completing each plugin update needs the
+`/plugin update <name>` command plus a Claude Code relaunch (the cache
+reinstall has no headless path).
+
 On Linux/WSL2 the `system-sudo` manual step(s) are the apt/dnf/pacman
 upgrades. They are intentionally NOT in `ordered_groups` and NOT applied by
 Turn 2 — render them prominently so the user knows to run them in their own
 shell. WSL2 Windows package managers appear as a `windows-audit` manual
 step (never executed).
 
-Then the single `AskUserQuestion`:
+Then the single `AskUserQuestion`. The options depend on whether the plan
+carries flagged risks — i.e. whether `risk_categories[]` (from the plan
+JSON) is non-empty:
+
+**If `risk_categories[]` is non-empty** (one or more categories are
+implicated by a compat warning):
+- A) Apply all **except** flagged risks  *(recommended)*
+     → sets `$DROP_CSV` to the comma-joined `risk_categories` (e.g.
+       `brew,gems`). Those categories are skipped; everything else applies.
+- B) Apply all, **including** flagged risks
+     → see the mandatory confirmation below before proceeding.
+- C) Drop categories (choose manually)
+- D) Cancel
+
+If the user picks **B (apply all including flagged risks)**, you MUST issue
+a second confirmation `AskUserQuestion` before ending the turn — never apply
+flagged risks on a single tap:
+
+> ⚠ These categories have flagged compatibility risks: `<risk_categories>`.
+> <one line per matching warnings[] entry, severity-ordered>.
+> Applying them anyway may break dependent tools/projects. Proceed?
+> A) Yes, apply everything including the flagged risks
+> B) No — exclude the flagged risks instead
+
+On A, leave `$DROP_CSV` empty (apply all). On B, set `$DROP_CSV` to the
+comma-joined `risk_categories` (same as option A of the first gate).
+
+**If `risk_categories[]` is empty** (no flagged risks):
 - A) Apply all
 - B) Drop categories
 - C) Cancel
 
-If "Drop categories", a second multi-select `AskUserQuestion` with one
-option per `ordered_groups[].name`. Collect the dropped tool ids
-(e.g. `brew,gems`) as `$DROP_CSV`.
+In either case, if the user chooses **Drop categories**, present a second
+multi-select `AskUserQuestion` with one option per `ordered_groups[].name`.
+Collect the dropped tool ids (e.g. `brew,gems`) as `$DROP_CSV`.
 
 If `restart_required == true` and macOS wasn't dropped:
 > ⚠ This update requires a restart. Save your work.
@@ -353,9 +416,11 @@ The script:
    replaces the v1.3 `failure-diagnoser` agent).
 6. Writes history (flock-guarded).
 7. Removes the plan file.
-8. Prints SKILL.md-facing JSON: `{mode, skills, upgraded_formulas,
+8. Prints SKILL.md-facing JSON: `{mode, skills, plugins, upgraded_formulas,
    upgraded_tools, doctor, shadow_hits, resolution_failures, diagnoses,
-   diagnosis_errors}`.
+   diagnosis_errors}`. `plugins` is `{outdated[], marketplaces_refreshed[],
+   note}` — the marketplace sources upkeep refreshed plus the hand-off list
+   for the manual `/plugin update` + relaunch step.
 
 #### Report render
 
@@ -373,6 +438,7 @@ Render the JSON as the final report:
 
 ── Update Report ───────────────────────────────────────
   Skills   ✓ applied <N> / skipped <M>     (from .skills)
+  Plugins  ↻ <N> marketplace(s) refreshed  (from .plugins.marketplaces_refreshed)
   brew     ✓ upgraded <N> packages         (from .upgraded_formulas)
   npm      <symbol> <result>                (from .upgraded_tools)
   pipx     <symbol> <result>
@@ -383,6 +449,14 @@ Render the JSON as the final report:
   macOS    <symbol> <result>
   snap     <symbol> <result>                (Linux — from .upgraded_tools)
   flatpak  <symbol> <result>                (Linux — from .upgraded_tools)
+
+── Finish plugin updates (run yourself) ────────────────  (if .plugins.outdated non-empty)
+  upkeep refreshed the marketplace source(s) above. To complete each
+  update, run the command then relaunch Claude Code (the cache reinstall
+  has no headless path — that's .plugins.note):
+  • <one `/plugin update <name>` per .plugins.outdated[] entry, with
+    <installed_version> → <available_version]>
+  Then relaunch Claude Code.
 
 ── Manual (run yourself) ───────────────────────────────  (Linux/WSL2, if any)
   • <system-sudo command(s) from the plan's manual_steps — apt/dnf/pacman>
@@ -448,6 +522,12 @@ walks add 30–60s and most users want speed over the upfront context.
 - Skills git pulls are path-validated to `~/.claude/skills/*` or
   `~/.codex/skills/*`, dirty trees are skipped, detached HEAD is skipped,
   pulls are `--ff-only`.
+- Plugin marketplace pulls are path-validated to
+  `~/.claude/plugins/marketplaces/*` (canonical containment), each
+  marketplace is pulled once, dirty/detached trees are skipped, pulls are
+  `--ff-only`. upkeep NEVER rewrites `installed_plugins.json` or touches the
+  plugin cache — completing a plugin update (`/plugin update` + relaunch) is
+  always a manual hand-off, because the cache reinstall has no headless path.
 - `update.sh` strict-mode aborts on bad mktemp / missing jq — the
   orchestrator never runs on a half-initialized state.
 - The `failure-diagnoser` pattern table emits the same JSON shape as the
@@ -466,6 +546,9 @@ walks add 30–60s and most users want speed over the upfront context.
 | `UPKEEP_TRUST_FILE` | `~/.claude/data/upkeep-skill-trust.json` | Skill repo trust list |
 | `UPKEEP_OS_OVERRIDE` | unset | Test seam — force `os.type` (`macos`/`linux`/`wsl2`); short-circuits `uname` |
 | `UPKEEP_PKG_MGR_OVERRIDE` | unset | Test seam — force `$PKG_MGR` (`apt`/`dnf`/`pacman`) |
+| `UPKEEP_INSTALLED_PLUGINS` | `~/.claude/plugins/installed_plugins.json` | Active-plugin state read for outdated detection |
+| `UPKEEP_PLUGIN_MARKETPLACES` | `~/.claude/plugins/marketplaces` | Marketplace git-source root; apply fences the ff-only pull to it |
+| `UPKEEP_FRESH_MARKETPLACES` | unset | `1` (or `--fresh`) — git-fetch each plugin marketplace during discovery and compare against its upstream manifest, not the local clone |
 
 ---
 
@@ -484,5 +567,8 @@ audit-only — now driven by `discover.sh` + `synthesize.sh` instead of prose.
 - Never auto-reset dirty repos — always ask first
 - Never auto-reset non-fast-forward pulls — surface the command for the user
 - One approval gate covers the whole plan; "Drop categories" lets the user exclude tools before apply
+- Always show the compatibility disclaimer above the gate — flagged risks are not exhaustive; an absent flag never guarantees safety
+- When `risk_categories[]` is non-empty, offer "apply all except flagged risks" (default) and require an explicit "are you sure?" confirmation before applying flagged risks
+- Completing a plugin update is always a manual hand-off (`/plugin update <name>` + relaunch) — upkeep only auto-refreshes the marketplace source, never rewrites Claude Code's plugin state
 - macOS updates with `[restart]` always get an explicit restart warning before running
 - The `$ <command>` lines in diagnosis fix-options and the manual sudo steps are text only — never auto-executed

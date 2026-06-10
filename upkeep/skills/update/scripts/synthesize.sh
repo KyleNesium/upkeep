@@ -103,10 +103,22 @@ WARNINGS=$(jq -c --argjson a "$WARNINGS" --argjson b "$SYSTEM_RUBY_WARN" '$a + $
 
 # ── Build manual_steps[] ─────────────────────────────────────────
 MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
-  # Plugin-cache-managed plugins → /plugin update
+  # Outdated Claude Code plugins → /plugin update (interactive) + relaunch.
+  # v1.7: only OUTDATED plugins reach .skills.managed (discover.sh compares
+  # installed_plugins.json vs the marketplace.json version). The apply phase
+  # refreshes the marketplace git source; the reinstall itself is NOT
+  # auto-appliable (no headless path — needs /plugin update + a relaunch), so
+  # each outdated plugin is surfaced as a manual step with both versions.
   [ ($d.skills.managed // [])[] |
     {kind: "plugin-update",
-     message: ("Update Claude Code plugin: " + .update_command)} ]
+     name: .name,
+     installed_version: (.installed_version // "?"),
+     available_version: (.available_version // "?"),
+     update_command: .update_command,
+     message: ("Plugin " + .name + " "
+               + (.installed_version // "?") + " → " + (.available_version // "?")
+               + " (marketplace " + (.marketplace // "?") + ") — run: " + .update_command
+               + ", then relaunch Claude Code")} ]
   # Untrusted skill repos → require trust gate
   + [ ($d.skills.git_repos // [])[] | select(.untrusted == true) |
     {kind: "trust-required",
@@ -152,6 +164,7 @@ MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
 # Fixed order: skills → brew → language (parallel) → stores
 ORDERED_GROUPS=$(jq -nc --argjson d "$DISCOVERY" '
   ($d.skills.git_repos // [] | map(select(.untrusted == false and (.commits_behind // 0) > 0 and ((.dirty_files // []) | length) == 0))) as $skills_actionable |
+  ($d.skills.managed // []) as $plugins |
   ($d.native.brew.outdated // []) as $brew |
   ($d.language.npm.outdated // []) as $npm |
   ($d.language.gems.outdated // []) as $gems |
@@ -169,6 +182,15 @@ ORDERED_GROUPS=$(jq -nc --argjson d "$DISCOVERY" '
   ( (if ($skills_actionable | length) > 0
        then [{name: "skills", parallelism: "serial",
               tools: ["skills"], item_count: ($skills_actionable | length)}]
+       else [] end)
+    +
+    # v1.7: plugins = refresh the marketplace git source for each OUTDATED
+    # plugin (safe, ff-only). This does NOT complete the update — the
+    # reinstall needs `/plugin update` + a relaunch (surfaced as manual
+    # steps). Droppable like any other category.
+    (if ($plugins | length) > 0
+       then [{name: "plugins", parallelism: "serial",
+              tools: ["plugins"], item_count: ($plugins | length)}]
        else [] end)
     +
     (if ($brew | length) > 0
@@ -205,6 +227,34 @@ ORDERED_GROUPS=$(jq -nc --argjson d "$DISCOVERY" '
   )
 ')
 
+# ── Build risk_categories[] — categories a flagged risk implicates ──
+# v1.7: powers the gate's "Apply all except flagged risks" option. A
+# compat warning's RISK ORIGINATES in its source category (every edge in
+# compatibility.json is `brew:<formula> → <affected>`), so excluding the
+# CAUSE (brew) is what actually avoids the breakage — upgrading the
+# affected tool itself is harmless. The system-Ruby warning's cause is the
+# gem update, so it maps to `gems`.
+#
+# Result is intersected with the tool ids actually in ordered_groups, so
+# the gate never offers to drop a category that isn't being applied. The
+# apply dispatcher is per-category, so dropping is whole-category by design
+# (documented in the gate render + disclaimer).
+RISK_CATEGORIES=$(jq -nc \
+  --argjson warnings "$WARNINGS" \
+  --argjson groups "$ORDERED_GROUPS" '
+  ([ $groups[]?.tools[]? ] | unique) as $group_tools |
+  ([ $warnings[]?
+     | ( if (.affected_from // "") | length > 0
+           then (.affected_from | split(":")[0])
+         elif .code == "system-ruby-major-gems"
+           then "gems"
+         else empty end )
+     | select(. == "brew" or . == "npm" or . == "pipx"
+              or . == "gems" or . == "uv" or . == "bun")
+   ] | unique) as $causes |
+  [ $causes[] | select(. as $c | $group_tools | index($c)) ]
+')
+
 # ── Build tool_specs{} — flags only, never commands ──────────────
 TOOL_SPECS=$(jq -nc --argjson d "$DISCOVERY" '
   {} as $base |
@@ -229,6 +279,7 @@ ETA_JSON=$(jq -nc \
   ($d.language.pipx.tools   // [] | length) as $pipx_n |
   ($d.language.gems.outdated // [] | length) as $gems_n |
   ($d.skills.git_repos // [] | map(select((.commits_behind // 0) > 0)) | length) as $skills_n |
+  ($d.skills.managed // [] | length) as $plugins_n |
   ($d.native.mas.outdated   // [] | length) as $mas_n |
   ($d.native.softwareupdate.updates // [] | length) as $macos_n |
   (if $d.language.uv.installed  then 1 else 0 end) as $uv_n |
@@ -238,7 +289,8 @@ ETA_JSON=$(jq -nc \
   # Total seconds. apt/dnf/pacman are NOT counted — they are manual steps
   # the user runs themselves, not apply-phase work. snap ~12s, flatpak ~20s.
   (($brew_n * 25) + ($npm_n * 30) + ($pipx_n * 20) + ($gems_n * 15)
-   + ($skills_n * 3) + ($mas_n * 30) + ($macos_n * 300) + ($uv_n * 5) + ($bun_n * 5)
+   + ($skills_n * 3) + ($plugins_n * 4) + ($mas_n * 30) + ($macos_n * 300)
+   + ($uv_n * 5) + ($bun_n * 5)
    + ($snap_n * 12) + ($flatpak_n * 20)) as $p50_s |
   # p90 ~ 1.5x p50, rounded up
   (($p50_s * 3 / 2) | ceil) as $p90_s |
@@ -252,6 +304,7 @@ SUMMARY=$(jq -nc \
   --argjson eta "$ETA_JSON" '
   {category_counts: {
     skills: ($d.skills.git_repos // [] | map(select((.commits_behind // 0) > 0 and .untrusted == false)) | length),
+    plugins:($d.skills.managed // [] | length),
     brew:   ($d.native.brew.outdated // [] | length),
     npm:    ($d.language.npm.outdated // [] | length),
     pipx:   ($d.language.pipx.tools // [] | length),
@@ -276,11 +329,13 @@ jq -n \
   --argjson warnings "$WARNINGS" \
   --argjson manual_steps "$MANUAL_STEPS" \
   --argjson ordered_groups "$ORDERED_GROUPS" \
-  --argjson tool_specs "$TOOL_SPECS" '
+  --argjson tool_specs "$TOOL_SPECS" \
+  --argjson risk_categories "$RISK_CATEGORIES" '
   {schema_version: "1",
    summary: $summary,
    warnings: $warnings,
    manual_steps: $manual_steps,
    ordered_groups: $ordered_groups,
-   tool_specs: $tool_specs}
+   tool_specs: $tool_specs,
+   risk_categories: $risk_categories}
 '

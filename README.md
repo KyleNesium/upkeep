@@ -4,7 +4,7 @@
 
 **Cross-platform system cleanup and updater Skill for Claude Code**
 
-Discovery-based disk audit, cleanup, and one-command updates for macOS 14+, Linux (Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Finds orphaned app data, stale caches, dead LaunchAgents, Linux package cruft, systemd journal bloat, and configuration drift. Also updates AI skills (upkeep, gstack, etc.) and package managers (brew, apt/dnf/pacman, snap, flatpak, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep.
+Discovery-based disk audit, cleanup, and one-command updates for macOS 14+, Linux (Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Finds orphaned app data, stale caches, dead LaunchAgents, Linux package cruft, systemd journal bloat, and configuration drift. Also updates AI skills (upkeep, gstack, etc.), Claude Code plugins, and package managers (brew, apt/dnf/pacman, snap, flatpak, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep.
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Linux](https://img.shields.io/badge/Linux-Debian%20%7C%20Fedora%20%7C%20Arch-FCC624?logo=linux&logoColor=black)](https://www.kernel.org/)
@@ -231,11 +231,15 @@ Separate from cleanup entirely. As of v1.6 a single OS-aware shell orchestrator 
 | Sub-mode | What it does |
 |----------|--------------|
 | `update audit` | Scan everything — show what's outdated, no changes |
-| `update skills` | Git-pull AI skills in `~/.claude/skills/` and `~/.codex/skills/` |
+| `update skills` | Git-pull AI skills in `~/.claude/skills/` + `~/.codex/skills/`, and refresh outdated Claude Code plugins |
 | `update packages` | macOS: brew, mas, macOS updates. Linux: snap, flatpak (apt/dnf/pacman as manual sudo steps). All: npm, pipx, gems, uv, bun |
-| `update all` | Skills first, then packages — full sweep, single approval gate |
+| `update all` | Skills + plugins first, then packages — full sweep, single approval gate |
 
 On macOS the flow flags cross-manager risks before you approve (e.g. `brew:node` upgrade ⇒ npm globals may need rebuild; `brew:openssl` upgrade ⇒ ruby native gems like `nokogiri` need recompile; system Ruby 2.x ⇒ `gem update` auto-uses `--user-install`), and post-flight runs `brew doctor` + PATH-shadow re-check. On Linux/WSL2 the same gate surfaces apt/dnf/pacman upgrades as **manual `sudo …` steps** (never auto-run — upkeep never uses sudo) while snap, flatpak, and the language managers are auto-applied; WSL2 Windows managers are audit-only.
+
+**Claude Code plugins (v1.7).** upkeep flags only the plugins that are genuinely behind — it compares each plugin's active version in `installed_plugins.json` against the version its marketplace declares, so you no longer get told to "update all N plugins" on every run. By default it reads the marketplace clone already on disk; add **`--fresh`** (e.g. `/upkeep:update all --fresh`) to git-fetch each marketplace first and compare against its upstream manifest, catching updates the local clone hasn't pulled yet. During apply it refreshes the marketplace git source (`--ff-only`, fenced to `~/.claude/plugins/marketplaces/*`). The actual cache reinstall has **no headless path** — completing a plugin update needs `/plugin update <name>` plus a Claude Code relaunch — so upkeep hands that off as a manual step with the exact commands, and never rewrites Claude Code's plugin state itself.
+
+**Risk handling (v1.7).** When the plan carries flagged compatibility risks, the gate offers **"apply all except flagged risks"** (drops the categories a warning implicates) as the default, alongside an "apply *including* flagged risks" path guarded by an explicit confirmation. A standing disclaimer reminds you the risk matrix is **not exhaustive** — an unflagged upgrade can still break something.
 
 Nothing applies without your approval. `softwareupdate` (macOS system updates) always gets an extra restart warning, even under "Apply all".
 
@@ -249,10 +253,10 @@ Four sub-modes:
 
 | Mode | What it does |
 |------|--------------|
-| `update audit` | Check what's outdated across skills + packages — no changes |
-| `update skills` | Git-pull all AI skills (upkeep, gstack, any others in `~/.claude/skills/`) |
+| `update audit` | Check what's outdated across skills, plugins + packages — no changes |
+| `update skills` | Git-pull all AI skills (upkeep, gstack, any others in `~/.claude/skills/`) + refresh outdated Claude Code plugins |
 | `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, bun, deno, mise, uv, mas, macOS updates |
-| `update all` | Skills first, then packages — full sweep |
+| `update all` | Skills + plugins first, then packages — full sweep |
 
 Everything is confirmation-gated. Nothing applies without your approval. Destructive or disruptive operations (macOS system updates, brew toolchain changes) get extra warnings.
 
@@ -416,7 +420,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**73 tests** across 1 automated test file (`tests/test-update-skill.sh`),
+**103 tests** across 1 automated test file (`tests/test-update-skill.sh`),
 covering the `update` skill's shell orchestrator. Run with
 `bash tests/test-update-skill.sh` (also passes under `/bin/bash`, macOS 3.2.57).
 The cleanup skills (`cleandeep`/`cleanquick`/`audit`/`upkeep`) remain
@@ -433,6 +437,7 @@ prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
 | `update.sh apply` contract | ~5 | Empty/`--drop` CSV safety, report JSON shape, plan-file cleanup |
 | `jq`-missing contract | 2 | `{"error":…}` to stdout when `jq` absent |
 | Linux/WSL2 fast path (v1.6) | ~29 | OS-detection seam, `discover_native_linux` shape, dnf exit-100 + Obsoleting-section exclusion, apt from-less line parsing, flatpak app-ID column, WSL2 `winget.exe` detection, sudo boundary (apt → manual steps not ordered_groups), snap/flatpak auto-apply, allowlist rejection of sudo managers, Linux diagnose patterns, macOS regression guard |
+| Plugin updates + risk gate (v1.7) | 30 | Outdated-plugin detection (installed_plugins.json vs marketplace version: outdated flagged, current/absent skipped, real-version-vs-marketplace-"unknown" not mis-flagged, version resolved from plugin's own plugin.json when the marketplace omits it incl. `source` subdir + `./` root, `..`/absolute `source` path-traversal blocked, version surfacing, `plugins_outdated` count); `--fresh` upstream-manifest fetch (stale local clone hides update without it, detected with it); `risk_categories` computation (cause→category mapping, empty-when-no-warning, intersection-with-groups guard); plan-contract field/type guards; plan-output surfacing; packages-mode plugin-group exclusion; apply-phase marketplace pull (ff-only success + HEAD advance, path-containment refusal, `--drop=plugins` skip-but-still-hand-off) |
 
 ### Skill-level coverage (live invocation)
 
@@ -450,6 +455,7 @@ prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
 | `/upkeep:update` (fast discovery, v1.4) | `scripts/discover.sh` four-section parallel discovery (~15s vs v1.3's ~90s), `scripts/synthesize.sh` deterministic plan synthesis (~300ms), `brew update` inside discovery for accurate outdated lists, enrichment gating on majors / medium+ compat edges only |
 | `/upkeep:update` (single-shot, v1.5) | `scripts/update.sh plan` + `scripts/update.sh apply` two-turn flow, `brew update` TTL cache (`formula.jws.json` mtime, 1h default), `scripts/diagnose.sh` 8-pattern failure table replacing LLM agent, opt-in `--advisor` post-gate enrichment, canonical-path skill containment, TOCTOU-safe plan-file write (`mktemp -d` + atomic rename), `DATA_DIR` mode 0700, TSV-row validation in `diagnose.sh`, JSON-to-stdout error contract on missing `jq`, bash 3.2 compatibility (no `declare -A`) |
 | `/upkeep:update` (Linux/WSL2 port, v1.6) | One OS-aware orchestrator for macOS/Linux/WSL2, `discover_native_linux` (apt/dnf/pacman audit + snap/flatpak + WSL2 Windows managers), sudo boundary (apt/dnf/pacman excluded from dispatcher allowlist → manual steps only), snap/flatpak auto-apply, `os.type`-branched synthesizer, 4 new Linux diagnose patterns, `UPKEEP_OS_OVERRIDE`/`UPKEEP_PKG_MGR_OVERRIDE` test seam, legacy v1.0 sequential flow retired |
+| `/upkeep:update` (plugins + risk gate, v1.7) | Claude Code plugin outdated detection (`installed_plugins.json` vs marketplace `marketplace.json` version) — only genuinely-behind plugins flagged; marketplace git source refreshed `--ff-only` (canonical-path containment to `~/.claude/plugins/marketplaces/*`, deduped, dirty/detached skipped); cache reinstall handed off as a `/plugin update` + relaunch manual step (no headless path — never rewrites `installed_plugins.json`); "apply all except flagged risks" gate option + explicit confirmation for applying flagged risks; standing compatibility disclaimer; `UPKEEP_INSTALLED_PLUGINS`/`UPKEEP_PLUGIN_MARKETPLACES` test seams |
 
 ---
 

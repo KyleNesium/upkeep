@@ -1,0 +1,87 @@
+name: Release on version bump
+
+# Auto-tags and publishes a GitHub release whenever VERSION changes on main.
+# This exists because v1.7.0 was merged but never released — releasing was a
+# manual step that got skipped. Now a merged VERSION bump ships the release
+# itself, with notes pulled from the matching CHANGELOG.md section.
+#
+# Idempotent: if the tag already exists, the job is a no-op (so a manual
+# `git tag`/`gh release create` for the same version is never clobbered).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: ver
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "$version" ]; then
+            echo "::error::VERSION file is empty"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version"   >> "$GITHUB_OUTPUT"
+
+      - name: Skip if tag already exists
+        id: exists
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null \
+             || git ls-remote --exit-code --tags origin "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.ver.outputs.tag }} already exists — nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract changelog section
+        if: steps.exists.outputs.skip == 'false'
+        id: notes
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          # Pull lines between "## [X.Y.Z]" and the next "## [" heading.
+          section="$(awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md)"
+          if [ -z "$(printf '%s' "$section" | tr -d '[:space:]')" ]; then
+            echo "::warning::No CHANGELOG section for $version — releasing with a placeholder body."
+            section="Release v$version. See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)."
+          fi
+          {
+            echo "body<<__RELEASE_NOTES__"
+            printf '%s\n' "$section"
+            echo ""
+            echo "**Full changelog:** https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md"
+            echo "__RELEASE_NOTES__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and release
+        if: steps.exists.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          SHA: ${{ github.sha }}
+          NOTES: ${{ steps.notes.outputs.body }}
+        run: |
+          git tag -a "$TAG" -m "$TAG" "$SHA"
+          git push origin "$TAG"
+          printf '%s' "$NOTES" > /tmp/notes.md
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/notes.md \
+            --verify-tag

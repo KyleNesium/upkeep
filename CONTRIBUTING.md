@@ -59,3 +59,24 @@ Reference tables (cache paths, system dirs, CLI dotdirs) live in
 
 Follow the existing `<type>: <description>` format. Types: `feat`, `fix`,
 `docs`, `chore`. Keep the description under 72 characters.
+
+## Releasing
+
+**Releases are automated — do not tag or `gh release create` by hand.** A
+shippable PR carries the release in its own diff:
+
+1. Bump `VERSION` to the new `X.Y.Z`.
+2. Add a matching `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`.
+3. Bump the version in `.claude-plugin/marketplace.json` and
+   `upkeep/.claude-plugin/plugin.json` to match.
+
+When the PR merges to `main`, the `.github/workflows/release.yml` workflow
+sees the changed `VERSION`, creates the `vX.Y.Z` tag, and publishes a GitHub
+release whose notes are the matching `CHANGELOG.md` section. No manual step.
+
+- The CHANGELOG heading **must** be exactly `## [X.Y.Z]` (the workflow greps
+  for it). A missing section ships a placeholder body and logs a warning.
+- The workflow is **idempotent** — if `vX.Y.Z` already exists it no-ops, so a
+  one-off manual tag never gets clobbered.
+- Forgot to bump `VERSION` in the feature PR? Merge a follow-up that only
+  bumps `VERSION` + `CHANGELOG`; the release fires on that merge.

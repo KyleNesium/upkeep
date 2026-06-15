@@ -78,10 +78,10 @@ jobs:
           SHA: ${{ github.sha }}
           NOTES: ${{ steps.notes.outputs.body }}
         run: |
-          git tag -a "$TAG" -m "$TAG" "$SHA"
-          git push origin "$TAG"
+          # Let gh create the tag at $SHA via the API — no local git committer
+          # identity required (a bare runner has none, which broke the first run).
           printf '%s' "$NOTES" > /tmp/notes.md
           gh release create "$TAG" \
+            --target "$SHA" \
             --title "$TAG" \
-            --notes-file /tmp/notes.md \
-            --verify-tag
+            --notes-file /tmp/notes.md

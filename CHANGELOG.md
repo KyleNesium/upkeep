@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-06-15
+
+### CI — automated releases so a version can't ship unreleased
+
+v1.7.0 was merged to `main` but never tagged or published — the latest GitHub
+release sat at v1.6.0 while `main` was a version ahead. Releasing was a manual
+`git tag` + `gh release create` step with nothing enforcing it. This release
+removes the manual step.
+
+- **`.github/workflows/release.yml`.** On a push to `main` that changes
+  `VERSION`, the workflow creates the `vX.Y.Z` tag and publishes a GitHub
+  release whose notes are the matching `## [X.Y.Z]` section of this changelog.
+  Idempotent — it no-ops if the tag already exists, so a one-off manual tag (or
+  the back-filled v1.7.0) is never clobbered. A missing changelog section ships
+  a placeholder body and a warning rather than failing the run. Release notes
+  are passed through the job environment, not inline expression interpolation,
+  so special characters in the changelog can't break or inject into the shell.
+- **`CONTRIBUTING.md`.** New "Releasing" section: bump `VERSION` + add the
+  `CHANGELOG.md` section (+ the two manifests) in the feature PR; merging fires
+  the release. Documents the exact-heading requirement, the idempotency
+  guarantee, and the don't-tag-by-hand rule.
+- The v1.7.0 release was back-filled manually before this automation landed.
+
+No skill, script, or user-facing behavior changed in this release.
+
 ## [1.7.0] - 2026-06-01
 
 ### Added — real Claude Code plugin handling + risk-exclusion gate

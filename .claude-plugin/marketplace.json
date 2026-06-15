@@ -10,7 +10,7 @@
       "name": "upkeep",
       "source": "./upkeep",
       "description": "Cross-platform system cleanup and updater for macOS 14+, Linux (Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Discovery-based disk audit catches orphaned app data and stale caches a hardcoded list would miss. Update mode collapses brew, npm globals, pipx, gems, uv, bun, mas, macOS updates, snap, flatpak, AI skills, and Claude Code plugins into one approval gate; v1.7 adds real plugin handling (only genuinely-outdated plugins flagged via installed_plugins.json vs marketplace version; marketplace source refreshed ff-only; the cache reinstall handed off as a /plugin update + relaunch manual step since it has no headless path), an 'apply all except flagged risks' gate option, and a standing compatibility disclaimer. apt/dnf/pacman upgrades are surfaced as manual sudo steps (never run — upkeep never uses sudo); WSL2 Windows package managers are audit-only. All v1.2-v1.6 security invariants preserved: hardcoded dispatcher allowlist (apt/dnf/pacman excluded by design), discovery JSON sanitization, exact-match remote URL validation, trust-on-first-use for skill repos, plan/apply turn separation, canonical-path containment for skill + plugin-marketplace pulls, TOCTOU-safe plan-file write, and a deterministic pattern-table failure diagnoser covering macOS and Linux failures. Five entry points: /upkeep, /upkeep:audit, /upkeep:cleandeep, /upkeep:cleanquick, /upkeep:update.",
-      "version": "1.7.0",
+      "version": "1.7.1",
       "category": "developer tools",
       "keywords": [
         "macos",

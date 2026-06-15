@@ -113,6 +113,56 @@ OS_TYPE=""; UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt _detect_os
 _test "OS override seam (linux/apt)" "$([ "$OS_TYPE" = "linux" ] && [ "$PKG_MGR" = "apt" ] && echo true || echo false)" "$OS_TYPE/$PKG_MGR" "linux/apt"
 unset UPKEEP_OS_OVERRIDE UPKEEP_PKG_MGR_OVERRIDE
 
+echo "── Discover engine (clean.sh as subprocess) ──"
+CLEAN="$SCRIPTS/clean.sh"
+DHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-dtest.XXXXXX")
+mkdir -p "$DHOME/Library/Caches/com.foo" "$DHOME/.Trash/junk"
+mkdir -p "$DHOME/Library/Application Support/Slack/Cache"
+mkdir -p "$DHOME/Library/Application Support/Claude/Cache"   # must be excluded
+mkdir -p "$DHOME/workspace/proj/node_modules/pkg"
+# a first-level cache dir with a 220-char name so its emitted path exceeds
+# 256 chars — proves the path field is carried full-fidelity, not truncated (C2)
+DLONG=$(printf 'k%.0s' $(seq 1 220))
+mkdir -p "$DHOME/Library/Caches/$DLONG"
+
+_discover() { HOME="$DHOME" UPKEEP_DATA_DIR="$DHOME/data" /bin/bash "$CLEAN" discover "$1" 2>/dev/null; }
+
+AUDIT_JSON=$(_discover audit)
+NA=$(printf '%s' "$AUDIT_JSON" | jq -r '.needs_approval')
+_test "discover audit → needs_approval=false" "$([ "$NA" = "false" ] && echo true || echo false)" "$NA" "false"
+
+QUICK_JSON=$(_discover quick)
+NA=$(printf '%s' "$QUICK_JSON" | jq -r '.needs_approval')
+_test "discover quick → needs_approval=true" "$([ "$NA" = "true" ] && echo true || echo false)" "$NA" "true"
+
+MF=$(printf '%s' "$QUICK_JSON" | jq -r '.manifest_file')
+_test "discover writes a manifest file" "$([ -f "$MF" ] && echo true || echo false)" "$MF" "exists"
+CA=$(jq -r '.created_at // empty' "$MF" 2>/dev/null)
+_test "manifest carries created_at (for A3 TTL)" "$([ -n "$CA" ] && echo true || echo false)" "$CA" "non-empty"
+
+BA_SAFETY=$(jq -r '[.items[]|select(.category=="build_artifacts")|.safety]|unique|join(",")' "$MF" 2>/dev/null)
+_test "quick: build_artifacts safety=report_only" "$([ "$BA_SAFETY" = "report_only" ] && echo true || echo false)" "$BA_SAFETY" "report_only"
+
+DEEP_MF=$(_discover deep | jq -r '.manifest_file')
+BA_SAFETY=$(jq -r '[.items[]|select(.category=="build_artifacts")|.safety]|unique|join(",")' "$DEEP_MF" 2>/dev/null)
+_test "deep: build_artifacts safety=safe" "$([ "$BA_SAFETY" = "safe" ] && echo true || echo false)" "$BA_SAFETY" "safe"
+
+# Claude App Support cache must NOT appear as an electron item
+CLAUDE_HIT=$(jq -r '[.items[]|select(.path|test("Application Support/Claude"))]|length' "$MF" 2>/dev/null)
+_test "Claude cache excluded from electron scan" "$([ "$CLAUDE_HIT" = "0" ] && echo true || echo false)" "$CLAUDE_HIT" "0"
+
+# C2: a >256-char path is carried at full fidelity in the manifest
+LONGPATH_OK=$(jq -r '[.items[]|select((.path|length)>256)]|length>=1' "$DEEP_MF" 2>/dev/null)
+_test "C2: >256-char path preserved in manifest" "$([ "$LONGPATH_OK" = "true" ] && echo true || echo false)" "$LONGPATH_OK" "true"
+
+# empty tree → no approval, zero items
+EHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-empty.XXXXXX")
+EMPTY_JSON=$(HOME="$EHOME" UPKEEP_DATA_DIR="$EHOME/data" /bin/bash "$CLEAN" discover quick 2>/dev/null)
+EC=$(printf '%s' "$EMPTY_JSON" | jq -r '.item_count')
+ENA=$(printf '%s' "$EMPTY_JSON" | jq -r '.needs_approval')
+_test "empty tree → 0 items, no approval" "$([ "$EC" = "0" ] && [ "$ENA" = "false" ] && echo true || echo false)" "items=$EC approval=$ENA" "0/false"
+rm -rf -- "$DHOME" "$EHOME"
+
 echo ""
 echo "════════════════════════════════════════"
 printf "PASS: %d   FAIL: %d\n" "$PASS" "$FAIL"

@@ -302,6 +302,16 @@ The defining constraint is the **sudo boundary**: apt/dnf/pacman require root an
 
 Linux/WSL2 paths are contract-tested via a `UPKEEP_OS_OVERRIDE` / `UPKEEP_PKG_MGR_OVERRIDE` seam plus PATH-stubbed fake package managers (the dev box is macOS); a pre-merge adversarial parser review fixed four real bugs in the package-manager output parsers. Live validation against a real Linux/WSL2 box is the remaining follow-up.
 
+### v1.7: Claude Code plugin updates + risk-exclusion gate
+
+Through v1.6, `/upkeep:update` listed **every** installed plugin as a `/plugin update` manual step on every run — whether or not it was behind. v1.7 makes plugins first-class: discovery reads `installed_plugins.json` and compares each `<plugin>@<marketplace>`'s active version against the version its marketplace's `marketplace.json` declares (`sort -V`), so **only genuinely-outdated plugins are flagged**. Add **`--fresh`** (e.g. `/upkeep:update all --fresh`) to git-fetch each marketplace first and compare against its upstream manifest, catching updates the local clone hasn't pulled yet. Apply refreshes the marketplace git source `--ff-only`, canonical-path-fenced to `~/.claude/plugins/marketplaces/*`. The cache reinstall has **no headless path** — `/plugin update <name>` is interactive-only and needs a Claude Code relaunch to take effect — so upkeep hands that off as a manual step and never rewrites `installed_plugins.json` itself.
+
+The approval gate gains an **"apply all except flagged risks"** default when the plan carries compatibility warnings (it drops the categories a warning implicates), alongside an "apply *including* flagged risks" path guarded by an explicit confirmation, plus a standing disclaimer that the compat matrix is **not exhaustive** — an unflagged upgrade can still break something. New test seams `UPKEEP_INSTALLED_PLUGINS` / `UPKEEP_PLUGIN_MARKETPLACES`; 30 new tests bring the suite to 103.
+
+### v1.7.1: automated releases
+
+v1.7.0 merged to `main` but sat unreleased — the GitHub release lagged a version behind because tagging was a manual `git tag` + `gh release create` step with nothing enforcing it. `.github/workflows/release.yml` now fires on any push to `main` that changes `VERSION`: it creates the `vX.Y.Z` tag and publishes a release whose notes are the matching `## [X.Y.Z]` section of the changelog. It is idempotent (no-ops if the tag already exists, so a one-off manual tag is never clobbered) and ships a placeholder body rather than failing on a missing changelog section. No skill, script, or user-facing behavior changed.
+
 When you run `/upkeep` it checks once per day whether a newer version is available. Both install layouts are supported: git-cloned skills compare `HEAD` against `origin/main`, and plugin-managed installs compare the installed `plugin.json` against the marketplace clone. If the check finds an update, you'll be asked whether to update first or continue with the current version. The narrow entrypoints (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`) skip the check — re-enter via `/upkeep` if you want the prompt.
 
 To disable the daily check entirely: `export UPKEEP_SKIP_UPDATE_CHECK=1`

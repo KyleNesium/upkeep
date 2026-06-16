@@ -120,6 +120,9 @@ mkdir -p "$DHOME/Library/Caches/com.foo" "$DHOME/.Trash/junk"
 mkdir -p "$DHOME/Library/Application Support/Slack/Cache"
 mkdir -p "$DHOME/Library/Application Support/Claude/Cache"   # must be excluded
 mkdir -p "$DHOME/workspace/proj/node_modules/pkg"
+mkdir -p "$DHOME/Library/Developer/Xcode/DerivedData/App-abc"
+mkdir -p "$DHOME/Library/Application Support/MobileSync/Backup/00008110-DEAD"
+mkdir -p "$DHOME/Downloads"; : > "$DHOME/Downloads/installer.dmg"
 # a first-level cache dir with a 220-char name so its emitted path exceeds
 # 256 chars — proves the path field is carried full-fidelity, not truncated (C2)
 DLONG=$(printf 'k%.0s' $(seq 1 220))
@@ -154,6 +157,17 @@ _test "Claude cache excluded from electron scan" "$([ "$CLAUDE_HIT" = "0" ] && e
 # C2: a >256-char path is carried at full fidelity in the manifest
 LONGPATH_OK=$(jq -r '[.items[]|select((.path|length)>256)]|length>=1' "$DEEP_MF" 2>/dev/null)
 _test "C2: >256-char path preserved in manifest" "$([ "$LONGPATH_OK" = "true" ] && echo true || echo false)" "$LONGPATH_OK" "true"
+
+# new macOS sections appear in deep with the right action/safety
+XC=$(jq -r '[.items[]|select(.category=="xcode" and .action=="rm" and .safety=="safe")]|length' "$DEEP_MF" 2>/dev/null)
+_test "deep: xcode DerivedData (rm/safe)" "$([ "$XC" -ge 1 ] 2>/dev/null && echo true || echo false)" "$XC" ">=1"
+IOS=$(jq -r '[.items[]|select(.category=="ios_backup" and .action=="mobilesync_rm")]|length' "$DEEP_MF" 2>/dev/null)
+_test "deep: ios_backup (mobilesync_rm/warn)" "$([ "$IOS" -ge 1 ] 2>/dev/null && echo true || echo false)" "$IOS" ">=1"
+LF=$(jq -r '[.items[]|select(.category=="large_file")]|length' "$DEEP_MF" 2>/dev/null)
+_test "deep: large_file (.dmg) discovered" "$([ "$LF" -ge 1 ] 2>/dev/null && echo true || echo false)" "$LF" ">=1"
+# new sections must NOT appear in quick (quick is the lightweight subset)
+QXC=$(jq -r '[.items[]|select(.category=="xcode" or .category=="ios_backup")]|length' "$MF" 2>/dev/null)
+_test "quick excludes xcode/ios_backup" "$([ "$QXC" = "0" ] && echo true || echo false)" "$QXC" "0"
 
 # empty tree → no approval, zero items
 EHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-empty.XXXXXX")
@@ -227,6 +241,16 @@ rm -rf "$AHOME/Library/Caches/com.foo"
 ln -s "$AHOME/Library/Logs/keep" "$AHOME/Library/Caches/com.foo"   # com.foo now a symlink
 TS=$(_apply_run "$MF" | jq -r '[.skipped[]|select(.reason=="type-swap")]|length')
 _test "type-swap skipped at apply" "$([ "$TS" -ge 1 ] 2>/dev/null && echo true || echo false)" "$TS" ">=1"
+rm -rf -- "$AHOME"
+
+# 7. mobilesync_rm removes a single iOS backup dir (per-backup shape)
+AHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-apply.XXXXXX")
+mkdir -p "$AHOME/Library/Application Support/MobileSync/Backup/00008110-DEAD/info"
+MF=$(_apply_disc deep)
+_apply_run "$MF" >/dev/null
+BGONE=$([ ! -d "$AHOME/Library/Application Support/MobileSync/Backup/00008110-DEAD" ] && echo true || echo false)
+BKEEP=$([ -d "$AHOME/Library/Application Support/MobileSync/Backup" ] && echo true || echo false)
+_test "mobilesync_rm removes the backup, keeps Backup/" "$([ "$BGONE" = true ] && [ "$BKEEP" = true ] && echo true || echo false)" "gone=$BGONE keepparent=$BKEEP" "true/true"
 rm -rf -- "$AHOME"
 
 echo ""

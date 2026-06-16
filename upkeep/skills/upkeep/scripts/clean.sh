@@ -172,15 +172,70 @@ $listing
 EOF
 }
 
+scan_xcode() {
+  [ "$OS_TYPE" = "macos" ] || return 0
+  local dd="$HOME/Library/Developer/Xcode/DerivedData"
+  [ -d "$dd" ] && _emit xcode "$dd" rm safe   # DerivedData: always rebuildable
+  local ar="$HOME/Library/Developer/Xcode/Archives"
+  # Archives: keep-able (signed app archives) — warn, never auto-safe.
+  [ -d "$ar" ] && _emit xcode "$ar" rm warn "xcode-archives: may hold app archives you want to keep"
+}
+
+scan_ios_backups() {
+  [ "$OS_TYPE" = "macos" ] || return 0
+  local d
+  for d in "$HOME/Library/Application Support/MobileSync/Backup"/*/; do
+    [ -d "$d" ] || continue
+    _emit ios_backup "${d%/}" mobilesync_rm warn "ios-backup: local device backup — losing it loses your only backup if you don't use iCloud"
+  done
+}
+
+scan_large_files() {
+  [ "$OS_TYPE" = "macos" ] || return 0
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    _emit large_file "$f" rm warn "large-file: verify you no longer need this installer/archive"
+  done <<EOF
+$(find "$HOME/Downloads" "$HOME/Desktop" -maxdepth 3 \
+    \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) \
+    -not -path "*/.Trash/*" -type f 2>/dev/null)
+EOF
+}
+
+scan_launchagents() {
+  [ "$OS_TYPE" = "macos" ] || return 0
+  [ -d "$HOME/Library/LaunchAgents" ] || return 0
+  local brew_formula plist label tgt
+  brew_formula=$(brew list --formula 2>/dev/null)
+  for plist in "$HOME/Library/LaunchAgents"/*.plist; do
+    [ -f "$plist" ] || continue
+    label=$(basename "$plist" .plist)
+    # homebrew.mxcl.* are brew-managed — never offer for removal (validator
+    # also refuses them as a second line of defense).
+    case "$label" in homebrew.mxcl.*) continue ;; esac
+    # Only flag agents whose program target is missing (orphaned).
+    tgt=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$plist" 2>/dev/null \
+          || /usr/libexec/PlistBuddy -c "Print :Program" "$plist" 2>/dev/null || echo "")
+    if [ -n "$tgt" ] && [ ! -e "$tgt" ]; then
+      _emit launchagent "$plist" launchctl_rm warn "orphaned-agent: program target missing ($tgt)"
+    fi
+  done
+}
+
 # ── mode → section list ──────────────────────────────────────────
 run_sections() {
   case "$MODE" in
     quick)
       scan_dev_caches; scan_electron; scan_trash; scan_build_artifacts ;;
     deep)
-      scan_dev_caches; scan_electron; scan_trash; scan_saved_state; scan_build_artifacts ;;
+      scan_dev_caches; scan_electron; scan_trash; scan_saved_state
+      scan_xcode; scan_ios_backups; scan_large_files; scan_launchagents
+      scan_build_artifacts ;;
     audit)
-      scan_dev_caches; scan_electron; scan_trash; scan_saved_state; scan_build_artifacts ;;
+      scan_dev_caches; scan_electron; scan_trash; scan_saved_state
+      scan_xcode; scan_ios_backups; scan_large_files; scan_launchagents
+      scan_build_artifacts ;;
     *) _die "unknown mode: $MODE (want audit|quick|deep)" ;;
   esac
 }
@@ -344,8 +399,16 @@ cmd_apply() {
 _clean_dispatch() {
   local action="$1" canon="$2"
   case "$action" in
-    rm|electron_cache) rm -rf -- "$canon" 2>/dev/null ;;
-    *) return 1 ;;   # non-path actions (brew/docker/launchctl/...) land in later commits
+    rm|electron_cache|mobilesync_rm) rm -rf -- "$canon" 2>/dev/null ;;
+    launchctl_rm)
+      # unload the agent before deleting its plist (always — leaving a loaded
+      # agent whose plist is gone wedges launchd). bootout is best-effort; the
+      # plist removal is the actual reclaim.
+      local label; label=$(basename "$canon" .plist)
+      launchctl bootout "gui/$(id -u)/$label" 2>/dev/null \
+        || launchctl bootout "gui/$(id -u)" -- "$canon" 2>/dev/null || true
+      rm -f -- "$canon" 2>/dev/null ;;
+    *) return 1 ;;   # brew/docker/pipx (non-path, stateful) land with their scans
   esac
 }
 

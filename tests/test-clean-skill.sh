@@ -76,6 +76,10 @@ ln -s "$HOME/.claude" "$HOME/Library/Caches/evil-link"
 . "$SCRIPTS/lib/common.sh"
 # shellcheck source=../upkeep/skills/upkeep/scripts/clean-validate.sh
 . "$SCRIPTS/clean-validate.sh"
+# clean.sh guards its CLI behind a sourced-check, so sourcing it here just
+# exposes its functions (e.g. _clean_dispatch_nonpath) for unit tests.
+# shellcheck source=../upkeep/skills/upkeep/scripts/clean.sh
+. "$SCRIPTS/clean.sh"
 
 echo "── Path validator: legit cases (allowed) ──"
 _assert_verdict "legit cache dir"            "$HOME/Library/Caches/com.example.foo" rm OK
@@ -252,6 +256,50 @@ BGONE=$([ ! -d "$AHOME/Library/Application Support/MobileSync/Backup/00008110-DE
 BKEEP=$([ -d "$AHOME/Library/Application Support/MobileSync/Backup" ] && echo true || echo false)
 _test "mobilesync_rm removes the backup, keeps Backup/" "$([ "$BGONE" = true ] && [ "$BKEEP" = true ] && echo true || echo false)" "gone=$BGONE keepparent=$BKEEP" "true/true"
 rm -rf -- "$AHOME"
+
+echo "── Non-path actions (brew/docker, PATH-stubbed) ──"
+STUB=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-stub.XXXXXX")
+MARKER="$STUB/marker"
+cat > "$STUB/brew" <<'SH'
+#!/bin/sh
+case "$*" in
+  "cleanup --dry-run")    echo "Would remove: /old/cache" ;;
+  "autoremove --dry-run") echo "abc" ;;
+  "cleanup")              echo "brew-cleanup" >> "$CLEAN_TEST_MARKER" ;;
+  "autoremove")           echo "brew-autoremove" >> "$CLEAN_TEST_MARKER" ;;
+esac
+exit 0
+SH
+cat > "$STUB/docker" <<'SH'
+#!/bin/sh
+case "$*" in
+  "system df")      exit 0 ;;
+  "system prune -f") echo "docker-prune" >> "$CLEAN_TEST_MARKER"; exit 0 ;;
+esac
+exit 0
+SH
+chmod +x "$STUB/brew" "$STUB/docker"
+
+NPHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-np.XXXXXX")
+_np_disc() { HOME="$NPHOME" UPKEEP_DATA_DIR="$NPHOME/data" PATH="$STUB:$PATH" CLEAN_TEST_MARKER="$MARKER" /bin/bash "$CLEAN" discover deep 2>/dev/null; }
+NP_MF=$(_np_disc | jq -r '.manifest_file')
+BC=$(jq -r '[.items[]|select(.action=="brew_cleanup")]|length' "$NP_MF" 2>/dev/null)
+_test "discover: brew_cleanup item (stub)" "$([ "$BC" -ge 1 ] 2>/dev/null && echo true || echo false)" "$BC" ">=1"
+DP=$(jq -r '[.items[]|select(.action=="docker_prune")]|length' "$NP_MF" 2>/dev/null)
+_test "discover: docker_prune item (stub)" "$([ "$DP" -ge 1 ] 2>/dev/null && echo true || echo false)" "$DP" ">=1"
+
+# apply: brew_cleanup must invoke `brew cleanup` (recorded by the stub)
+BC_ID=$(jq -r '.items[]|select(.action=="brew_cleanup")|.id' "$NP_MF" 2>/dev/null | head -1)
+: > "$MARKER"
+HOME="$NPHOME" UPKEEP_DATA_DIR="$NPHOME/data" PATH="$STUB:$PATH" CLEAN_TEST_MARKER="$MARKER" \
+  /bin/bash "$CLEAN" apply "$NP_MF" --items="$BC_ID" >/dev/null 2>&1
+INVOKED=$(grep -c 'brew-cleanup' "$MARKER" 2>/dev/null); INVOKED=${INVOKED:-0}
+_test "apply: brew_cleanup invokes brew cleanup" "$([ "$INVOKED" -ge 1 ] 2>/dev/null && echo true || echo false)" "$INVOKED" ">=1"
+
+# pipx_uninstall rejects a tool name with shell metachars (identifier validation)
+BADREJECT=$(_clean_dispatch_nonpath pipx_uninstall 'evil; rm -rf /' && echo allowed || echo rejected)
+_test "non-path: pipx rejects metachar tool name" "$([ "$BADREJECT" = "rejected" ] && echo true || echo false)" "$BADREJECT" "rejected"
+rm -rf -- "$STUB" "$NPHOME"
 
 echo ""
 echo "════════════════════════════════════════"

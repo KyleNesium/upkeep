@@ -69,6 +69,24 @@ _emit() {
       warn_reason:(if $warn=="" then null else $warn end),
       app_name:(if $app=="" then null else $app end)}' >> "$ITEMS_FILE"
 }
+# Non-path items (brew/docker/pipx): stateful operations with no filesystem
+# target, so the path validator does not apply (codex #6). path holds a
+# synthetic identifier; size/mtime are 0; apply uses _clean_dispatch_nonpath.
+# _emit_nonpath <category> <id_label> <action> <safety> [warn_reason]
+_emit_nonpath() {
+  local category="$1" id_label="$2" action="$3" safety="$4" warn="${5:-}"
+  _ITEM_N=$((_ITEM_N + 1))
+  local display; display=$(_sanitize_text "$id_label")
+  jq -nc \
+    --arg id "${category}-${_ITEM_N}" --arg category "$category" \
+    --arg path "$id_label" --arg display "$display" \
+    --argjson size 0 --argjson mtime 0 --argjson is_symlink false \
+    --arg action "$action" --arg safety "$safety" --arg warn "$warn" --arg app "" \
+    '{id:$id,category:$category,path:$path,display:$display,size_bytes:$size,
+      mtime:$mtime,is_symlink:$is_symlink,action:$action,safety:$safety,
+      warn_reason:(if $warn=="" then null else $warn end),
+      app_name:(if $app=="" then null else $app end)}' >> "$ITEMS_FILE"
+}
 _skip_protected() { printf '%s\n' "$1" >> "$SKIP_FILE"; }
 _warn()          { printf '%s\n' "$1" >> "$WARN_FILE"; }
 _manual()        { printf '%s\n' "$1" >> "$MANUAL_FILE"; }
@@ -203,6 +221,25 @@ $(find "$HOME/Downloads" "$HOME/Desktop" -maxdepth 3 \
 EOF
 }
 
+scan_brew() {
+  [ "$OS_TYPE" = "macos" ] || return 0
+  command -v brew >/dev/null 2>&1 || return 0
+  # stale downloads / old versions — safe to reclaim
+  if [ -n "$(brew cleanup --dry-run 2>/dev/null)" ]; then
+    _emit_nonpath brew "brew:cleanup" brew_cleanup safe
+  fi
+  # orphan dependencies — warn (review the list before removing)
+  if brew autoremove --dry-run 2>/dev/null | grep -q '^[a-z]'; then
+    _emit_nonpath brew "brew:autoremove" brew_autoremove warn "brew-autoremove: removes orphan deps — review before applying"
+  fi
+}
+
+scan_docker() {
+  command -v docker >/dev/null 2>&1 || return 0
+  docker system df >/dev/null 2>&1 || return 0   # daemon must be up
+  _emit_nonpath docker "docker:prune" docker_prune warn "docker-prune: removes dangling images + stopped containers"
+}
+
 scan_launchagents() {
   [ "$OS_TYPE" = "macos" ] || return 0
   [ -d "$HOME/Library/LaunchAgents" ] || return 0
@@ -230,12 +267,12 @@ run_sections() {
       scan_dev_caches; scan_electron; scan_trash; scan_build_artifacts ;;
     deep)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
-      scan_xcode; scan_ios_backups; scan_large_files; scan_launchagents
-      scan_build_artifacts ;;
+      scan_brew; scan_docker; scan_xcode; scan_ios_backups
+      scan_large_files; scan_launchagents; scan_build_artifacts ;;
     audit)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
-      scan_xcode; scan_ios_backups; scan_large_files; scan_launchagents
-      scan_build_artifacts ;;
+      scan_brew; scan_docker; scan_xcode; scan_ios_backups
+      scan_large_files; scan_launchagents; scan_build_artifacts ;;
     *) _die "unknown mode: $MODE (want audit|quick|deep)" ;;
   esac
 }
@@ -340,7 +377,17 @@ cmd_apply() {
     if _is_dropped "$category"; then
       printf '%s\treason=dropped-category\n' "$id" >> "$SKIPPED"; continue
     fi
-    # re-validate through the security boundary
+    # Non-path actions (brew/docker/pipx): no filesystem target → skip the path
+    # validator + re-stat; validate the identifier and dispatch separately.
+    if ! _is_path_action "$action"; then
+      if _clean_dispatch_nonpath "$action" "$path"; then
+        printf '%s\t0\n' "$id" >> "$APPLIED"
+      else
+        printf '%s\treason=command-failed-or-invalid\n' "$id" >> "$FAILED"
+      fi
+      continue
+    fi
+    # re-validate through the security boundary (path-driven actions)
     verdict=$(_clean_validate "$path" "$action")
     if [ "${verdict%% *}" != "OK" ]; then
       printf '%s\treason=%s\n' "$id" "$(printf '%s' "$verdict" | awk '{print $2}')" >> "$SKIPPED"; continue
@@ -395,6 +442,12 @@ cmd_apply() {
   rm -f -- "$manifest"   # consume the manifest after apply
 }
 
+# Path-driven actions go through the validator + re-stat; everything else is
+# a stateful non-path action dispatched by _clean_dispatch_nonpath.
+_is_path_action() {
+  case "$1" in rm|electron_cache|mobilesync_rm|launchctl_rm) return 0 ;; *) return 1 ;; esac
+}
+
 # Hardcoded dispatch by action — the manifest never supplies a command.
 _clean_dispatch() {
   local action="$1" canon="$2"
@@ -408,7 +461,22 @@ _clean_dispatch() {
       launchctl bootout "gui/$(id -u)/$label" 2>/dev/null \
         || launchctl bootout "gui/$(id -u)" -- "$canon" 2>/dev/null || true
       rm -f -- "$canon" 2>/dev/null ;;
-    *) return 1 ;;   # brew/docker/pipx (non-path, stateful) land with their scans
+    *) return 1 ;;
+  esac
+}
+
+# Non-path dispatch — hardcoded commands; the manifest carries only a
+# validated identifier (the pipx tool name), never a command string.
+_clean_dispatch_nonpath() {
+  local action="$1" ident="$2"
+  case "$action" in
+    brew_cleanup)    command -v brew >/dev/null 2>&1 && brew cleanup >/dev/null 2>&1 ;;
+    brew_autoremove) command -v brew >/dev/null 2>&1 && brew autoremove >/dev/null 2>&1 ;;
+    docker_prune)    command -v docker >/dev/null 2>&1 && docker system prune -f >/dev/null 2>&1 ;;
+    pipx_uninstall)
+      case "$ident" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac   # validate tool name
+      command -v pipx >/dev/null 2>&1 && pipx uninstall "$ident" >/dev/null 2>&1 ;;
+    *) return 1 ;;
   esac
 }
 
@@ -423,8 +491,12 @@ cmd_discover() {
 }
 
 # ── entrypoint ───────────────────────────────────────────────────
-case "${1:-}" in
-  discover) shift; cmd_discover "$@" ;;
-  apply)    shift; cmd_apply "$@" ;;
-  *) _die "usage: clean.sh discover <audit|quick|deep> | apply <manifest>" ;;
-esac
+# Only run the CLI when executed directly; when sourced (e.g. by the test
+# harness) just expose the functions.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  case "${1:-}" in
+    discover) shift; cmd_discover "$@" ;;
+    apply)    shift; cmd_apply "$@" ;;
+    *) _die "usage: clean.sh discover <audit|quick|deep> | apply <manifest>" ;;
+  esac
+fi

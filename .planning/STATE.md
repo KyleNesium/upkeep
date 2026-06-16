@@ -1,16 +1,23 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.6
-milestone_name: Linux/WSL2 Fast-Path Port
-status: in_review
-stopped_at: feat/v1.6-linux-fastpath draft PR open 2026-05-29; 73/73 tests green; live Linux validation pending
-last_updated: "2026-05-29T00:00:00.000Z"
+milestone: v1.8
+milestone_name: Cleanup Skills Fast-Path Port
+status: in_progress
+stopped_at: "feat/v1.8-cleanup-fastpath — engine spine + macOS path-driven scans landed (4 commits); 43 clean + 103 update tests green under bash 3.2. Remaining: non-path actions (brew/docker/pipx), orphan-app-data, Linux/WSL2 scans, 3 wrapper rewrites, umbrella, shell-config editor, eager-discovery hook, docs, update->common.sh migration."
+last_updated: "2026-06-16T00:00:00.000Z"
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 6
-  completed_plans: 6
+  total_phases: 10
+  completed_phases: 3
+  total_plans: 9
+  completed_plans: 2
 ---
+
+> NOTE: v1.6 (Linux/WSL2 fast-path) and v1.7 (plugin updates + risk gate)
+> shipped after this doc was last frozen; v1.7.1 is the released version.
+> v1.8 is the cleanup-skills fast-path port — full plan + eng review at
+> `~/.gstack/projects/KyleNesium-upkeep/kyles-main-v1.8-cleanup-port-plan-*.md`.
+> Engine: `upkeep/skills/upkeep/scripts/{clean.sh,clean-validate.sh,lib/common.sh}`;
+> tests: `tests/test-clean-skill.sh`.
 
 # Project State
 

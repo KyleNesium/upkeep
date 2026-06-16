@@ -228,6 +228,127 @@ emit_skill_json() {
        needs_approval:(if ($items|length)==0 then false else $needs_approval end)}'
 }
 
+# ── apply ────────────────────────────────────────────────────────
+# clean.sh apply <manifest> [--drop=cat,cat] [--items=id,id]
+#
+# Safety contract:
+#   • manifest TTL (A3): refuse the whole apply if older than 900s.
+#   • report_only items are NEVER applied.
+#   • every item re-runs through _clean_validate (containment + shape) — the
+#     manifest is data, not trust.
+#   • TOCTOU re-stat: vanished → skip; type-swap (is_symlink changed) → skip;
+#     size grew beyond threshold → skip + warn.
+#   • electron: re-check pgrep -x <app> at apply; skip if the app launched.
+#   • per-item isolation: one failure records ✗ and the batch continues.
+#   • commands are hardcoded by action; the manifest never carries a command.
+_CLEAN_TTL="${UPKEEP_CLEAN_TTL:-900}"
+_DRIFT_PCT="${UPKEEP_CLEAN_DRIFT_PCT:-50}"   # skip if size grew > this percent
+
+# is item category dropped? ($1=category, uses $DROP_CSV)
+_is_dropped() { case ",$DROP_CSV," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+# is item id selected? (uses $ITEMS_CSV; empty = all)
+_is_selected() { [ -z "$ITEMS_CSV" ] && return 0; case ",$ITEMS_CSV," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+
+cmd_apply() {
+  local manifest="" ; DROP_CSV="" ; ITEMS_CSV=""
+  manifest="${1:-}"; shift || true
+  [ -n "$manifest" ] && [ -f "$manifest" ] || _die "apply: manifest not found: $manifest"
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --drop=*)  DROP_CSV="${a#--drop=}" ;;
+      --items=*) ITEMS_CSV="${a#--items=}" ;;
+      *) _die "apply: unknown arg: $a" ;;
+    esac
+  done
+
+  # A3: manifest TTL
+  local created now age
+  created=$(jq -r '.created_at // 0' "$manifest")
+  now=$(date +%s); age=$((now - created))
+  if [ "$age" -gt "$_CLEAN_TTL" ]; then
+    _die "manifest is stale (${age}s old, max ${_CLEAN_TTL}s) — re-run discover"
+  fi
+
+  local before; before=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')
+  local APPLIED FAILED SKIPPED
+  APPLIED=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-applied.XXXXXX")
+  FAILED=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-failed.XXXXXX")
+  SKIPPED=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-skipped.XXXXXX")
+
+  # Iterate items as TSV (jq -r) to stay bash-3.2 friendly.
+  local id category path action safety is_sym size app verdict canon
+  while IFS=$'\t' read -r id category path action safety is_sym size app; do
+    [ -n "$id" ] || continue
+    _is_selected "$id" || continue
+    if [ "$safety" = "report_only" ]; then continue; fi
+    if _is_dropped "$category"; then
+      printf '%s\treason=dropped-category\n' "$id" >> "$SKIPPED"; continue
+    fi
+    # re-validate through the security boundary
+    verdict=$(_clean_validate "$path" "$action")
+    if [ "${verdict%% *}" != "OK" ]; then
+      printf '%s\treason=%s\n' "$id" "$(printf '%s' "$verdict" | awk '{print $2}')" >> "$SKIPPED"; continue
+    fi
+    canon="${verdict#OK }"
+    # TOCTOU re-stat
+    if [ ! -e "$canon" ]; then
+      printf '%s\treason=vanished\n' "$id" >> "$SKIPPED"; continue
+    fi
+    # type-swap: check the ORIGINAL manifest path, not canon — canon has
+    # already followed any symlink, so a path that became a symlink between
+    # discover and apply only shows up on the un-resolved path.
+    local now_sym; if [ -L "$path" ]; then now_sym=true; else now_sym=false; fi
+    if [ "$now_sym" != "$is_sym" ]; then
+      printf '%s\treason=type-swap\n' "$id" >> "$SKIPPED"; continue
+    fi
+    # size-drift
+    local now_size; now_size=$(_size_bytes "$canon")
+    if [ "$size" -gt 0 ] 2>/dev/null && [ "$now_size" -gt 0 ] 2>/dev/null; then
+      if [ "$now_size" -gt "$(( size + size * _DRIFT_PCT / 100 ))" ]; then
+        printf '%s\treason=size-drift\n' "$id" >> "$SKIPPED"; continue
+      fi
+    fi
+    # electron: re-check the app is not running
+    if [ "$action" = "electron_cache" ] && [ -n "$app" ] && [ "$app" != "null" ]; then
+      if pgrep -x "$app" >/dev/null 2>&1; then
+        printf '%s\treason=app-running\n' "$id" >> "$SKIPPED"; continue
+      fi
+    fi
+    # dispatch — hardcoded by action, per-item isolation
+    if _clean_dispatch "$action" "$canon"; then
+      printf '%s\t%s\n' "$id" "$now_size" >> "$APPLIED"
+    else
+      printf '%s\treason=command-failed\n' "$id" >> "$FAILED"
+    fi
+  done < <(jq -r '.items[] | [.id,.category,.path,.action,.safety,(.is_symlink|tostring),(.size_bytes|tostring),(.app_name//"null")] | @tsv' "$manifest")
+
+  local after reclaimed
+  after=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')
+  reclaimed=$(( (after - before) * 1024 )); [ "$reclaimed" -lt 0 ] && reclaimed=0
+
+  jq -n \
+    --slurpfile a <(jq -R 'split("\t")|{id:.[0],size:(.[1]|tonumber? //0)}' "$APPLIED") \
+    --slurpfile f <(jq -R 'split("\t")|{id:.[0],reason:(.[1]|sub("reason=";""))}' "$FAILED") \
+    --slurpfile s <(jq -R 'split("\t")|{id:.[0],reason:(.[1]|sub("reason=";""))}' "$SKIPPED") \
+    --argjson reclaimed "$reclaimed" \
+    '{applied:$a, failed:$f, skipped:$s,
+      applied_count:($a|length), failed_count:($f|length), skipped_count:($s|length),
+      reclaimed_bytes:$reclaimed}'
+
+  rm -f -- "$APPLIED" "$FAILED" "$SKIPPED"
+  rm -f -- "$manifest"   # consume the manifest after apply
+}
+
+# Hardcoded dispatch by action — the manifest never supplies a command.
+_clean_dispatch() {
+  local action="$1" canon="$2"
+  case "$action" in
+    rm|electron_cache) rm -rf -- "$canon" 2>/dev/null ;;
+    *) return 1 ;;   # non-path actions (brew/docker/launchctl/...) land in later commits
+  esac
+}
+
 cmd_discover() {
   MODE="${1:-}"
   case "$MODE" in audit|quick|deep) ;; *) _die "usage: clean.sh discover <audit|quick|deep>" ;; esac
@@ -241,6 +362,6 @@ cmd_discover() {
 # ── entrypoint ───────────────────────────────────────────────────
 case "${1:-}" in
   discover) shift; cmd_discover "$@" ;;
-  apply)    _die "apply not yet implemented (T1, next commit)" ;;
+  apply)    shift; cmd_apply "$@" ;;
   *) _die "usage: clean.sh discover <audit|quick|deep> | apply <manifest>" ;;
 esac

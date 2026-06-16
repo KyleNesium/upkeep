@@ -163,6 +163,72 @@ ENA=$(printf '%s' "$EMPTY_JSON" | jq -r '.needs_approval')
 _test "empty tree → 0 items, no approval" "$([ "$EC" = "0" ] && [ "$ENA" = "false" ] && echo true || echo false)" "items=$EC approval=$ENA" "0/false"
 rm -rf -- "$DHOME" "$EHOME"
 
+echo "── Apply dispatcher ──"
+_fresh_apply_home() {
+  AHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-apply.XXXXXX")
+  mkdir -p "$AHOME/Library/Caches/com.foo" "$AHOME/Library/Caches/com.bar" "$AHOME/.Trash/junk"
+  echo x > "$AHOME/Library/Caches/com.foo/f"
+  mkdir -p "$AHOME/workspace/p/dist"   # build artifact (report_only in quick)
+}
+_apply_disc() { HOME="$AHOME" UPKEEP_DATA_DIR="$AHOME/data" /bin/bash "$CLEAN" discover "$1" 2>/dev/null | jq -r .manifest_file; }
+_apply_run() { HOME="$AHOME" UPKEEP_DATA_DIR="$AHOME/data" /bin/bash "$CLEAN" apply "$@" 2>/dev/null; }
+
+# 1. removal of safe items
+_fresh_apply_home
+MF=$(_apply_disc deep)
+RES=$(_apply_run "$MF")
+GONE=$([ ! -d "$AHOME/Library/Caches/com.foo" ] && echo true || echo false)
+_test "apply removes a safe cache dir" "$GONE" "$GONE" "true"
+MANGONE=$([ ! -f "$MF" ] && echo true || echo false)
+_test "apply consumes the manifest" "$MANGONE" "$MANGONE" "true"
+rm -rf -- "$AHOME"
+
+# 2. report_only never deleted (quick build_artifacts)
+_fresh_apply_home
+MF=$(_apply_disc quick)
+_apply_run "$MF" >/dev/null
+KEPT=$([ -d "$AHOME/workspace/p/dist" ] && echo true || echo false)
+_test "apply never deletes report_only items" "$KEPT" "$KEPT" "true"
+rm -rf -- "$AHOME"
+
+# 3. TTL expiry refuses the whole apply
+_fresh_apply_home
+MF=$(_apply_disc deep)
+jq '.created_at = 1' "$MF" > "$MF.t" && mv "$MF.t" "$MF"
+ERR=$(_apply_run "$MF" | jq -r '.error // empty')
+STILL=$([ -d "$AHOME/Library/Caches/com.foo" ] && echo true || echo false)
+_test "stale manifest → apply refused (error)" "$([ -n "$ERR" ] && echo true || echo false)" "$ERR" "non-empty error"
+_test "stale manifest → nothing deleted" "$STILL" "$STILL" "true"
+rm -rf -- "$AHOME"
+
+# 4. --drop excludes a category
+_fresh_apply_home
+MF=$(_apply_disc deep)
+_apply_run "$MF" --drop=dev_caches >/dev/null
+DROPPED=$([ -d "$AHOME/Library/Caches/com.foo" ] && echo true || echo false)
+_test "--drop=dev_caches preserves caches" "$DROPPED" "$DROPPED" "true"
+rm -rf -- "$AHOME"
+
+# 5. vanished path → skipped (TOCTOU re-stat)
+_fresh_apply_home
+MF=$(_apply_disc deep)
+rm -rf "$AHOME/Library/Caches/com.foo"   # vanish between discover and apply
+SK=$(_apply_run "$MF" | jq -r '[.skipped[]|select(.reason=="vanished")]|length')
+_test "vanished path skipped at apply" "$([ "$SK" -ge 1 ] 2>/dev/null && echo true || echo false)" "$SK" ">=1"
+rm -rf -- "$AHOME"
+
+# 6. type-swap → skipped (dir replaced by a symlink between discover & apply).
+# Target a Logs/ dir: it's a safe root these sections don't scan, so it stays
+# in place (not in the manifest, never deleted) — keeps the test order-robust.
+_fresh_apply_home
+mkdir -p "$AHOME/Library/Logs/keep"
+MF=$(_apply_disc deep)
+rm -rf "$AHOME/Library/Caches/com.foo"
+ln -s "$AHOME/Library/Logs/keep" "$AHOME/Library/Caches/com.foo"   # com.foo now a symlink
+TS=$(_apply_run "$MF" | jq -r '[.skipped[]|select(.reason=="type-swap")]|length')
+_test "type-swap skipped at apply" "$([ "$TS" -ge 1 ] 2>/dev/null && echo true || echo false)" "$TS" ">=1"
+rm -rf -- "$AHOME"
+
 echo ""
 echo "════════════════════════════════════════"
 printf "PASS: %d   FAIL: %d\n" "$PASS" "$FAIL"

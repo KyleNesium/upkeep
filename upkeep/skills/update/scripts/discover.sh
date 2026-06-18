@@ -78,51 +78,15 @@ _pj_relpath() {
 # Detect arch
 ARCH=$(uname -m 2>/dev/null || echo unknown)
 
-# ── OS detection (v1.6) ──────────────────────────────────────────
-# Sets OS_TYPE (macos|linux|wsl2|unknown), OS_DISTRO, PKG_MGR. Mirrors
-# the shared block used across the cleanup skills.
-#
-# Test seam: UPKEEP_OS_OVERRIDE / UPKEEP_PKG_MGR_OVERRIDE short-circuit
-# the live `uname` so Linux paths can be exercised on a macOS box (where
-# `uname -s` always reports Darwin). The override forces BOTH the emitted
-# os.type AND which native-discovery function the parallel runner picks —
-# stamping os.type alone would never run discover_native_linux on macOS.
-_detect_os() {
-  if [ -n "${UPKEEP_OS_OVERRIDE:-}" ]; then
-    OS_TYPE="$UPKEEP_OS_OVERRIDE"
-    OS_DISTRO="${UPKEEP_OS_DISTRO_OVERRIDE:-override}"
-  else
-    local kernel krel
-    kernel=$(uname -s 2>/dev/null || echo "unknown")
-    krel=$(uname -r 2>/dev/null || echo "")
-    case "$kernel" in
-      Darwin) OS_TYPE="macos"; OS_DISTRO="macos" ;;
-      Linux)
-        if echo "$krel" | grep -qi "microsoft"; then OS_TYPE="wsl2"; else OS_TYPE="linux"; fi
-        if [ -r /etc/os-release ]; then
-          OS_DISTRO=$(. /etc/os-release 2>/dev/null; echo "${ID_LIKE:-$ID}" | awk '{print $1}')
-        elif command -v lsb_release >/dev/null 2>&1; then
-          OS_DISTRO=$(lsb_release -si 2>/dev/null | tr '[:upper:]' '[:lower:]')
-        else
-          OS_DISTRO="unknown"
-        fi
-        ;;
-      *) OS_TYPE="unknown"; OS_DISTRO="unknown" ;;
-    esac
-  fi
-
-  if [ -n "${UPKEEP_PKG_MGR_OVERRIDE:-}" ]; then
-    PKG_MGR="$UPKEEP_PKG_MGR_OVERRIDE"
-  else
-    case "$OS_DISTRO" in
-      debian|ubuntu)                          PKG_MGR="apt" ;;
-      fedora|rhel|centos|rocky|almalinux)     PKG_MGR="dnf" ;;
-      arch|manjaro|endeavouros)               PKG_MGR="pacman" ;;
-      macos)                                  PKG_MGR="brew" ;;
-      *)                                      PKG_MGR="unknown" ;;
-    esac
-  fi
-}
+# ── OS detection (v1.8 — shared lib) ─────────────────────────────
+# _detect_os now lives in the shared lib so the update and cleanup engines agree
+# on OS detection + the test-seam contract (UPKEEP_OS_OVERRIDE /
+# UPKEEP_PKG_MGR_OVERRIDE). Sets OS_TYPE (macos|linux|wsl2|unknown), OS_DISTRO,
+# PKG_MGR. The override forces BOTH the emitted os.type AND which native-discovery
+# function the parallel runner picks.
+_DISCOVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=../../upkeep/scripts/lib/common.sh
+. "$_DISCOVER_DIR/../../upkeep/scripts/lib/common.sh"
 _detect_os
 
 # ── Skills section ───────────────────────────────────────────────

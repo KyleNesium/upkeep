@@ -334,6 +334,32 @@ SRBAD=$(_clean_dispatch_nonpath snap_remove 'evil;@x' && echo allowed || echo re
 _test "linux: snap_remove rejects bad identifier" "$([ "$SRBAD" = "rejected" ] && echo true || echo false)" "$SRBAD" "rejected"
 rm -rf -- "$LSTUB" "$LHOME"
 
+echo "── Wrapper structure (thin two-turn / one-turn) ──"
+SKILLS_ROOT="$REPO_ROOT/upkeep/skills"
+A="$SKILLS_ROOT/audit/SKILL.md"; Q="$SKILLS_ROOT/cleanquick/SKILL.md"; D="$SKILLS_ROOT/cleandeep/SKILL.md"
+
+_has()  { grep -qF "$2" "$1" && echo true || echo false; }
+_lacks(){ grep -qF "$2" "$1" && echo false || echo true; }
+
+# all three call the engine and are tightened (no broad rm / Edit grants)
+for f in "$A" "$Q" "$D"; do
+  n=$(basename "$(dirname "$f")")
+  _test "$n: references clean.sh engine" "$(_has "$f" "clean.sh")" "ref" "clean.sh"
+  _test "$n: version bumped to 1.8.0" "$(_has "$f" "version: 1.8.0")" "ver" "1.8.0"
+  _test "$n: no broad Bash(rm *) grant" "$(_lacks "$f" "Bash(rm *)")" "grant" "absent"
+  _test "$n: no Edit(~/. grant" "$(_lacks "$f" "Edit(~/.")" "grant" "absent"
+done
+
+# audit is one-turn report-only — discovers in audit mode, never applies
+_test "audit: discovers in audit mode" "$(_has "$A" "discover audit")" "mode" "audit"
+_test "audit: never calls clean.sh apply" "$(_lacks "$A" "clean.sh\" apply")" "apply" "absent"
+
+# quick/deep are two-turn — discover + apply
+_test "cleanquick: discover quick" "$(_has "$Q" "discover quick")" "mode" "quick"
+_test "cleanquick: has apply turn" "$(_has "$Q" "apply \"\$MANIFEST_FILE\"")" "apply" "present"
+_test "cleandeep: discover deep" "$(_has "$D" "discover deep")" "mode" "deep"
+_test "cleandeep: has apply turn" "$(_has "$D" "apply \"\$MANIFEST_FILE\"")" "apply" "present"
+
 echo ""
 echo "════════════════════════════════════════"
 printf "PASS: %d   FAIL: %d\n" "$PASS" "$FAIL"

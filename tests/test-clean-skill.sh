@@ -360,6 +360,20 @@ _test "cleanquick: has apply turn" "$(_has "$Q" "apply \"\$MANIFEST_FILE\"")" "a
 _test "cleandeep: discover deep" "$(_has "$D" "discover deep")" "mode" "deep"
 _test "cleandeep: has apply turn" "$(_has "$D" "apply \"\$MANIFEST_FILE\"")" "apply" "present"
 
+echo "── Umbrella router (clean.sh routing, self-update gate preserved) ──"
+U="$SKILLS_ROOT/upkeep/SKILL.md"
+_test "umbrella: routes cleanup to clean.sh" "$(_has "$U" "scripts/clean.sh")" "ref" "clean.sh"
+_test "umbrella: keeps Update Mode redirect" "$(_has "$U" "/upkeep:update")" "redirect" "present"
+# the only "brew upgrade" mention is the Update-Mode disclaimer saying it is
+# NOT embedded here; assert that disclaimer is present (upgrades live in update).
+_test "umbrella: disclaims embedded upgrade cmds" "$(_has "$U" "intentionally has")" "disclaimer" "present"
+# codex #10: the self-update gate must come BEFORE cleanup execution
+GATE_LN=$(grep -n "Self-update gate" "$U" | head -1 | cut -d: -f1)
+EXEC_LN=$(grep -n "## Cleanup Execution" "$U" | head -1 | cut -d: -f1)
+_test "umbrella: self-update gate precedes cleanup exec" \
+  "$([ -n "$GATE_LN" ] && [ -n "$EXEC_LN" ] && [ "$GATE_LN" -lt "$EXEC_LN" ] && echo true || echo false)" \
+  "gate=$GATE_LN exec=$EXEC_LN" "gate<exec"
+
 echo ""
 echo "════════════════════════════════════════"
 printf "PASS: %d   FAIL: %d\n" "$PASS" "$FAIL"

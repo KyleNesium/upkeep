@@ -33,9 +33,21 @@ path-safety validator.
   cleanup/autoremove, Docker prune (macOS); ~/.cache, snap disabled revisions,
   flatpak unused runtimes (Linux/WSL2); apt/dnf/pacman surfaced as manual sudo
   steps (the sudo boundary — never auto-run).
-- **`tests/test-clean-skill.sh`**: 73 tests (path-validator attack battery, apply
+- **Orphan app-data** (report_only): unmatched `~/Library/Application Support`
+  dirs surfaced for investigation, never auto-deleted (app-data deletion is too
+  risky to apply without explicit selection).
+- **In-script shell-config editor** (`shell_fix`): removes dead `source`/path-alias
+  lines (conditional / `&&` / live lines never touched) with cp backup + `zsh -n`
+  /`bash -n` validation + auto-restore on failure. Re-derives dead lines at apply
+  time, so a stale manifest never removes a now-valid line.
+- **Gated eager-discovery hook** (SessionStart): `clean.sh prewarm` leaves a
+  stable manifest; `discover` reuses it within the TTL (skips the disk scan).
+  Default OFF — enabling needs `UPKEEP_PREWARM=1` or the `upkeep-prewarm-enabled`
+  flag; when on it backgrounds + detaches so session start never blocks.
+- **`tests/test-clean-skill.sh`**: 92 tests (path-validator attack battery, apply
   re-validation, discover modes, non-path actions via PATH-stubbed brew/docker,
-  Linux branch via OS-override seam, wrapper + umbrella structure) — bash 3.2.
+  Linux branch via OS-override seam, orphan-app-data, shell-config editor,
+  prewarm reuse + hook gating, wrapper + umbrella structure) — bash 3.2.
 
 #### Changed
 - `audit`/`cleanquick`/`cleandeep` SKILL.md rewritten as thin wrappers (922/605/384
@@ -51,8 +63,8 @@ path-safety validator.
 #### Notes
 - Cleanup discovery is disk-I/O bound (no cache sentinel like brew's), so the win
   is single-gate UX + a tested safety validator, not `update`-class raw speedups.
-- In progress on `feat/v1.8-cleanup-fastpath`. Remaining before release: orphan
-  app-data scan, in-script shell-config editor, eager-discovery hook.
+- Feature-complete on `feat/v1.8-cleanup-fastpath` (195 tests: 92 clean + 103
+  update). Pending: live macOS/Linux apply validation, then merge + tag.
 
 ## [1.7.1] - 2026-06-15
 

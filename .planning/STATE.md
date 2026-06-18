@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: Cleanup Skills Fast-Path Port
-status: in_progress
-stopped_at: "feat/v1.8-cleanup-fastpath — engine spine + macOS path-driven scans landed (4 commits); 43 clean + 103 update tests green under bash 3.2. Remaining: non-path actions (brew/docker/pipx), orphan-app-data, Linux/WSL2 scans, 3 wrapper rewrites, umbrella, shell-config editor, eager-discovery hook, docs, update->common.sh migration."
-last_updated: "2026-06-16T00:00:00.000Z"
+status: feature_complete
+stopped_at: "feat/v1.8-cleanup-fastpath — FEATURE COMPLETE (16 commits, T1-T9 done): engine (clean.sh + clean-validate.sh + lib/common.sh), 3 thin wrappers, umbrella routing, shell-config editor, gated eager-discovery hook, docs + version bump, update->common.sh migration. 195 tests green (92 clean + 103 update) under bash 3.2. Pending before merge/tag: live macOS/Linux apply validation, draft PR."
+last_updated: "2026-06-18T00:00:00.000Z"
 progress:
   total_phases: 10
-  completed_phases: 3
+  completed_phases: 10
   total_plans: 9
-  completed_plans: 2
+  completed_plans: 9
 ---
 
 > NOTE: v1.6 (Linux/WSL2 fast-path) and v1.7 (plugin updates + risk gate)

@@ -430,8 +430,8 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**176 tests** across 2 automated test files. Run with
-`bash tests/test-update-skill.sh` and `bash tests/test-clean-skill.sh` (both
+**195 tests** across 2 automated test files (92 `clean` + 103 `update`). Run with
+`bash tests/test-clean-skill.sh` and `bash tests/test-update-skill.sh` (both
 pass under `/bin/bash`, macOS 3.2.57).
 
 As of v1.8 the cleanup skills (`audit`/`cleanquick`/`cleandeep`) are no longer
@@ -446,9 +446,11 @@ out of LLM prose into a tested, hardcoded path-safety validator.
 |------|-------|----------------|
 | Path-safety validator | ~11 | Containment under SAFE_ROOTS; PROTECTED denylist override; per-action shape (electron cache-leaf, launchagent single-plist + homebrew.mxcl exclusion, mobilesync per-backup); attack battery (traversal, symlink escape, outside-roots, leading-dash, spaces); >256-char path preserved |
 | Apply re-validation | ~8 | 15-min manifest TTL refusal; TOCTOU vanished / type-swap / size-drift skip; report_only never deleted; `--drop` category exclusion; per-item isolation; manifest consumed |
-| Discover engine | ~10 | audit/quick/deep modes; needs_approval; dual path repr; atomic manifest write + created_at; build-artifacts report_only in quick; Claude cache excluded; new sections (xcode, ios_backup, large_file) |
+| Discover engine | ~13 | audit/quick/deep modes; needs_approval; dual path repr; atomic manifest write + created_at; build-artifacts report_only in quick; Claude cache excluded; xcode, ios_backup, large_file, orphan-app-data (report_only) sections |
 | Non-path actions | ~5 | brew cleanup/autoremove + docker prune discover (PATH-stubbed); apply invokes the real command; pipx tool-name metachar rejection |
 | Linux/WSL2 branch | ~4 | apt cache as sudo manual step; snap disabled-revision → snap_remove; flatpak unused → flatpak_unused; snap_remove identifier validation (via OS-override seam) |
+| Shell-config editor | ~8 | dead source/path-alias lines removed; conditional / `&&` / live lines kept; cp backup created; result passes `zsh -n` (edit + validate + auto-restore) |
+| Eager-discovery prewarm | ~8 | prewarm writes a stable manifest; discover reuses within TTL; `UPKEEP_NO_REUSE` + stale-TTL force a fresh scan; hook no-op when disabled; plugin.json/hooks.json valid |
 | Wrapper + umbrella structure | ~22 | All three wrappers reference the engine, version 1.8.0, no broad `Bash(rm *)`/`Edit` grants; audit never applies; quick/deep two-turn; umbrella routes to clean.sh with the self-update gate preceding cleanup execution |
 | Shared helpers | ~3 | `_sanitize_text` caps free-text/strips control chars (never paths); `_detect_os` override seam |
 

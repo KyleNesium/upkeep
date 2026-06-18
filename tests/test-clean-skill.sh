@@ -411,6 +411,40 @@ _test "umbrella: self-update gate precedes cleanup exec" \
   "$([ -n "$GATE_LN" ] && [ -n "$EXEC_LN" ] && [ "$GATE_LN" -lt "$EXEC_LN" ] && echo true || echo false)" \
   "gate=$GATE_LN exec=$EXEC_LN" "gate<exec"
 
+echo "── Eager-discovery prewarm + hook (T9, gated default-off) ──"
+PWHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-pw.XXXXXX")
+_pw() { HOME="$PWHOME" UPKEEP_DATA_DIR="$PWHOME/data" /bin/bash "$CLEAN" "$@" 2>/dev/null; }
+# prewarm on an empty tree writes a stable manifest (0 items)
+_pw prewarm quick >/dev/null
+PWFILE="$PWHOME/data/upkeep-clean-prewarm-quick.json"
+_test "prewarm writes a stable manifest" "$([ -f "$PWFILE" ] && echo true || echo false)" "$PWFILE" "exists"
+# add a cache dir AFTER prewarm, then discover quick → REUSES prewarm (0 items)
+mkdir -p "$PWHOME/Library/Caches/added-after-prewarm"
+REUSE_N=$(_pw discover quick | jq -r '.item_count')
+_test "discover reuses fresh prewarm (skips new dir)" "$([ "$REUSE_N" = "0" ] && echo true || echo false)" "$REUSE_N" "0"
+# UPKEEP_NO_REUSE forces a fresh scan → sees the new dir
+FRESH_N=$(HOME="$PWHOME" UPKEEP_DATA_DIR="$PWHOME/data" UPKEEP_NO_REUSE=1 /bin/bash "$CLEAN" discover quick 2>/dev/null | jq -r '.item_count')
+_test "UPKEEP_NO_REUSE forces fresh scan" "$([ "$FRESH_N" -ge 1 ] 2>/dev/null && echo true || echo false)" "$FRESH_N" ">=1"
+# stale prewarm (forged old created_at) is ignored → fresh scan sees the new dir
+jq '.created_at = 1' "$PWFILE" > "$PWFILE.t" && mv "$PWFILE.t" "$PWFILE"
+STALE_N=$(_pw discover quick | jq -r '.item_count')
+_test "stale prewarm ignored (TTL), fresh scan runs" "$([ "$STALE_N" -ge 1 ] 2>/dev/null && echo true || echo false)" "$STALE_N" ">=1"
+rm -rf -- "$PWHOME"
+
+# hook is a no-op when disabled (default)
+HOOK="$REPO_ROOT/upkeep/hooks/prewarm.sh"
+HKHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-hk.XXXXXX")
+HOME="$HKHOME" UPKEEP_DATA_DIR="$HKHOME/data" /bin/bash "$HOOK"; sleep 1
+_test "hook no-op when disabled (no prewarm written)" \
+  "$([ ! -f "$HKHOME/data/upkeep-clean-prewarm-quick.json" ] && echo true || echo false)" "disabled" "no-op"
+rm -rf -- "$HKHOME"
+
+# plugin.json registers the hook + is valid JSON
+PJ="$REPO_ROOT/upkeep/.claude-plugin/plugin.json"
+_test "plugin.json valid JSON" "$(jq -e . "$PJ" >/dev/null 2>&1 && echo true || echo false)" "json" "valid"
+_test "plugin.json registers hooks" "$(jq -e '.hooks' "$PJ" >/dev/null 2>&1 && echo true || echo false)" "hooks" "present"
+_test "hooks.json valid JSON" "$(jq -e '.hooks.SessionStart' "$REPO_ROOT/upkeep/hooks/hooks.json" >/dev/null 2>&1 && echo true || echo false)" "json" "valid"
+
 echo ""
 echo "════════════════════════════════════════"
 printf "PASS: %d   FAIL: %d\n" "$PASS" "$FAIL"

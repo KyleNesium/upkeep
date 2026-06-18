@@ -406,45 +406,46 @@ run_sections() {
 
 # ── manifest assembly + atomic write (update.sh:200 discipline) ───
 write_manifest() {
+  # $1 (optional): explicit output path (prewarm uses a stable name). Default:
+  # a unique upkeep-clean.<suffix>.json. Manifest is self-contained — it carries
+  # items + warnings + manual_steps + protected_skipped, so a reused (prewarm)
+  # manifest renders identically without the live scan context.
   mkdir -p "$DATA_DIR" 2>/dev/null
-  local workdir suffix manifest_file items_json now
+  local out="${1:-}" workdir suffix manifest_file items_json warns skips manuals now
   workdir=$(mktemp -d "${DATA_DIR}/.upkeep-clean-tmp.XXXXXX") || _die "mktemp -d failed"
   chmod 700 "$workdir" 2>/dev/null
-  suffix=${workdir##*.}
-  manifest_file="${DATA_DIR}/upkeep-clean.${suffix}.json"
+  if [ -n "$out" ]; then manifest_file="$out"
+  else suffix=${workdir##*.}; manifest_file="${DATA_DIR}/upkeep-clean.${suffix}.json"; fi
   now=$(date +%s)
   items_json=$(jq -s '.' "$ITEMS_FILE" 2>/dev/null || echo '[]')
+  warns=$(jq -Rs 'split("\n")|map(select(length>0))' "$WARN_FILE" 2>/dev/null || echo '[]')
+  skips=$(jq -Rs 'split("\n")|map(select(length>0))' "$SKIP_FILE" 2>/dev/null || echo '[]')
+  manuals=$(jq -Rs 'split("\n")|map(select(length>0))' "$MANUAL_FILE" 2>/dev/null || echo '[]')
   jq -n --argjson items "$items_json" --arg mode "$MODE" --argjson created_at "$now" \
-    '{schema_version:"1", mode:$mode, created_at:$created_at, items:$items}' \
+     --argjson warnings "$warns" --argjson manual_steps "$manuals" --argjson protected_skipped "$skips" \
+    '{schema_version:"1", mode:$mode, created_at:$created_at, items:$items,
+      warnings:$warnings, manual_steps:$manual_steps, protected_skipped:$protected_skipped}' \
     > "$workdir/m.json" || { rm -rf -- "$workdir"; _die "manifest write failed"; }
   mv -f "$workdir/m.json" "$manifest_file" || { rm -rf -- "$workdir"; _die "manifest rename failed"; }
   rm -rf -- "$workdir"
   printf '%s' "$manifest_file"
 }
 
-# SKILL-facing JSON: counts, totals, warnings, manual steps, protected skips.
+# SKILL-facing JSON derived entirely from the manifest FILE (so fresh and reused
+# manifests render identically).
 emit_skill_json() {
   local manifest_file="$1"
-  local items_json warns skips manuals
-  items_json=$(jq -s '.' "$ITEMS_FILE" 2>/dev/null || echo '[]')
-  warns=$(jq -Rs 'split("\n")|map(select(length>0))' "$WARN_FILE" 2>/dev/null || echo '[]')
-  skips=$(jq -Rs 'split("\n")|map(select(length>0))' "$SKIP_FILE" 2>/dev/null || echo '[]')
-  manuals=$(jq -Rs 'split("\n")|map(select(length>0))' "$MANUAL_FILE" 2>/dev/null || echo '[]')
-  local needs_approval=true
-  [ "$MODE" = "audit" ] && needs_approval=false
-  jq -n \
-    --arg manifest_file "$manifest_file" --arg mode "$MODE" --arg os "$OS_TYPE" \
-    --argjson items "$items_json" --argjson warnings "$warns" \
-    --argjson protected_skipped "$skips" --argjson manual_steps "$manuals" \
-    --argjson needs_approval "$needs_approval" '
-    ($items | map(.category) | group_by(.) | map({key:.[0], value:length}) | from_entries) as $counts
-    | ($items | map(select(.safety!="report_only") | .size_bytes) | add // 0) as $reclaimable
-    | {manifest_file:$manifest_file, mode:$mode, os:$os,
-       category_counts:$counts, item_count:($items|length),
+  jq --arg manifest_file "$manifest_file" --arg os "$OS_TYPE" '
+    . as $m
+    | ($m.items | map(.category) | group_by(.) | map({key:.[0], value:length}) | from_entries) as $counts
+    | ($m.items | map(select(.safety!="report_only") | .size_bytes) | add // 0) as $reclaimable
+    | {manifest_file:$manifest_file, mode:$m.mode, os:$os,
+       category_counts:$counts, item_count:($m.items|length),
        total_reclaimable_bytes:$reclaimable,
-       warnings:$warnings, manual_steps:$manual_steps,
-       protected_skipped:$protected_skipped,
-       needs_approval:(if ($items|length)==0 then false else $needs_approval end)}'
+       warnings:($m.warnings//[]), manual_steps:($m.manual_steps//[]),
+       protected_skipped:($m.protected_skipped//[]),
+       needs_approval:(if ($m.items|length)==0 then false elif $m.mode=="audit" then false else true end)}' \
+    "$manifest_file"
 }
 
 # ── apply ────────────────────────────────────────────────────────
@@ -661,14 +662,45 @@ _clean_dispatch_nonpath() {
   esac
 }
 
+_prewarm_path() { printf '%s/upkeep-clean-prewarm-%s.json' "$DATA_DIR" "$1"; }
+
 cmd_discover() {
   MODE="${1:-}"
   case "$MODE" in audit|quick|deep) ;; *) _die "usage: clean.sh discover <audit|quick|deep>" ;; esac
+
+  # Prewarm reuse (T9): if the eager-discovery hook left a same-mode manifest
+  # that is still within the TTL, promote a copy and skip the disk scan. The
+  # A3 manifest TTL governs reuse — a stale prewarm is ignored. UPKEEP_NO_REUSE=1
+  # forces a fresh scan.
+  local pw; pw=$(_prewarm_path "$MODE")
+  if [ -z "${UPKEEP_NO_REUSE:-}" ] && [ -f "$pw" ]; then
+    local pc age; pc=$(jq -r '.created_at // 0' "$pw" 2>/dev/null); age=$(( $(date +%s) - pc ))
+    if [ "$age" -ge 0 ] && [ "$age" -lt "$_CLEAN_TTL" ]; then
+      mkdir -p "$DATA_DIR" 2>/dev/null
+      local wd sfx fresh; wd=$(mktemp -d "${DATA_DIR}/.upkeep-clean-tmp.XXXXXX") || _die "mktemp -d failed"
+      chmod 700 "$wd" 2>/dev/null; sfx=${wd##*.}; fresh="${DATA_DIR}/upkeep-clean.${sfx}.json"
+      cp -p -- "$pw" "$fresh" 2>/dev/null && rm -rf -- "$wd" && { emit_skill_json "$fresh"; return; }
+      rm -rf -- "$wd"
+    fi
+  fi
+
   _clean_new_item_ctx
   run_sections
   local mf; mf=$(write_manifest)
   emit_skill_json "$mf"
   _clean_free_item_ctx
+}
+
+# Pre-warm: run discovery in the background (via the gated SessionStart hook) and
+# leave a stable-named manifest for cmd_discover to reuse. Read-only; never applies.
+cmd_prewarm() {
+  MODE="${1:-quick}"
+  case "$MODE" in audit|quick|deep) ;; *) MODE=quick ;; esac
+  _clean_new_item_ctx
+  run_sections
+  write_manifest "$(_prewarm_path "$MODE")" >/dev/null
+  _clean_free_item_ctx
+  printf '{"prewarmed":"%s","mode":"%s"}\n' "$(_prewarm_path "$MODE")" "$MODE"
 }
 
 # ── entrypoint ───────────────────────────────────────────────────
@@ -678,6 +710,7 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   case "${1:-}" in
     discover) shift; cmd_discover "$@" ;;
     apply)    shift; cmd_apply "$@" ;;
-    *) _die "usage: clean.sh discover <audit|quick|deep> | apply <manifest>" ;;
+    prewarm)  shift; cmd_prewarm "$@" ;;
+    *) _die "usage: clean.sh discover <audit|quick|deep> | apply <manifest> | prewarm [mode]" ;;
   esac
 fi

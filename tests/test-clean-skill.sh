@@ -301,6 +301,39 @@ BADREJECT=$(_clean_dispatch_nonpath pipx_uninstall 'evil; rm -rf /' && echo allo
 _test "non-path: pipx rejects metachar tool name" "$([ "$BADREJECT" = "rejected" ] && echo true || echo false)" "$BADREJECT" "rejected"
 rm -rf -- "$STUB" "$NPHOME"
 
+echo "── Linux/WSL2 branch (OS-override + stubbed snap/flatpak) ──"
+LSTUB=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-lstub.XXXXXX")
+cat > "$LSTUB/snap" <<'SH'
+#!/bin/sh
+case "$*" in
+  "list --all") printf 'core20 x 1822 latest canonical disabled\n' ;;
+esac
+exit 0
+SH
+cat > "$LSTUB/flatpak" <<'SH'
+#!/bin/sh
+case "$*" in
+  "list --runtime") echo "org.foo.Runtime" ;;
+esac
+exit 0
+SH
+chmod +x "$LSTUB/snap" "$LSTUB/flatpak"
+LHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-lhome.XXXXXX")
+LJSON=$(HOME="$LHOME" UPKEEP_DATA_DIR="$LHOME/data" PATH="$LSTUB:$PATH" \
+        UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt \
+        /bin/bash "$CLEAN" discover deep 2>/dev/null)
+LMF=$(printf '%s' "$LJSON" | jq -r '.manifest_file')
+SUDO=$(printf '%s' "$LJSON" | jq -r '[.manual_steps[]|select(test("sudo apt-get clean"))]|length')
+_test "linux: apt cache surfaced as sudo manual step" "$([ "$SUDO" -ge 1 ] 2>/dev/null && echo true || echo false)" "$SUDO" ">=1"
+SNAP=$(jq -r '[.items[]|select(.action=="snap_remove")]|length' "$LMF" 2>/dev/null)
+_test "linux: snap disabled revision → snap_remove" "$([ "$SNAP" -ge 1 ] 2>/dev/null && echo true || echo false)" "$SNAP" ">=1"
+FLAT=$(jq -r '[.items[]|select(.action=="flatpak_unused")]|length' "$LMF" 2>/dev/null)
+_test "linux: flatpak unused runtimes → flatpak_unused" "$([ "$FLAT" -ge 1 ] 2>/dev/null && echo true || echo false)" "$FLAT" ">=1"
+# snap_remove dispatch rejects a malformed pkg@rev identifier (rev must be digits)
+SRBAD=$(_clean_dispatch_nonpath snap_remove 'evil;@x' && echo allowed || echo rejected)
+_test "linux: snap_remove rejects bad identifier" "$([ "$SRBAD" = "rejected" ] && echo true || echo false)" "$SRBAD" "rejected"
+rm -rf -- "$LSTUB" "$LHOME"
+
 echo ""
 echo "════════════════════════════════════════"
 printf "PASS: %d   FAIL: %d\n" "$PASS" "$FAIL"

@@ -240,6 +240,50 @@ scan_docker() {
   _emit_nonpath docker "docker:prune" docker_prune warn "docker-prune: removes dangling images + stopped containers"
 }
 
+scan_pipx() {
+  command -v pipx >/dev/null 2>&1 || return 0
+  # pipx removal is opt-in per tool — emit as report_only (informational).
+  # The user runs `pipx uninstall <tool>` themselves; we never auto-uninstall.
+  local t
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    _emit_nonpath pipx "$t" pipx_uninstall report_only "pipx-tool: uninstall manually if unused"
+  done <<EOF
+$(pipx list --short 2>/dev/null | awk '{print $1}')
+EOF
+}
+
+# ── Linux / WSL2 sections (self-guarded on OS_TYPE) ──────────────
+# apt/dnf/pacman require root — upkeep NEVER runs sudo, so these are surfaced
+# as manual steps, never auto-applied (the sudo boundary).
+scan_linux_pkg() {
+  case "$OS_TYPE" in linux|wsl2) ;; *) return 0 ;; esac
+  case "$PKG_MGR" in
+    apt)    _manual "sudo apt-get clean && sudo apt-get autoclean && sudo apt-get autoremove -y   # system package cache — upkeep never runs sudo" ;;
+    dnf)    _manual "sudo dnf clean all && sudo dnf autoremove -y   # system package cache — upkeep never runs sudo" ;;
+    pacman) _manual "sudo pacman -Sc --noconfirm   # system package cache — upkeep never runs sudo" ;;
+  esac
+}
+
+scan_snap() {
+  case "$OS_TYPE" in linux|wsl2) ;; *) return 0 ;; esac
+  command -v snap >/dev/null 2>&1 || return 0
+  # disabled revisions are reclaimable and user-removable (no sudo on most distros)
+  local pkg rev
+  while read -r pkg rev; do
+    [ -n "$pkg" ] && [ -n "$rev" ] || continue
+    _emit_nonpath snap "${pkg}@${rev}" snap_remove safe
+  done < <(snap list --all 2>/dev/null | awk '/disabled/ {print $1, $3}')
+}
+
+scan_flatpak() {
+  case "$OS_TYPE" in linux|wsl2) ;; *) return 0 ;; esac
+  command -v flatpak >/dev/null 2>&1 || return 0
+  if flatpak list --runtime 2>/dev/null | grep -q .; then
+    _emit_nonpath flatpak "flatpak:unused" flatpak_unused safe "flatpak-unused: removes runtimes no installed app depends on"
+  fi
+}
+
 scan_launchagents() {
   [ "$OS_TYPE" = "macos" ] || return 0
   [ -d "$HOME/Library/LaunchAgents" ] || return 0
@@ -268,11 +312,15 @@ run_sections() {
     deep)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
       scan_brew; scan_docker; scan_xcode; scan_ios_backups
-      scan_large_files; scan_launchagents; scan_build_artifacts ;;
+      scan_large_files; scan_launchagents; scan_pipx
+      scan_linux_pkg; scan_snap; scan_flatpak
+      scan_build_artifacts ;;
     audit)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
       scan_brew; scan_docker; scan_xcode; scan_ios_backups
-      scan_large_files; scan_launchagents; scan_build_artifacts ;;
+      scan_large_files; scan_launchagents; scan_pipx
+      scan_linux_pkg; scan_snap; scan_flatpak
+      scan_build_artifacts ;;
     *) _die "unknown mode: $MODE (want audit|quick|deep)" ;;
   esac
 }
@@ -476,6 +524,14 @@ _clean_dispatch_nonpath() {
     pipx_uninstall)
       case "$ident" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac   # validate tool name
       command -v pipx >/dev/null 2>&1 && pipx uninstall "$ident" >/dev/null 2>&1 ;;
+    snap_remove)
+      # ident = "pkg@rev"; validate both halves before invoking.
+      local sp_pkg sp_rev; sp_pkg="${ident%@*}"; sp_rev="${ident##*@}"
+      case "$sp_pkg" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac
+      case "$sp_rev" in *[!0-9]*|"") return 1 ;; esac
+      command -v snap >/dev/null 2>&1 && snap remove --revision="$sp_rev" "$sp_pkg" >/dev/null 2>&1 ;;
+    flatpak_unused)
+      command -v flatpak >/dev/null 2>&1 && flatpak uninstall --unused --assumeyes >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }

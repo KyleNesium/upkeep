@@ -124,6 +124,8 @@ mkdir -p "$DHOME/Library/Caches/com.foo" "$DHOME/.Trash/junk"
 mkdir -p "$DHOME/Library/Application Support/Slack/Cache"
 mkdir -p "$DHOME/Library/Application Support/Claude/Cache"   # must be excluded
 mkdir -p "$DHOME/workspace/proj/node_modules/pkg"
+mkdir -p "$DHOME/Library/Application Support/ZzOrphanTestApp/data"   # no matching app → orphan
+mkdir -p "$DHOME/Library/Application Support/com.apple.testsvc"      # apple system → skipped
 mkdir -p "$DHOME/Library/Developer/Xcode/DerivedData/App-abc"
 mkdir -p "$DHOME/Library/Application Support/MobileSync/Backup/00008110-DEAD"
 mkdir -p "$DHOME/Downloads"; : > "$DHOME/Downloads/installer.dmg"
@@ -169,6 +171,13 @@ IOS=$(jq -r '[.items[]|select(.category=="ios_backup" and .action=="mobilesync_r
 _test "deep: ios_backup (mobilesync_rm/warn)" "$([ "$IOS" -ge 1 ] 2>/dev/null && echo true || echo false)" "$IOS" ">=1"
 LF=$(jq -r '[.items[]|select(.category=="large_file")]|length' "$DEEP_MF" 2>/dev/null)
 _test "deep: large_file (.dmg) discovered" "$([ "$LF" -ge 1 ] 2>/dev/null && echo true || echo false)" "$LF" ">=1"
+# orphan app data: unmatched dir → report_only candidate; com.apple.* skipped
+ORPH=$(jq -r '[.items[]|select(.category=="orphan_app_data" and (.path|test("ZzOrphanTestApp")))]|length' "$DEEP_MF" 2>/dev/null)
+_test "deep: orphan app data (report_only candidate)" "$([ "$ORPH" -ge 1 ] 2>/dev/null && echo true || echo false)" "$ORPH" ">=1"
+ORPH_RO=$(jq -r '[.items[]|select(.category=="orphan_app_data")|.safety]|unique|join(",")' "$DEEP_MF" 2>/dev/null)
+_test "deep: orphan app data is report_only" "$([ "$ORPH_RO" = "report_only" ] && echo true || echo false)" "$ORPH_RO" "report_only"
+APPLE=$(jq -r '[.items[]|select(.path|test("com.apple.testsvc"))]|length' "$DEEP_MF" 2>/dev/null)
+_test "deep: com.apple.* not emitted as orphan" "$([ "$APPLE" = "0" ] && echo true || echo false)" "$APPLE" "0"
 # new sections must NOT appear in quick (quick is the lightweight subset)
 QXC=$(jq -r '[.items[]|select(.category=="xcode" or .category=="ios_backup")]|length' "$MF" 2>/dev/null)
 _test "quick excludes xcode/ios_backup" "$([ "$QXC" = "0" ] && echo true || echo false)" "$QXC" "0"

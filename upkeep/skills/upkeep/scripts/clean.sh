@@ -190,6 +190,38 @@ $listing
 EOF
 }
 
+# Installed-app set (lowercased, space-stripped) for orphan matching.
+_installed_app_set() {
+  { ls /Applications 2>/dev/null; ls /Applications/Utilities 2>/dev/null
+    ls "$HOME/Applications" 2>/dev/null
+    brew list --cask 2>/dev/null; brew list --formula 2>/dev/null
+  } | sed 's/\.app$//' | tr '[:upper:]' '[:lower:]' | tr -d ' ' | sort -u
+}
+# Apple/system Application Support dirs to always skip (mirrors
+# reference/apple-system-dirs.md — that file is the source of truth).
+_orphan_is_system() {
+  case "$1" in
+    com.apple.*|CallHistory*|CloudDocs|iCloud*|Spotlight|Music|Claude|Knowledge*|StatusKit*|CrashReporter|SyncServices) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+scan_orphan_app_data() {
+  [ "$OS_TYPE" = "macos" ] || return 0
+  local apps; apps=$(_installed_app_set)
+  local d name lname
+  for d in "$HOME/Library/Application Support"/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"; name=$(basename "$d")
+    _orphan_is_system "$name" && { _skip_protected "$d"; continue; }
+    lname=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+    [ -n "$lname" ] && printf '%s\n' "$apps" | grep -qF "$lname" && continue   # matches an installed app
+    # report_only: orphan-candidate deletion is too risky to auto-apply — surface
+    # for the user to investigate; targeted removal is a follow-on (opt-in).
+    _emit orphan_app_data "$d" rm report_only "orphan-candidate: no matching installed app — investigate before removing"
+  done
+}
+
 scan_xcode() {
   [ "$OS_TYPE" = "macos" ] || return 0
   local dd="$HOME/Library/Developer/Xcode/DerivedData"
@@ -311,13 +343,13 @@ run_sections() {
       scan_dev_caches; scan_electron; scan_trash; scan_build_artifacts ;;
     deep)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
-      scan_brew; scan_docker; scan_xcode; scan_ios_backups
+      scan_orphan_app_data; scan_brew; scan_docker; scan_xcode; scan_ios_backups
       scan_large_files; scan_launchagents; scan_pipx
       scan_linux_pkg; scan_snap; scan_flatpak
       scan_build_artifacts ;;
     audit)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
-      scan_brew; scan_docker; scan_xcode; scan_ios_backups
+      scan_orphan_app_data; scan_brew; scan_docker; scan_xcode; scan_ios_backups
       scan_large_files; scan_launchagents; scan_pipx
       scan_linux_pkg; scan_snap; scan_flatpak
       scan_build_artifacts ;;

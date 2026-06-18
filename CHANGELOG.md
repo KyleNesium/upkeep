@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - unreleased
+
+### Cleanup skills fast-path port — the destructive path leaves LLM prose for tested code
+
+`audit`, `cleanquick`, and `cleandeep` were prompt-orchestrated: each mutating
+phase was its own discover→approve→apply turn, and path safety (the `--`
+sentinel, protected dirs, never-reconstruct rule) lived in LLM discipline. A
+path-handling mistake there deletes user data, not a failed upgrade. v1.8 ports
+all three onto a shared single-shot `clean.sh` engine — the same architecture
+`update` got in v1.4–v1.7 — and moves deletion behind a hardcoded, tested
+path-safety validator.
+
+#### Added
+- **`clean.sh` engine** (`upkeep/skills/upkeep/scripts/`): `discover <audit|quick|deep>`
+  builds a manifest + gate JSON; `apply <manifest> [--drop=…]` executes the
+  approved set. `clean-validate.sh` is the path-safety boundary (canonical
+  containment via `cd -P`/`pwd -P` — no GNU `realpath`; PROTECTED denylist
+  override; per-action shape: electron cache-leaf, launchagent single-plist +
+  `homebrew.mxcl.*` exclusion, mobilesync per-backup). `lib/common.sh` holds the
+  shared `_detect_os` + sanitization.
+- **Apply-time safety**: 15-minute manifest TTL; per-item re-validation; TOCTOU
+  re-stat (vanished / type-swap / size-drift → skip); Electron `pgrep` re-check;
+  per-item failure isolation; atomic manifest write (`mktemp -d` + rename).
+- **Coverage**: dev caches, Electron, Trash, saved state, build artifacts (report-
+  only in quick), Xcode, iOS backups, large files, orphaned LaunchAgents, Homebrew
+  cleanup/autoremove, Docker prune (macOS); ~/.cache, snap disabled revisions,
+  flatpak unused runtimes (Linux/WSL2); apt/dnf/pacman surfaced as manual sudo
+  steps (the sudo boundary — never auto-run).
+- **`tests/test-clean-skill.sh`**: 73 tests (path-validator attack battery, apply
+  re-validation, discover modes, non-path actions via PATH-stubbed brew/docker,
+  Linux branch via OS-override seam, wrapper + umbrella structure) — bash 3.2.
+
+#### Changed
+- `audit`/`cleanquick`/`cleandeep` SKILL.md rewritten as thin wrappers (922/605/384
+  → ~80–110 lines). `allowed-tools` tightened to the `clean.sh` invocation +
+  read-only queries; the broad `Bash(rm *)`/`Bash(brew *)`/`Edit(~/.zshrc)` grants
+  are dropped — the validator is the audited boundary.
+- Umbrella router (`/upkeep`) routes cleanup modes to `clean.sh` (1140 → 508 lines),
+  preserving the self-update gate before cleanup execution and the Update Mode
+  redirect.
+- `update`'s `discover.sh` now sources the shared `lib/common.sh` `_detect_os`
+  (one implementation across both engines; guarded by the 103-test update suite).
+
+#### Notes
+- Cleanup discovery is disk-I/O bound (no cache sentinel like brew's), so the win
+  is single-gate UX + a tested safety validator, not `update`-class raw speedups.
+- In progress on `feat/v1.8-cleanup-fastpath`. Remaining before release: orphan
+  app-data scan, in-script shell-config editor, eager-discovery hook.
+
 ## [1.7.1] - 2026-06-15
 
 ### CI — automated releases so a version can't ship unreleased

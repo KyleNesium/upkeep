@@ -343,6 +343,34 @@ SRBAD=$(_clean_dispatch_nonpath snap_remove 'evil;@x' && echo allowed || echo re
 _test "linux: snap_remove rejects bad identifier" "$([ "$SRBAD" = "rejected" ] && echo true || echo false)" "$SRBAD" "rejected"
 rm -rf -- "$LSTUB" "$LHOME"
 
+echo "── Shell-config editor (C3: edit + backup + validate + restore) ──"
+SHHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-sh.XXXXXX")
+cat > "$SHHOME/.zshrc" <<'ZRC'
+alias ll='ls -la'
+source /nonexistent/upkeep-test-foo.sh
+alias deadtool=/nonexistent/bin/deadtool
+if [ -f /nope ]; then
+source /nope-conditional
+fi
+[ -f /nope ] && source /nope-andand
+export PATH="$HOME/bin:$PATH"
+ZRC
+_sh_disc() { HOME="$SHHOME" UPKEEP_DATA_DIR="$SHHOME/data" /bin/bash "$CLEAN" discover deep 2>/dev/null; }
+SH_MF=$(_sh_disc | jq -r '.manifest_file')
+SHITEM=$(jq -r '[.items[]|select(.action=="shell_fix")]|length' "$SH_MF" 2>/dev/null)
+_test "shell_config: dead-entry item emitted" "$([ "$SHITEM" -ge 1 ] 2>/dev/null && echo true || echo false)" "$SHITEM" ">=1"
+
+HOME="$SHHOME" UPKEEP_DATA_DIR="$SHHOME/data" /bin/bash "$CLEAN" apply "$SH_MF" >/dev/null 2>&1
+RC="$SHHOME/.zshrc"
+_test "shell_fix: removed dead source line" "$(grep -q 'upkeep-test-foo' "$RC" && echo false || echo true)" "deadsource" "removed"
+_test "shell_fix: removed dead path-alias line" "$(grep -q 'deadtool' "$RC" && echo false || echo true)" "deadalias" "removed"
+_test "shell_fix: KEPT conditional source" "$(grep -q 'nope-conditional' "$RC" && echo true || echo false)" "cond" "kept"
+_test "shell_fix: KEPT && source line" "$(grep -q 'nope-andand' "$RC" && echo true || echo false)" "andand" "kept"
+_test "shell_fix: KEPT live alias" "$(grep -q "ll='ls -la'" "$RC" && echo true || echo false)" "live" "kept"
+_test "shell_fix: backup created" "$(ls "$SHHOME"/.zshrc.upkeep-bak.* >/dev/null 2>&1 && echo true || echo false)" "backup" "exists"
+_test "shell_fix: result passes zsh -n" "$(zsh -n "$RC" 2>/dev/null && echo true || echo false)" "syntax" "valid"
+rm -rf -- "$SHHOME"
+
 echo "── Wrapper structure (thin two-turn / one-turn) ──"
 SKILLS_ROOT="$REPO_ROOT/upkeep/skills"
 A="$SKILLS_ROOT/audit/SKILL.md"; Q="$SKILLS_ROOT/cleanquick/SKILL.md"; D="$SKILLS_ROOT/cleandeep/SKILL.md"

@@ -272,6 +272,53 @@ scan_docker() {
   _emit_nonpath docker "docker:prune" docker_prune warn "docker-prune: removes dangling images + stopped containers"
 }
 
+# ── shell-config editor (C3 — edit, not delete) ──────────────────
+# Conservative dead-entry detection: removable lines are non-conditional
+# `source`/`.` lines whose target file is missing, and `alias x=/path/...`
+# lines whose path target is missing. Lines inside if/fi or case/esac blocks,
+# or containing && / ||, are NEVER touched (reported only). Prints the line
+# numbers of removable dead entries, one per line. Used by both scan (count)
+# and apply (edit) so they always agree.
+_shell_dead_lines() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  awk '
+    function exists(p){ return !system("test -e \"" p "\"") }
+    BEGIN{ depth=0 }
+    {
+      line=$0; n=NR
+      # block depth tracking (conditional → never editable)
+      if (line ~ /^[[:space:]]*(if|case)([[:space:]]|\()/) { depth++; next }
+      if (line ~ /^[[:space:]]*(fi|esac)([[:space:]]|;|$)/) { if(depth>0) depth--; next }
+      if (depth>0) next
+      if (line ~ /(&&|\|\|)/) next
+      # dead source:  source FILE   |   . FILE
+      if (match(line, /^[[:space:]]*(source|\.)[[:space:]]+[^[:space:]]+/)) {
+        t=line; sub(/^[[:space:]]*(source|\.)[[:space:]]+/,"",t); sub(/[[:space:]].*$/,"",t)
+        gsub(/["'"'"']/,"",t); sub(/^~/, ENVIRON["HOME"], t); gsub(/\$HOME/, ENVIRON["HOME"], t)
+        if (t!="" && !exists(t)) { print n; next }
+      }
+      # dead path-alias:  alias x=/abs/path...  (only path targets, conservative)
+      if (match(line, /^[[:space:]]*alias[[:space:]]+[A-Za-z0-9_]+=/)) {
+        v=line; sub(/^[^=]*=/,"",v); gsub(/^["'"'"']|["'"'"']$/,"",v); sub(/[[:space:]].*$/,"",v)
+        sub(/^~/, ENVIRON["HOME"], v); gsub(/\$HOME/, ENVIRON["HOME"], v)
+        if (v ~ /\// && !exists(v)) { print n }
+      }
+    }
+  ' "$file"
+}
+
+scan_shell_config() {
+  [ "$OS_TYPE" = "macos" ] || return 0   # Linux shell-config edit is a follow-on
+  local f cnt
+  for f in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zshenv" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+    [ -f "$f" ] || continue
+    cnt=$(_shell_dead_lines "$f" | wc -l | tr -d ' ')
+    [ "$cnt" -gt 0 ] 2>/dev/null || continue
+    _emit shell_config "$f" shell_fix warn "shell-config: $cnt dead entr$([ "$cnt" = 1 ] && echo y || echo ies) (missing source/alias targets) — backed up + syntax-checked before edit"
+  done
+}
+
 scan_pipx() {
   command -v pipx >/dev/null 2>&1 || return 0
   # pipx removal is opt-in per tool — emit as report_only (informational).
@@ -344,13 +391,13 @@ run_sections() {
     deep)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
       scan_orphan_app_data; scan_brew; scan_docker; scan_xcode; scan_ios_backups
-      scan_large_files; scan_launchagents; scan_pipx
+      scan_large_files; scan_launchagents; scan_pipx; scan_shell_config
       scan_linux_pkg; scan_snap; scan_flatpak
       scan_build_artifacts ;;
     audit)
       scan_dev_caches; scan_electron; scan_trash; scan_saved_state
       scan_orphan_app_data; scan_brew; scan_docker; scan_xcode; scan_ios_backups
-      scan_large_files; scan_launchagents; scan_pipx
+      scan_large_files; scan_launchagents; scan_pipx; scan_shell_config
       scan_linux_pkg; scan_snap; scan_flatpak
       scan_build_artifacts ;;
     *) _die "unknown mode: $MODE (want audit|quick|deep)" ;;
@@ -457,6 +504,16 @@ cmd_apply() {
     if _is_dropped "$category"; then
       printf '%s\treason=dropped-category\n' "$id" >> "$SKIPPED"; continue
     fi
+    # shell_fix EDITS a dotfile (not delete) — its own validated dispatch with
+    # backup + syntax-check + auto-restore.
+    if [ "$action" = "shell_fix" ]; then
+      if _clean_shell_fix "$path"; then
+        printf '%s\t0\n' "$id" >> "$APPLIED"
+      else
+        printf '%s\treason=shell-fix-restored\n' "$id" >> "$FAILED"
+      fi
+      continue
+    fi
     # Non-path actions (brew/docker/pipx): no filesystem target → skip the path
     # validator + re-stat; validate the identifier and dispatch separately.
     if ! _is_path_action "$action"; then
@@ -543,6 +600,42 @@ _clean_dispatch() {
       rm -f -- "$canon" 2>/dev/null ;;
     *) return 1 ;;
   esac
+}
+
+# shell_fix — edit a dotfile to drop dead source/alias lines, with backup +
+# syntax validation + auto-restore. Re-derives dead lines at apply time (only
+# removes lines STILL dead), so a stale manifest never deletes a now-valid line.
+_clean_shell_fix() {
+  local file="$1" base parent home_c
+  base=$(basename -- "$file")
+  case "$base" in .zshrc|.zprofile|.zshenv|.bash_profile|.bashrc|.profile) ;; *) return 1 ;; esac
+  [ -f "$file" ] || return 1
+  parent=$(cd -P -- "$(dirname -- "$file")" 2>/dev/null && pwd -P)
+  home_c=$(cd -P -- "$HOME" 2>/dev/null && pwd -P)
+  [ "$parent" = "$home_c" ] || return 1   # only dotfiles directly in $HOME
+
+  local dead; dead=$(_shell_dead_lines "$file")
+  [ -n "$dead" ] || return 0   # nothing still dead — no-op success
+
+  local stamp backup; stamp=$(date +%Y%m%d-%H%M%S)
+  backup="${file}.upkeep-bak.${stamp}"
+  cp -p -- "$file" "$backup" 2>/dev/null || return 1
+
+  # rewrite without the dead line numbers
+  local tmp; tmp=$(mktemp "${TMPDIR:-/tmp}/upkeep-shellfix.XXXXXX")
+  awk -v drop="$(printf '%s' "$dead" | tr '\n' ',')" '
+    BEGIN{ split(drop,a,","); for(i in a) d[a[i]]=1 }
+    !(FNR in d)' "$file" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+
+  # syntax-validate the rewritten file; restore on failure
+  local validator; case "$base" in *.zshrc|*.zshenv|*.zprofile|.zshrc|.zshenv|.zprofile) validator=zsh ;; *) validator=bash ;; esac
+  if "$validator" -n "$tmp" 2>/dev/null; then
+    mv -f -- "$tmp" "$file" 2>/dev/null || { cp -p -- "$backup" "$file"; rm -f -- "$tmp"; return 1; }
+    return 0
+  else
+    rm -f -- "$tmp"   # keep original untouched; backup remains for the user
+    return 1
+  fi
 }
 
 # Non-path dispatch — hardcoded commands; the manifest carries only a

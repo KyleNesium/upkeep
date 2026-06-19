@@ -430,11 +430,33 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**103 tests** across 1 automated test file (`tests/test-update-skill.sh`),
-covering the `update` skill's shell orchestrator. Run with
-`bash tests/test-update-skill.sh` (also passes under `/bin/bash`, macOS 3.2.57).
-The cleanup skills (`cleandeep`/`cleanquick`/`audit`/`upkeep`) remain
-prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
+**200 tests** across 2 automated test files (97 `clean` + 103 `update`). Run with
+`bash tests/test-clean-skill.sh` and `bash tests/test-update-skill.sh` (both
+pass under `/bin/bash`, macOS 3.2.57). The `clean` suite includes a pre-merge
+security-regression set (shell-config command-injection, future-dated manifest
+TTL bypass, quoted-path handling) from an adversarial codex review.
+
+As of v1.8 the cleanup skills (`audit`/`cleanquick`/`cleandeep`) are no longer
+prompt-orchestrated — they are thin two-turn wrappers over a shared `clean.sh`
+engine (`upkeep/skills/upkeep/scripts/{clean.sh,clean-validate.sh,lib/common.sh}`),
+the same single-shot architecture `update` uses. The destructive path is moved
+out of LLM prose into a tested, hardcoded path-safety validator.
+
+### `clean.sh` cleanup engine (v1.8) — `tests/test-clean-skill.sh`
+
+| Area | Tests | What's covered |
+|------|-------|----------------|
+| Path-safety validator | ~11 | Containment under SAFE_ROOTS; PROTECTED denylist override; per-action shape (electron cache-leaf, launchagent single-plist + homebrew.mxcl exclusion, mobilesync per-backup); attack battery (traversal, symlink escape, outside-roots, leading-dash, spaces); >256-char path preserved |
+| Apply re-validation | ~8 | 15-min manifest TTL refusal; TOCTOU vanished / type-swap / size-drift skip; report_only never deleted; `--drop` category exclusion; per-item isolation; manifest consumed |
+| Discover engine | ~13 | audit/quick/deep modes; needs_approval; dual path repr; atomic manifest write + created_at; build-artifacts report_only in quick; Claude cache excluded; xcode, ios_backup, large_file, orphan-app-data (report_only) sections |
+| Non-path actions | ~5 | brew cleanup/autoremove + docker prune discover (PATH-stubbed); apply invokes the real command; pipx tool-name metachar rejection |
+| Linux/WSL2 branch | ~4 | apt cache as sudo manual step; snap disabled-revision → snap_remove; flatpak unused → flatpak_unused; snap_remove identifier validation (via OS-override seam) |
+| Shell-config editor | ~8 | dead source/path-alias lines removed; conditional / `&&` / live lines kept; cp backup created; result passes `zsh -n` (edit + validate + auto-restore) |
+| Eager-discovery prewarm | ~8 | prewarm writes a stable manifest; discover reuses within TTL; `UPKEEP_NO_REUSE` + stale-TTL force a fresh scan; hook no-op when disabled; plugin.json/hooks.json valid |
+| Wrapper + umbrella structure | ~22 | All three wrappers reference the engine, version 1.8.0, no broad `Bash(rm *)`/`Edit` grants; audit never applies; quick/deep two-turn; umbrella routes to clean.sh with the self-update gate preceding cleanup execution |
+| Shared helpers | ~3 | `_sanitize_text` caps free-text/strips control chars (never paths); `_detect_os` override seam |
+
+### `update` skill (v1.1–v1.7) — `tests/test-update-skill.sh`
 
 | Area | Tests | What's covered |
 |------|-------|----------------|
@@ -453,10 +475,10 @@ prompt-based and are validated by live invocation across macOS, Linux, and WSL2.
 
 | Command | What's validated |
 |---------|-----------------|
-| `/upkeep` | Mode selection routing, keyword detection |
-| `/upkeep:cleandeep` | Full 15-phase execution, phase ordering, safety rules |
-| `/upkeep:cleanquick` | Phases 1-3, 8, 11, 13 only; build artifacts report-only enforcement |
-| `/upkeep:audit` | All 15 phases, zero mutations, accurate size reporting |
+| `/upkeep` | Mode selection routing, keyword detection, self-update gate before cleanup execution (v1.8) |
+| `/upkeep:cleandeep` | Two-turn wrapper over `clean.sh discover deep` → gate → apply (v1.8) |
+| `/upkeep:cleanquick` | Two-turn wrapper over `clean.sh discover quick`; build artifacts report-only (v1.8) |
+| `/upkeep:audit` | One-turn `clean.sh discover audit`, zero mutations, never truncates (v1.8) |
 | `/upkeep:update` (Linux / WSL2, v1.6) | Single-shot fast path: OS-aware discovery, snap/flatpak auto-apply, apt/dnf/pacman as manual sudo steps, WSL2 Windows audit-only, single approval gate |
 | `/upkeep:update` (macOS, v1.1) | Parallel scouts, compatibility synthesizer, single approval gate, parallel apply, post-flight (brew doctor, PATH shadow, deprecation aggregator), history-tuned ETA |
 | `/upkeep:update` (security, v1.2) | Hardcoded apply dispatcher (no `eval`), allowlisted tool ids, denylist + length-cap discovery sanitization, exact-match remote URL validation, first-encounter trust gate for third-party skill repos, Discover/Approve/Apply turn separation, atomic + `flock`-serialized history writer |

@@ -228,6 +228,16 @@ _test "stale manifest → apply refused (error)" "$([ -n "$ERR" ] && echo true |
 _test "stale manifest → nothing deleted" "$STILL" "$STILL" "true"
 rm -rf -- "$AHOME"
 
+# 3b. future-dated manifest is also refused (codex #2a — negative age bypass)
+_fresh_apply_home
+MF=$(_apply_disc deep)
+jq --argjson f "$(( $(date +%s) + 99999 ))" '.created_at = $f' "$MF" > "$MF.t" && mv "$MF.t" "$MF"
+FERR=$(_apply_run "$MF" | jq -r '.error // empty')
+FSTILL=$([ -d "$AHOME/Library/Caches/com.foo" ] && echo true || echo false)
+_test "future-dated manifest → apply refused" "$([ -n "$FERR" ] && echo true || echo false)" "$FERR" "non-empty error"
+_test "future-dated manifest → nothing deleted" "$FSTILL" "$FSTILL" "true"
+rm -rf -- "$AHOME"
+
 # 4. --drop excludes a category
 _fresh_apply_home
 MF=$(_apply_disc deep)
@@ -370,6 +380,27 @@ _test "shell_fix: KEPT live alias" "$(grep -q "ll='ls -la'" "$RC" && echo true |
 _test "shell_fix: backup created" "$(ls "$SHHOME"/.zshrc.upkeep-bak.* >/dev/null 2>&1 && echo true || echo false)" "backup" "exists"
 _test "shell_fix: result passes zsh -n" "$(zsh -n "$RC" 2>/dev/null && echo true || echo false)" "syntax" "valid"
 rm -rf -- "$SHHOME"
+
+# SECURITY (codex #3): a malicious source target must NOT execute during scan/apply
+INJHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-inj.XXXXXX")
+PWNED="$INJHOME/PWNED"
+printf 'alias ok=ls\n' > "$INJHOME/.zshrc"
+printf 'source "$(touch %q)"\n' "$PWNED" >> "$INJHOME/.zshrc"
+INJ_MF=$(HOME="$INJHOME" UPKEEP_DATA_DIR="$INJHOME/data" /bin/bash "$CLEAN" discover deep 2>/dev/null | jq -r '.manifest_file')
+HOME="$INJHOME" UPKEEP_DATA_DIR="$INJHOME/data" /bin/bash "$CLEAN" apply "$INJ_MF" >/dev/null 2>&1
+_test "shell_fix: source target NOT executed (no injection)" "$([ ! -e "$PWNED" ] && echo true || echo false)" "$([ -e "$PWNED" ] && echo PWNED || echo safe)" "safe"
+rm -rf -- "$INJHOME"
+
+# quoted source target with spaces is NOT mis-truncated (codex #4)
+QSHOME=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-qs.XXXXXX")
+mkdir -p "$QSHOME/with space"; : > "$QSHOME/with space/live.sh"
+printf 'source "%s/with space/live.sh"\n' "$QSHOME" > "$QSHOME/.zshrc"
+printf 'source "%s/with space/dead.sh"\n' "$QSHOME" >> "$QSHOME/.zshrc"
+QS_MF=$(HOME="$QSHOME" UPKEEP_DATA_DIR="$QSHOME/data" /bin/bash "$CLEAN" discover deep 2>/dev/null | jq -r '.manifest_file')
+HOME="$QSHOME" UPKEEP_DATA_DIR="$QSHOME/data" /bin/bash "$CLEAN" apply "$QS_MF" >/dev/null 2>&1
+_test "shell_fix: keeps live quoted-space source" "$(grep -q 'with space/live.sh' "$QSHOME/.zshrc" && echo true || echo false)" "live-space" "kept"
+_test "shell_fix: removes dead quoted-space source" "$(grep -q 'with space/dead.sh' "$QSHOME/.zshrc" && echo false || echo true)" "dead-space" "removed"
+rm -rf -- "$QSHOME"
 
 echo "── Wrapper structure (thin two-turn / one-turn) ──"
 SKILLS_ROOT="$REPO_ROOT/upkeep/skills"

@@ -130,22 +130,20 @@ scan_saved_state() {
 
 scan_electron() {
   [ "$OS_TYPE" = "macos" ] || return 0
-  local found
-  found=$(find "$HOME/Library/Application Support" -maxdepth 5 \
-      -not -path "*/Claude/*" -not -path "*/Claude" \
-      \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" \
-         -o -name "CachedData" -o -name "CachedExtension*" \
-         -o -name "PersistentCache" -o -name "GPUCache" \) \
-      -type d 2>/dev/null)
+  # NUL-delimited (-print0 / read -d '') so a cache dir whose name contains a
+  # newline can't split into a bogus path.
   local d app
-  while IFS= read -r d; do
+  while IFS= read -r -d '' d; do
     [ -n "$d" ] || continue
     # app name = the Application Support child dir, for pgrep re-check at apply
     app=$(printf '%s' "$d" | sed "s|$HOME/Library/Application Support/||; s|/.*||")
     _emit electron "$d" electron_cache safe "" "$app"
-  done <<EOF
-$found
-EOF
+  done < <(find "$HOME/Library/Application Support" -maxdepth 5 \
+      -not -path "*/Claude/*" -not -path "*/Claude" \
+      \( -name "Cache" -o -name "Code Cache" -o -name "Service Worker" \
+         -o -name "CachedData" -o -name "CachedExtension*" \
+         -o -name "PersistentCache" -o -name "GPUCache" \) \
+      -type d -print0 2>/dev/null)
 }
 
 scan_build_artifacts() {
@@ -157,14 +155,16 @@ scan_build_artifacts() {
   # build-artifacts: report_only in quick mode (and in audit); rm in deep.
   local action safety
   if [ "$MODE" = "deep" ]; then action=rm; safety=safe; else action=rm; safety=report_only; fi
-  local listing tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-art.XXXXXX")
+  # NUL-delimited (-print0) into a temp file, read back with read -d '' — keeps
+  # newline-bearing dir names from splitting into bogus records.
+  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-art.XXXXXX")
   if [ "$MODE" = "audit" ]; then
     # audit never truncates (codex #11) — run the find to completion.
     # shellcheck disable=SC2086
     find $roots -maxdepth 4 \( -name node_modules -o -name .venv -o -name venv \
       -o -name .next -o -name dist -o -name build -o -name target \
       -o -name __pycache__ -o -name .pytest_cache -o -name .turbo \) -type d \
-      > "$tmpf" 2>/dev/null
+      -print0 > "$tmpf" 2>/dev/null
   else
     # quick/deep: bash-native wall-clock bound (NO GNU timeout). find runs as
     # a direct bash command in the background; a sleeper kills it on timeout.
@@ -172,7 +172,7 @@ scan_build_artifacts() {
     find $roots -maxdepth 4 \( -name node_modules -o -name .venv -o -name venv \
       -o -name .next -o -name dist -o -name build -o -name target \
       -o -name __pycache__ -o -name .pytest_cache -o -name .turbo \) -type d \
-      > "$tmpf" 2>/dev/null &
+      -print0 > "$tmpf" 2>/dev/null &
     local fpid=$! kpid
     ( sleep "${UPKEEP_SCAN_BUDGET:-20}"; kill -TERM "$fpid" 2>/dev/null ) & kpid=$!
     if ! wait "$fpid" 2>/dev/null; then
@@ -180,14 +180,12 @@ scan_build_artifacts() {
     fi
     kill -TERM "$kpid" 2>/dev/null; wait "$kpid" 2>/dev/null || true
   fi
-  listing=$(cat "$tmpf"); rm -f -- "$tmpf"
   local d
-  while IFS= read -r d; do
+  while IFS= read -r -d '' d; do
     [ -n "$d" ] || continue
     _emit build_artifacts "$d" "$action" "$safety"
-  done <<EOF
-$listing
-EOF
+  done < "$tmpf"
+  rm -f -- "$tmpf"
 }
 
 # Installed-app set (lowercased, space-stripped) for orphan matching.
@@ -243,14 +241,12 @@ scan_ios_backups() {
 scan_large_files() {
   [ "$OS_TYPE" = "macos" ] || return 0
   local f
-  while IFS= read -r f; do
+  while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
     _emit large_file "$f" rm warn "large-file: verify you no longer need this installer/archive"
-  done <<EOF
-$(find "$HOME/Downloads" "$HOME/Desktop" -maxdepth 3 \
+  done < <(find "$HOME/Downloads" "$HOME/Desktop" -maxdepth 3 \
     \( -name "*.dmg" -o -name "*.pkg" -o -name "*.iso" -o -name "*.zip" \) \
-    -not -path "*/.Trash/*" -type f 2>/dev/null)
-EOF
+    -not -path "*/.Trash/*" -type f -print0 2>/dev/null)
 }
 
 scan_brew() {
@@ -282,30 +278,51 @@ scan_docker() {
 _shell_dead_lines() {
   local file="$1"
   [ -f "$file" ] || return 0
+  # awk ONLY parses — it extracts the (quote-aware) target of non-conditional
+  # source/alias lines and emits "linenum<TAB>target". It NEVER executes the
+  # target (the prior system("test -e ...") was a command-injection hole:
+  # a dotfile line like `source "$(rm -rf ~)"` would run during a scan).
+  # Existence is checked below in bash with the `test` builtin, which does not
+  # evaluate the value — so $(...) / backticks in a target are inert. Quote-aware
+  # extraction also fixes truncation of paths containing spaces.
   awk '
-    function exists(p){ return !system("test -e \"" p "\"") }
+    function extract(s,   c,i,ch,out,q){
+      sub(/^[[:space:]]+/,"",s)
+      if (s=="") return ""
+      c=substr(s,1,1)
+      if (c=="\"" || c=="\047"){           # quoted (\047 = single quote)
+        q=c; out=""
+        for(i=2;i<=length(s);i++){ ch=substr(s,i,1); if(ch==q) break; out=out ch }
+        return out
+      }
+      sub(/[[:space:]].*$/,"",s)           # unquoted: up to first whitespace
+      return s
+    }
     BEGIN{ depth=0 }
     {
       line=$0; n=NR
-      # block depth tracking (conditional → never editable)
       if (line ~ /^[[:space:]]*(if|case)([[:space:]]|\()/) { depth++; next }
       if (line ~ /^[[:space:]]*(fi|esac)([[:space:]]|;|$)/) { if(depth>0) depth--; next }
       if (depth>0) next
       if (line ~ /(&&|\|\|)/) next
-      # dead source:  source FILE   |   . FILE
-      if (match(line, /^[[:space:]]*(source|\.)[[:space:]]+[^[:space:]]+/)) {
-        t=line; sub(/^[[:space:]]*(source|\.)[[:space:]]+/,"",t); sub(/[[:space:]].*$/,"",t)
-        gsub(/["'"'"']/,"",t); sub(/^~/, ENVIRON["HOME"], t); gsub(/\$HOME/, ENVIRON["HOME"], t)
-        if (t!="" && !exists(t)) { print n; next }
+      if (match(line, /^[[:space:]]*(source|\.)[[:space:]]+/)) {
+        t=extract(substr(line, RLENGTH+1))
+        if (t != "") print n "\t" t
+        next
       }
-      # dead path-alias:  alias x=/abs/path...  (only path targets, conservative)
       if (match(line, /^[[:space:]]*alias[[:space:]]+[A-Za-z0-9_]+=/)) {
-        v=line; sub(/^[^=]*=/,"",v); gsub(/^["'"'"']|["'"'"']$/,"",v); sub(/[[:space:]].*$/,"",v)
-        sub(/^~/, ENVIRON["HOME"], v); gsub(/\$HOME/, ENVIRON["HOME"], v)
-        if (v ~ /\// && !exists(v)) { print n }
+        v=extract(substr(line, RLENGTH+1))
+        # conservative: only a path-like, space-free target (avoids deleting
+        # aliases-to-commands and spaced/ambiguous values)
+        if (v ~ /\// && v !~ /[[:space:]]/) print n "\t" v
       }
     }
-  ' "$file"
+  ' "$file" | while IFS="$(printf '\t')" read -r ln tgt; do
+      [ -n "$ln" ] || continue
+      case "$tgt" in "~/"*) tgt="$HOME/${tgt#\~/}" ;; "~") tgt="$HOME" ;; esac
+      tgt=${tgt//\$HOME/$HOME}
+      [ -e "$tgt" ] || printf '%s\n' "$ln"
+    done
 }
 
 scan_shell_config() {
@@ -486,8 +503,10 @@ cmd_apply() {
   local created now age
   created=$(jq -r '.created_at // 0' "$manifest")
   now=$(date +%s); age=$((now - created))
-  if [ "$age" -gt "$_CLEAN_TTL" ]; then
-    _die "manifest is stale (${age}s old, max ${_CLEAN_TTL}s) — re-run discover"
+  # Reject both stale AND future-dated manifests — a future created_at would
+  # make age negative and silently bypass the TTL ceiling.
+  if [ "$age" -gt "$_CLEAN_TTL" ] || [ "$age" -lt 0 ]; then
+    _die "manifest timestamp out of range (age=${age}s, max ${_CLEAN_TTL}s) — re-run discover"
   fi
 
   local before; before=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')
@@ -496,10 +515,20 @@ cmd_apply() {
   FAILED=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-failed.XXXXXX")
   SKIPPED=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-skipped.XXXXXX")
 
-  # Iterate items as TSV (jq -r) to stay bash-3.2 friendly.
-  local id category path action safety is_sym size app verdict canon
-  while IFS=$'\t' read -r id category path action safety is_sym size app; do
-    [ -n "$id" ] || continue
+  # Iterate one compact-JSON item per line (jq escapes newlines inside string
+  # values, so each item is exactly one physical line — @tsv would let a
+  # newline-bearing path split into bogus records that could be deleted).
+  local id category path action safety is_sym size app verdict canon item
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    id=$(jq -r '.id' <<<"$item")
+    category=$(jq -r '.category' <<<"$item")
+    path=$(jq -r '.path' <<<"$item")
+    action=$(jq -r '.action' <<<"$item")
+    safety=$(jq -r '.safety' <<<"$item")
+    is_sym=$(jq -r '.is_symlink|tostring' <<<"$item")
+    size=$(jq -r '.size_bytes|tostring' <<<"$item")
+    app=$(jq -r '.app_name // "null"' <<<"$item")
     _is_selected "$id" || continue
     if [ "$safety" = "report_only" ]; then continue; fi
     if _is_dropped "$category"; then
@@ -555,13 +584,22 @@ cmd_apply() {
         printf '%s\treason=app-running\n' "$id" >> "$SKIPPED"; continue
       fi
     fi
+    # TOCTOU: re-validate from the ORIGINAL path immediately before the
+    # destructive op — an ancestor dir could have been swapped for a symlink
+    # during the cheap checks above. Dispatch the freshly-resolved canon so the
+    # window between final validation and rm is a single statement.
+    verdict=$(_clean_validate "$path" "$action")
+    if [ "${verdict%% *}" != "OK" ]; then
+      printf '%s\treason=revalidate-failed\n' "$id" >> "$SKIPPED"; continue
+    fi
+    canon="${verdict#OK }"
     # dispatch — hardcoded by action, per-item isolation
     if _clean_dispatch "$action" "$canon"; then
       printf '%s\t%s\n' "$id" "$now_size" >> "$APPLIED"
     else
       printf '%s\treason=command-failed\n' "$id" >> "$FAILED"
     fi
-  done < <(jq -r '.items[] | [.id,.category,.path,.action,.safety,(.is_symlink|tostring),(.size_bytes|tostring),(.app_name//"null")] | @tsv' "$manifest")
+  done < <(jq -c '.items[]' "$manifest")
 
   local after reclaimed
   after=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')

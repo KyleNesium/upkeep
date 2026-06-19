@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.0] - unreleased
+## [1.8.0] - 2026-06-19
 
 ### Cleanup skills fast-path port — the destructive path leaves LLM prose for tested code
 
@@ -60,11 +60,17 @@ path-safety validator.
 - `update`'s `discover.sh` now sources the shared `lib/common.sh` `_detect_os`
   (one implementation across both engines; guarded by the 103-test update suite).
 
+#### Security
+- Pre-merge adversarial codex review of the destructive engine found and fixed 5
+  issues: a command-injection hole in the shell-config scanner (a dotfile
+  `source "$(…)"` line ran during a scan), a future-dated-manifest TTL bypass, a
+  validate→delete TOCTOU window, quoted-path truncation in the shell editor, and
+  newline-in-filename record splitting. Each has a regression test.
+
 #### Notes
 - Cleanup discovery is disk-I/O bound (no cache sentinel like brew's), so the win
   is single-gate UX + a tested safety validator, not `update`-class raw speedups.
-- Feature-complete on `feat/v1.8-cleanup-fastpath` (195 tests: 92 clean + 103
-  update). Pending: live macOS/Linux apply validation, then merge + tag.
+- 200 tests (97 clean + 103 update) under stock macOS bash 3.2.
 
 ## [1.7.1] - 2026-06-15
 

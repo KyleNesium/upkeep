@@ -319,7 +319,8 @@ SUMMARY=$(jq -nc \
    },
    eta_minutes_p50: $eta.p50_minutes,
    eta_minutes_p90: $eta.p90_minutes,
-   disk_free_gb: $d.disk.free_gb
+   disk_free_gb: $d.disk.free_gb,
+   disk_total_gb: ($d.disk.total_gb // 0)
   }
 ')
 

@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-06-29
+
+### Fixed
+
+#### Disk space reading on macOS APFS didn't match what the OS shows
+
+The `update` discovery and pre-flight read disk space with
+`df -k / | awk '{print int($4/1024/1024)}'`, which hit three macOS traps and
+never matched System Settings → Storage:
+
+- **Unit mismatch.** Dividing KiB by 1024² yields **GiB** (base-1024) but the
+  value was labelled "GB". macOS reports base-10 **GB**, so every figure ran
+  ~7% low.
+- **Sealed-APFS wrong volume.** On modern macOS, `/` is the read-only system
+  snapshot (Used ≈ 13 GB); real usage lives on `/System/Volumes/Data`. Any
+  total derived from `used + avail` on `/` is garbage (~227 GB vs the real
+  ~995 GB container).
+- **Purgeable space.** `df` *and* `diskutil` report only strictly-free space
+  (e.g. 215 GB), but macOS counts purgeable caches/snapshots as available
+  (e.g. 374 GB). Reporting strictly-free under-counted by ~150 GB and didn't
+  match Finder or System Settings.
+
+Disk reads now use the same source as Finder and System Settings —
+`URLResourceValues` (`.volumeAvailableCapacityForImportantUsage` for free,
+`.volumeTotalCapacity` for total), queried via `osascript`'s ObjC bridge
+(present on every Mac, no Xcode required) and converted to base-10 GB. Fallback
+chain: `osascript` → `diskutil` Container byte counts (strictly-free, no
+purgeable) → `df` on Linux/WSL2, where `/` is a normal volume and `used + avail`
+is meaningful. Discovery now also emits `disk.total_gb`; the plan summary carries
+`disk_total_gb` and the approval gate shows `Disk free: X GB of Y GB total`.
+Fixed in `update`'s `discover.sh`, `synthesize.sh`, and `SKILL.md`
+pre-flight/render, plus the `cleandeep` pre-flight. `clean.sh`'s before/after
+reclaim delta was already correct (it diffs the Available column and reports
+honest `reclaimed_bytes`) and is unchanged.
+
 ## [1.8.0] - 2026-06-19
 
 ### Cleanup skills fast-path port — the destructive path leaves LLM prose for tested code

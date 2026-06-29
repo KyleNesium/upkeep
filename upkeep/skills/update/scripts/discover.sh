@@ -33,13 +33,51 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ── Disk pre-flight ──────────────────────────────────────────────
-free_gb=$(df -k / 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}')
+# Report disk space the way macOS itself does (Finder / System Settings →
+# Storage), in base-10 GB. A naive `df -k /` hits three macOS traps:
+#   1. Unit: KiB ÷ 1024² yields GiB, not GB — macOS reports base-10 GB.
+#   2. Sealed APFS: `/` is the read-only system snapshot (Used ≈ 13 GB), so a
+#      total from used+avail on `/` is garbage (~227 GB vs the ~995 GB container).
+#   3. Purgeable: df AND diskutil report only strictly-free space (~215 GB),
+#      but macOS counts purgeable caches/snapshots as available (~374 GB) — so
+#      "free" must include purgeable to match what the user sees in Settings.
+# The authoritative source is URLResourceValues
+# (.volumeAvailableCapacityForImportantUsage / .volumeTotalCapacity) — exactly
+# what Finder and System Settings use. Read it via osascript (present on every
+# Mac, no Xcode needed); fall back to diskutil (strictly-free, no purgeable),
+# then df on Linux/WSL2 where `/` is a normal volume.
+free_gb=0
+total_gb=0
+if command -v osascript >/dev/null 2>&1; then
+  read -r _free_b _total_b < <(osascript -l JavaScript -e \
+'ObjC.import("Foundation");function c(k){var u=$.NSURL.fileURLWithPath("/"),v=Ref(),e=Ref();return u.getResourceValueForKeyError(v,k,e)?v[0].longLongValue:-1;}c($.NSURLVolumeAvailableCapacityForImportantUsageKey)+" "+c($.NSURLVolumeTotalCapacityKey)' 2>/dev/null)
+  if [ "${_free_b:-0}" -gt 0 ] 2>/dev/null && [ "${_total_b:-0}" -gt 0 ] 2>/dev/null; then
+    free_gb=$(awk -v b="$_free_b"  'BEGIN{printf "%d", (b/1e9)+0.5}')
+    total_gb=$(awk -v b="$_total_b" 'BEGIN{printf "%d", (b/1e9)+0.5}')
+  fi
+fi
+if [ "$free_gb" -eq 0 ] 2>/dev/null && command -v diskutil >/dev/null 2>&1; then
+  _disk_info=$(diskutil info / 2>/dev/null)
+  _free_b=$(awk -F'[()]' '/Container Free Space:/{print $2}'  <<<"$_disk_info" | awk '{print $1}')
+  _total_b=$(awk -F'[()]' '/Container Total Space:/{print $2}' <<<"$_disk_info" | awk '{print $1}')
+  if [ -n "${_free_b:-}" ] && [ -n "${_total_b:-}" ]; then
+    free_gb=$(awk -v b="$_free_b"  'BEGIN{printf "%d", (b/1e9)+0.5}')
+    total_gb=$(awk -v b="$_total_b" 'BEGIN{printf "%d", (b/1e9)+0.5}')
+  fi
+fi
+if [ "$free_gb" -eq 0 ] 2>/dev/null; then
+  # Linux / WSL2 / no macOS tooling: df -k reports KiB; ×1024 = bytes → base-10 GB.
+  read -r free_gb total_gb < <(df -k / 2>/dev/null | awk 'NR==2 {
+    printf "%d %d\n", ($4*1024/1e9)+0.5, (($3+$4)*1024/1e9)+0.5 }')
+fi
 free_gb=${free_gb:-0}
+total_gb=${total_gb:-0}
 disk_json=$(jq -n \
   --argjson free "$free_gb" \
+  --argjson total "$total_gb" \
   --argjson warn 10 \
   --argjson refuse 5 \
-  '{free_gb:$free, warn_threshold_gb:$warn, refuse_threshold_gb:$refuse}')
+  '{free_gb:$free, total_gb:$total, warn_threshold_gb:$warn, refuse_threshold_gb:$refuse}')
 
 # ── Helpers ──────────────────────────────────────────────────────
 _jq_string() { jq -Rs '.' <<<"$1"; }

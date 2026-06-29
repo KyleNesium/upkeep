@@ -226,7 +226,15 @@ all platforms now get the single-gate UX. If `$OS_TYPE` is `unknown`, report
 Disk pre-flight first (sub-second):
 
 ```bash
-FREE_GB=$(df -k / 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}')
+# Report free space the way macOS shows it (Settings → Storage), in base-10 GB:
+# URLResourceValues' importantUsage capacity INCLUDES purgeable space, which
+# df/diskutil omit (they'd under-count by ~150 GB). osascript is on every Mac;
+# fall back to diskutil (strictly-free), then df on Linux/WSL2.
+if command -v osascript >/dev/null 2>&1; then
+  FREE_GB=$(osascript -l JavaScript -e 'ObjC.import("Foundation");var u=$.NSURL.fileURLWithPath("/"),v=Ref(),e=Ref();u.getResourceValueForKeyError(v,$.NSURLVolumeAvailableCapacityForImportantUsageKey,e)?Math.round(v[0].longLongValue/1e9):""' 2>/dev/null)
+fi
+[ -z "${FREE_GB:-}" ] && command -v diskutil >/dev/null 2>&1 && FREE_GB=$(diskutil info / 2>/dev/null | awk -F'[()]' '/Container Free Space:/{print $2}' | awk '{printf "%d", ($1/1e9)+0.5}')
+[ -z "${FREE_GB:-}" ] && FREE_GB=$(df -k / 2>/dev/null | awk 'NR==2 {printf "%d", ($4*1024/1e9)+0.5}')
 if [ -z "$FREE_GB" ] || [ "$FREE_GB" -lt 5 ]; then
   echo "✗ Refusing to start: only ${FREE_GB:-?} GB free on /. Free up at least 5 GB and re-run."
   exit 1
@@ -326,7 +334,7 @@ Manual steps (you run these — NOT auto-applied):
   • windows-audit entries (WSL2): show the PowerShell guidance verbatim.
 
 ETA: ~<summary.eta_minutes_p50>m (p50), up to <eta_minutes_p90>m (p90)
-Disk free: <summary.disk_free_gb> GB
+Disk free: <summary.disk_free_gb> GB of <summary.disk_total_gb> GB total
 ```
 
 **Always** print this compatibility disclaimer directly above the

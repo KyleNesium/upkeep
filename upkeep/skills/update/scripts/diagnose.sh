@@ -91,7 +91,11 @@ _diagnose_one() {
   # ── Pattern 2: missing build dependency (extconf) ─────────────
   elif echo "$excerpt" | grep -qE "checking for .* no"; then
     local missing
-    missing=$(echo "$excerpt" | grep -oE "checking for [^.]+\.\.\. no" | head -3 | sed 's/checking for //; s/\.\.\. no//' | jq -R '.' | jq -s -c '.')
+    # `.+` not `[^.]+`: a header check like "checking for zlib.h... no" contains
+    # a dot in the name, which `[^.]+` can't cross — so the very case we most need
+    # (missing header) failed to match and extracted nothing. Anchor on the literal
+    # " ... no" suffix and strip it.
+    missing=$(echo "$excerpt" | grep -oE "checking for .+\.\.\. no" | head -3 | sed 's/^checking for //; s/\.\.\. no$//' | jq -R '.' | jq -s -c '.')
     missing=${missing:-'[]'}
     root_cause="Native extension build failed — missing system library"
     severity="medium"
@@ -359,12 +363,15 @@ diagnoses=$(jq '
   map(
     .fix_options |= map(select(
       (.command | test(
-        "rm[[:space:]]+-rf|--no-verify|--force|push[[:space:]]+--force|chmod[[:space:]]+777|sudo[[:space:]]+rm|curl[^|]*\\|[[:space:]]*(sh|bash|zsh)|wget[^|]*\\|[[:space:]]*(sh|bash|zsh)|bash[[:space:]]*<\\([[:space:]]*curl|sh[[:space:]]*<\\([[:space:]]*curl|^[[:space:]]*(sh|bash|zsh|eval|exec|source|\\.)[[:space:]]|;[[:space:]]*(sh|bash|zsh|eval|rm|kill)[[:space:]]|&&[[:space:]]*(rm|kill|chmod[[:space:]]+777)|dd[[:space:]]+.*of=/dev|>[[:space:]]*/dev/(sd|nvme|disk)"
+        "rm[[:space:]]+-[a-z]*r[a-z]*f|rm[[:space:]]+-[a-z]*f[a-z]*r|rm[[:space:]]+-r[[:space:]]+-f|rm[[:space:]]+-f[[:space:]]+-r|--no-verify|--force|push[[:space:]]+--force|chmod[[:space:]]+777|sudo[[:space:]]+rm|curl[^|]*\\|[[:space:]]*(sh|bash|zsh)|wget[^|]*\\|[[:space:]]*(sh|bash|zsh)|bash[[:space:]]*<\\([[:space:]]*curl|sh[[:space:]]*<\\([[:space:]]*curl|^[[:space:]]*(sh|bash|zsh|eval|exec|source|\\.)[[:space:]]|;[[:space:]]*(sh|bash|zsh|eval|rm|kill)[[:space:]]|&&[[:space:]]*(rm|kill|chmod[[:space:]]+777)|dd[[:space:]]+.*of=/dev|>[[:space:]]*/dev/(sd|nvme|disk)"
         ; "i"
       )) | not
     ))
   )
-' <<<"$diagnoses" 2>/dev/null || echo "$diagnoses")
+' <<<"$diagnoses" 2>/dev/null || echo '[]')
+# Fail CLOSED: if the denylist filter ever errors, emit no diagnoses rather than
+# the prior `|| echo "$diagnoses"`, which fell back to the UNFILTERED list and
+# would have surfaced exactly the destructive commands the filter exists to strip.
 
 jq -n --argjson d "$diagnoses" --argjson e "$errors" \
   '{diagnoses:$d, errors:$e}'

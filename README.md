@@ -430,11 +430,13 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**200 tests** across 2 automated test files (97 `clean` + 103 `update`). Run with
+**207 tests** across 2 automated test files (99 `clean` + 108 `update`). Run with
 `bash tests/test-clean-skill.sh` and `bash tests/test-update-skill.sh` (both
 pass under `/bin/bash`, macOS 3.2.57). The `clean` suite includes a pre-merge
 security-regression set (shell-config command-injection, future-dated manifest
-TTL bypass, quoted-path handling) from an adversarial codex review.
+TTL bypass, quoted-path handling, and symlink-target deletion refusal) from
+adversarial reviews; the `update` suite covers compat bump-gating and the
+fail-safe disk-refuse guard.
 
 As of v1.8 the cleanup skills (`audit`/`cleanquick`/`cleandeep`) are no longer
 prompt-orchestrated — they are thin two-turn wrappers over a shared `clean.sh`

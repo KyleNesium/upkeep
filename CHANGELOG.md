@@ -5,9 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.1] - 2026-06-29
+## [1.8.1] - 2026-06-30
 
 ### Fixed
+
+#### Audit-driven hardening across discovery, planning, apply, and the deletion path
+
+A multi-agent audit of the shell engine surfaced a batch of real bugs, fixed
+here. Ordered by severity:
+
+- **CRITICAL — symlinked cleanup target could delete a *different* directory's
+  data.** The path-safety validator canonicalized targets by following symlinks,
+  then validated and `rm -rf`'d the *resolved* path. A symlink inside one safe
+  root pointing at real data under another safe root (e.g.
+  `~/Library/Caches/x → ~/workspace/important`) passed every check and the
+  target was destroyed. The validator now refuses any symlinked leaf outright
+  (`clean-validate.sh`). Regression-tested.
+- **HIGH — `--drop` at the gate silently did nothing for most categories.** The
+  apply drop-list matched tool ids, but the "Drop categories" multi-select sends
+  ordered-group names (`language`, `stores`, `user-apps`); these matched no id,
+  so deselected tools upgraded anyway. Group names are now expanded to their
+  member tool ids, and `--drop=skills` now also skips the skills pull phase
+  (which runs before the dispatcher) (`update.sh`).
+- **HIGH — empty/whitespace `VERSION` file shadowed a valid `plugin.json`,** and
+  plugin version comparison used `sort -V`, which orders prereleases opposite to
+  SemVer (false-flagged `1.0.0`→`1.0.0-beta` as an update, missed
+  `1.0.0-rc1`→`1.0.0`). Both fixed in `discover.sh`.
+- **HIGH — disk-refuse guard didn't fail safe.** A float/null/absent `free_gb`
+  made the bash `[ -lt ]` test error out (swallowed), falling through to run a
+  full plan on a near-full disk. Now a numeric jq guard that refuses on missing
+  data (`synthesize.sh`).
+- **SECURITY — git argument injection on apply.** A plan-supplied branch like
+  `--upload-pack=<cmd>` was passed positionally to `git pull`, enabling command
+  execution from a tampered plan file. Added a `--` separator and a
+  `schema_version` assertion on the plan file before use (`update.sh`).
+- **`df` parsing wrong on Linux/WSL2 with long device names** (GNU `df` wraps to
+  a second line) — now `df -P`; Linux total uses df's own total, not
+  `used+avail` (which omits reserved blocks). **`softwareupdate`/`apt`/`dnf`
+  output now parsed under `LC_ALL=C`** so localized systems don't miss a required
+  restart or drop upgrade rows. **`dnf check-update` line-wrapped long package
+  names** are no longer dropped. (`discover.sh`, `clean.sh`)
+- **Compat warnings fired regardless of bump level** — a major-only edge emitted
+  a phantom "low" warning on a mere patch bump and polluted `risk_categories`.
+  Warnings are now gated by the observed bump (`synthesize.sh`). The three
+  divergent "skills to update" counts (eta / category_counts / ordered_groups)
+  were unified onto the actionable predicate (trusted, behind, clean).
+- **Deletion-path robustness (`clean.sh`):** a non-integer/leading-zero manifest
+  `created_at` crashed apply instead of being rejected; Xcode DerivedData/Archives
+  were emitted as their own safe-root and so were always refused (now emit
+  children); the Electron "app still running" guard used `pgrep -x` (exact name)
+  and almost never matched its helper processes (now `pgrep -i`); empty `$HOME`
+  and space-bearing `$HOME` are now handled.
+- **`diagnose.sh`:** the missing-build-dependency extractor used `[^.]+`, which
+  couldn't capture header names containing a dot (`zlib.h`); the destructive-
+  command denylist now matches split `rm` flags (`-fr`, `-r -f`) and fails
+  **closed** (emits no diagnoses) instead of falling back to unfiltered output.
+
+Test suites grew to **207** (108 `update` + 99 `clean`), adding regression
+coverage for the symlink-deletion refusal, compat bump-gating, and the
+fail-safe disk guard.
 
 #### Disk space reading on macOS APFS didn't match what the OS shows
 

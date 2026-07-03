@@ -22,6 +22,10 @@ _detect_os   # sets OS_TYPE / OS_DISTRO / PKG_MGR
 
 _die() { printf '{"error":%s}\n' "$(jq -Rn --arg m "$1" '$m' 2>/dev/null || printf '"%s"' "$1")"; exit 1; }
 command -v jq >/dev/null 2>&1 || _die "jq is required"
+# `set -u` aborts on UNSET $HOME but not an empty one — and an empty $HOME would
+# collapse every "$HOME/..." safe root to a bare system path (e.g. /Library/Caches),
+# pointing the deletion validator at the wrong tree. Refuse outright.
+[ -n "${HOME:-}" ] && [ -d "$HOME" ] || _die "HOME is unset, empty, or not a directory — refusing to run"
 
 # ── portable helpers ─────────────────────────────────────────────
 # mtime (epoch) — BSD vs GNU stat.
@@ -147,11 +151,14 @@ scan_electron() {
 }
 
 scan_build_artifacts() {
-  local roots="" r
+  # Array, not a space-joined string: an account whose home path contains a
+  # space (/Users/john doe) would word-split an unquoted `find $roots` into
+  # bogus partial paths. bash 3.2 (stock macOS) supports arrays.
+  local roots=() r
   for r in "$HOME/workspace" "$HOME/dev" "$HOME/Developer" "$HOME/code" "$HOME/src" "$HOME/projects" "$HOME/repos"; do
-    [ -d "$r" ] && roots="$roots $r"
+    [ -d "$r" ] && roots+=("$r")
   done
-  [ -n "$roots" ] || return 0
+  [ "${#roots[@]}" -gt 0 ] || return 0
   # build-artifacts: report_only in quick mode (and in audit); rm in deep.
   local action safety
   if [ "$MODE" = "deep" ]; then action=rm; safety=safe; else action=rm; safety=report_only; fi
@@ -160,16 +167,14 @@ scan_build_artifacts() {
   local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-art.XXXXXX")
   if [ "$MODE" = "audit" ]; then
     # audit never truncates (codex #11) — run the find to completion.
-    # shellcheck disable=SC2086
-    find $roots -maxdepth 4 \( -name node_modules -o -name .venv -o -name venv \
+    find "${roots[@]}" -maxdepth 4 \( -name node_modules -o -name .venv -o -name venv \
       -o -name .next -o -name dist -o -name build -o -name target \
       -o -name __pycache__ -o -name .pytest_cache -o -name .turbo \) -type d \
       -print0 > "$tmpf" 2>/dev/null
   else
     # quick/deep: bash-native wall-clock bound (NO GNU timeout). find runs as
     # a direct bash command in the background; a sleeper kills it on timeout.
-    # shellcheck disable=SC2086
-    find $roots -maxdepth 4 \( -name node_modules -o -name .venv -o -name venv \
+    find "${roots[@]}" -maxdepth 4 \( -name node_modules -o -name .venv -o -name venv \
       -o -name .next -o -name dist -o -name build -o -name target \
       -o -name __pycache__ -o -name .pytest_cache -o -name .turbo \) -type d \
       -print0 > "$tmpf" 2>/dev/null &
@@ -222,11 +227,20 @@ scan_orphan_app_data() {
 
 scan_xcode() {
   [ "$OS_TYPE" = "macos" ] || return 0
-  local dd="$HOME/Library/Developer/Xcode/DerivedData"
-  [ -d "$dd" ] && _emit xcode "$dd" rm safe   # DerivedData: always rebuildable
+  # Emit the per-project CHILDREN, not the DerivedData/Archives dirs themselves:
+  # those exact paths are SAFE_ROOTS, and the validator refuses a target == a
+  # safe root (strictly-under only), so emitting the parent made every Xcode
+  # item a guaranteed no-op ("REFUSE outside-safe-roots") at apply.
+  local dd="$HOME/Library/Developer/Xcode/DerivedData" d
+  if [ -d "$dd" ]; then
+    for d in "$dd"/*/; do [ -d "$d" ] || continue   # DerivedData: always rebuildable
+      _emit xcode "${d%/}" rm safe; done
+  fi
   local ar="$HOME/Library/Developer/Xcode/Archives"
-  # Archives: keep-able (signed app archives) — warn, never auto-safe.
-  [ -d "$ar" ] && _emit xcode "$ar" rm warn "xcode-archives: may hold app archives you want to keep"
+  if [ -d "$ar" ]; then
+    for d in "$ar"/*/; do [ -d "$d" ] || continue   # Archives: keep-able — warn, never auto-safe
+      _emit xcode "${d%/}" rm warn "xcode-archives: may hold app archives you want to keep"; done
+  fi
 }
 
 scan_ios_backups() {
@@ -502,14 +516,21 @@ cmd_apply() {
   # A3: manifest TTL
   local created now age
   created=$(jq -r '.created_at // 0' "$manifest")
-  now=$(date +%s); age=$((now - created))
+  # Reject a non-integer created_at instead of letting it reach the arithmetic
+  # (a string aborts under set -u; "10#" forces base-10 so a leading-zero value
+  # like 0900 isn't mis-parsed as octal).
+  case "$created" in ''|*[!0-9]*) _die "manifest created_at not a non-negative integer — re-run discover" ;; esac
+  now=$(date +%s); age=$((now - 10#$created))
   # Reject both stale AND future-dated manifests — a future created_at would
   # make age negative and silently bypass the TTL ceiling.
   if [ "$age" -gt "$_CLEAN_TTL" ] || [ "$age" -lt 0 ]; then
     _die "manifest timestamp out of range (age=${age}s, max ${_CLEAN_TTL}s) — re-run discover"
   fi
 
-  local before; before=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')
+  # `df -P` forces POSIX single-line output — GNU df wraps long device names
+  # (LVM/mapper, many WSL2 mounts) onto a second line, which would put $4 on
+  # the wrong row and corrupt the reclaimed-bytes delta.
+  local before; before=$(df -P -k / 2>/dev/null | awk 'NR==2{print $4}')
   local APPLIED FAILED SKIPPED
   APPLIED=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-applied.XXXXXX")
   FAILED=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-failed.XXXXXX")
@@ -580,7 +601,11 @@ cmd_apply() {
     fi
     # electron: re-check the app is not running
     if [ "$action" = "electron_cache" ] && [ -n "$app" ] && [ "$app" != "null" ]; then
-      if pgrep -x "$app" >/dev/null 2>&1; then
+      # Match case-insensitively as a SUBSTRING, not `-x` exact: Electron helper
+      # processes are named "Slack Helper", "Code Helper (Renderer)" etc., never
+      # exactly the Application Support dir name ("Slack"/"Code"), so `pgrep -x`
+      # almost never matched and the guard let us wipe a running app's cache.
+      if pgrep -i "$app" >/dev/null 2>&1; then
         printf '%s\treason=app-running\n' "$id" >> "$SKIPPED"; continue
       fi
     fi
@@ -602,7 +627,7 @@ cmd_apply() {
   done < <(jq -c '.items[]' "$manifest")
 
   local after reclaimed
-  after=$(df -k / 2>/dev/null | awk 'NR==2{print $4}')
+  after=$(df -P -k / 2>/dev/null | awk 'NR==2{print $4}')
   reclaimed=$(( (after - before) * 1024 )); [ "$reclaimed" -lt 0 ] && reclaimed=0
 
   jq -n \

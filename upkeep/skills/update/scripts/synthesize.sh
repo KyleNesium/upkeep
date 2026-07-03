@@ -39,9 +39,14 @@ if [ -n "$HIST_FILE" ] && [ -f "$HIST_FILE" ]; then
 fi
 
 # ── Disk-refuse short-circuit ────────────────────────────────────
-FREE_GB=$(jq -r '.disk.free_gb' <<<"$DISCOVERY")
-REFUSE_GB=$(jq -r '.disk.refuse_threshold_gb' <<<"$DISCOVERY")
-if [ "$FREE_GB" -lt "$REFUSE_GB" ] 2>/dev/null; then
+# Guard NUMERICALLY in jq, not with bash `[ -lt ]`. A float, null, or absent
+# free_gb makes a bash integer test raise "integer expression expected"; with
+# the error swallowed by `2>/dev/null` the failed test FALLS THROUGH and a full
+# update plan runs on a near-full disk. jq's `tonumber?` handles floats/strings,
+# and the defaults fail SAFE: a missing free → 0 (refuse), a missing threshold →
+# large (so a present-but-tiny free still refuses).
+FREE_GB=$(jq -r '(.disk.free_gb // 0) | (tonumber? // 0) | floor' <<<"$DISCOVERY")
+if jq -e '((.disk.free_gb // 0) | (tonumber? // 0)) < ((.disk.refuse_threshold_gb // 999999) | (tonumber? // 999999))' <<<"$DISCOVERY" >/dev/null 2>&1; then
   jq -n --argjson free "$FREE_GB" '{
     schema_version: "1",
     summary: {category_counts: {}, eta_minutes_p50: 0, eta_minutes_p90: 0},
@@ -79,11 +84,23 @@ WARNINGS=$(jq -nc \
       ($hits | map(.bump) | (if any(. == "major") then "major"
                               elif any(. == "minor") then "minor"
                               else "patch" end)) as $worst_bump |
-      ($edge["severity_on_" + $worst_bump] // $edge.severity_on_minor // "low") as $sev |
+      # Gate by bump level. An edge fires only when the OBSERVED bump is at least
+      # as severe as a declared gating level: major triggers major→minor→patch,
+      # minor triggers minor→patch (never a major-only edge), patch triggers only
+      # severity_on_patch. If nothing is declared for the observed level (or lower),
+      # emit NO warning. The old `severity_on_<bump> // severity_on_minor // "low"`
+      # fell UPWARD, so a major-only edge spuriously fired "low" on a mere patch
+      # bump and polluted risk_categories.
+      ( if   $worst_bump == "major" then ($edge.severity_on_major // $edge.severity_on_minor // $edge.severity_on_patch)
+        elif $worst_bump == "minor" then ($edge.severity_on_minor // $edge.severity_on_patch)
+        else  $edge.severity_on_patch end ) as $sev |
+      if $sev == null then empty
+      else
       {severity: $sev, code: ("compat:" + $edge.from + "→" + $edge.to),
        message: ($edge.reason
                  + "  (from: " + ($hits | map(.name) | join(",")) + ")"),
        affected_from: $edge.from, affected_to: $edge.to, bump: $worst_bump}
+      end
     end
   ]
   | sort_by(if .severity == "high" then 0 elif .severity == "medium" then 1 else 2 end)
@@ -278,7 +295,10 @@ ETA_JSON=$(jq -nc \
   ($d.language.npm.outdated // [] | length) as $npm_n |
   ($d.language.pipx.tools   // [] | length) as $pipx_n |
   ($d.language.gems.outdated // [] | length) as $gems_n |
-  ($d.skills.git_repos // [] | map(select((.commits_behind // 0) > 0)) | length) as $skills_n |
+  # Count the SAME actionable set apply will pull (trusted, behind, clean) — the
+  # ordered_groups/ category_counts predicate. The old `commits_behind>0`-only
+  # count padded the ETA with untrusted and dirty repos that apply skips.
+  ($d.skills.git_repos // [] | map(select(.untrusted == false and (.commits_behind // 0) > 0 and ((.dirty_files // []) | length) == 0)) | length) as $skills_n |
   ($d.skills.managed // [] | length) as $plugins_n |
   ($d.native.mas.outdated   // [] | length) as $mas_n |
   ($d.native.softwareupdate.updates // [] | length) as $macos_n |
@@ -303,7 +323,7 @@ SUMMARY=$(jq -nc \
   --argjson d "$DISCOVERY" \
   --argjson eta "$ETA_JSON" '
   {category_counts: {
-    skills: ($d.skills.git_repos // [] | map(select((.commits_behind // 0) > 0 and .untrusted == false)) | length),
+    skills: ($d.skills.git_repos // [] | map(select(.untrusted == false and (.commits_behind // 0) > 0 and ((.dirty_files // []) | length) == 0)) | length),
     plugins:($d.skills.managed // [] | length),
     brew:   ($d.native.brew.outdated // [] | length),
     npm:    ($d.language.npm.outdated // [] | length),
@@ -319,7 +339,8 @@ SUMMARY=$(jq -nc \
    },
    eta_minutes_p50: $eta.p50_minutes,
    eta_minutes_p90: $eta.p90_minutes,
-   disk_free_gb: $d.disk.free_gb
+   disk_free_gb: $d.disk.free_gb,
+   disk_total_gb: ($d.disk.total_gb // 0)
   }
 ')
 

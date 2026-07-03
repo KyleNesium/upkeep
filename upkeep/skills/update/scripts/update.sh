@@ -298,6 +298,13 @@ _cmd_apply() {
 
   _require_jq
 
+  # Defense-in-depth: apply trusts the plan verbatim (its dispatch is hardcoded,
+  # but the skills/plugins phases read discovery directly). A truncated, corrupt,
+  # or hand-tampered plan file must fail loudly here rather than silently skip the
+  # dispatcher loop while still reporting success. Assert the schema first.
+  jq -e '.schema_version == "1"' "$plan_file" >/dev/null 2>&1 \
+    || _die "plan file invalid or unsupported (schema_version != \"1\") — re-run plan"
+
   local plan discovery mode
   plan=$(jq -c '.plan' "$plan_file")
   discovery=$(jq -c '.discovery' "$plan_file")
@@ -341,7 +348,14 @@ _cmd_apply() {
     for t in "${_drop_arr[@]}"; do
       case "$t" in
         skills|plugins|brew|npm|pipx|gems|uv|bun|mas|macos|snap|flatpak) dropped="${dropped}${t}," ;;
-        *) ;;  # silently ignore unknown tool ids
+        # The gate's "Drop categories" multi-select is keyed on ordered_groups[].name.
+        # skills/plugins/brew are already 1:1 tool ids (above); these three are
+        # COMPOSITE group names — expand them to their member tool ids so dropping
+        # a group actually excludes its tools instead of silently no-op'ing.
+        language)  dropped="${dropped}npm,pipx,gems,uv,bun," ;;
+        stores)    dropped="${dropped}mas,macos," ;;
+        user-apps) dropped="${dropped}snap,flatpak," ;;
+        *) ;;  # silently ignore unknown ids (e.g. "sys" — apt/dnf/pacman are never auto-applied)
       esac
     done
   fi
@@ -377,6 +391,10 @@ _cmd_apply() {
   local skills_log="$apply_log_root/skills.log"
   : > "$skills_log"
   local skills_applied=0 skills_skipped=0
+  # H5: this phase runs BEFORE the dispatcher and the dispatcher's skills branch
+  # is a no-op, so the loop must honor a dropped skills category itself — gate
+  # the input so no repo is pulled when the user dropped "skills" at the gate.
+  _is_dropped skills && echo "skills: dropped at gate — phase skipped" >> "$skills_log"
   while read -r repo_json; do
     [ -z "$repo_json" ] && continue
     local repo_path branch repo_name current_version commits_behind untrusted
@@ -427,7 +445,10 @@ _cmd_apply() {
       continue
     fi
 
-    if GIT_TERMINAL_PROMPT=0 git -C "$repo_path" pull --ff-only origin "$branch" >> "$skills_log" 2>&1; then
+    # `--` before the branch: a plan-supplied branch like "--upload-pack=<cmd>"
+    # would otherwise be parsed by git as an option → arbitrary command execution.
+    # After "--" git treats it strictly as a refspec (invalid → harmless failure).
+    if GIT_TERMINAL_PROMPT=0 git -C "$repo_path" pull --ff-only origin -- "$branch" >> "$skills_log" 2>&1; then
       local new_version
       new_version=$(tr -d '[:space:]' < "$repo_path/VERSION" 2>/dev/null \
         || grep -m1 '"version"' "$repo_path/.claude-plugin/plugin.json" 2>/dev/null \
@@ -443,7 +464,7 @@ _cmd_apply() {
       printf 'skills\t1\thard\t%s\n' "$skills_log" >> "$failure_log_file"
       skills_skipped=$((skills_skipped+1))
     fi
-  done < <(jq -c '.skills.git_repos[]?' <<<"$discovery")
+  done < <(if _is_dropped skills; then :; else jq -c '.skills.git_repos[]?' <<<"$discovery"; fi)
 
   # ────────────────────────────────────────────────────────────
   # PACKAGE DISPATCHER (hardcoded commands, never eval plan)

@@ -70,6 +70,11 @@ DEEP="$HOME/Library/Caches/$LONGSEG/$LONGSEG/$LONGSEG/$LONGSEG/$LONGSEG"
 mkdir -p "$DEEP"
 # symlink escape: a cache entry that points into the protected ~/.claude
 ln -s "$HOME/.claude" "$HOME/Library/Caches/evil-link"
+# C1 regression: a cache entry symlinked to REAL data under a DIFFERENT safe
+# root (~/workspace). Pre-fix the validator followed it, passed containment on
+# the resolved target, and rm -rf'd ~/workspace/important. Must REFUSE.
+mkdir -p "$HOME/workspace/important"
+ln -s "$HOME/workspace/important" "$HOME/Library/Caches/sneaky-link"
 
 # ── Source under test (after HOME is set so root lists resolve to fake) ──
 # shellcheck source=../upkeep/skills/upkeep/scripts/lib/common.sh
@@ -95,7 +100,10 @@ _assert_verdict "traversal into .claude"     "$HOME/Library/Caches/../../.claude
 # symlink target ~/.claude is outside all safe roots, so containment refuses it
 # first (a correct, safe refusal); the protected-override path is proven by the
 # App Support/Claude case below. Here we only assert it is REFUSED.
-_assert_verdict "symlink escape to .claude"  "$HOME/Library/Caches/evil-link" rm REFUSE
+_assert_verdict "symlink escape to .claude"  "$HOME/Library/Caches/evil-link" rm REFUSE symlink
+_assert_verdict "C1: symlink into another safe root" "$HOME/Library/Caches/sneaky-link" rm REFUSE symlink
+SNEAK_KEPT=$([ -d "$HOME/workspace/important" ] && echo true || echo false)
+_test "C1: symlink target not deleted" "$SNEAK_KEPT" "$SNEAK_KEPT" "true"
 _assert_verdict "outside safe roots (/etc)"  "/etc/passwd" rm REFUSE outside-safe-roots
 _assert_verdict "protected under safe root"  "$HOME/Library/Application Support/Claude" rm REFUSE protected
 _assert_verdict "protected Claude subdir"    "$HOME/Library/Application Support/Claude/cache" rm REFUSE protected
@@ -257,13 +265,18 @@ rm -rf -- "$AHOME"
 # 6. type-swap → skipped (dir replaced by a symlink between discover & apply).
 # Target a Logs/ dir: it's a safe root these sections don't scan, so it stays
 # in place (not in the manifest, never deleted) — keeps the test order-robust.
+# The validator's symlink refusal now catches this at the first re-validate
+# (reason "symlink") BEFORE the type-swap check (reason "type-swap") — either
+# way the now-symlinked path must be skipped, never followed and deleted.
 _fresh_apply_home
 mkdir -p "$AHOME/Library/Logs/keep"
 MF=$(_apply_disc deep)
 rm -rf "$AHOME/Library/Caches/com.foo"
 ln -s "$AHOME/Library/Logs/keep" "$AHOME/Library/Caches/com.foo"   # com.foo now a symlink
-TS=$(_apply_run "$MF" | jq -r '[.skipped[]|select(.reason=="type-swap")]|length')
-_test "type-swap skipped at apply" "$([ "$TS" -ge 1 ] 2>/dev/null && echo true || echo false)" "$TS" ">=1"
+RES=$(_apply_run "$MF")
+TS=$(jq -r '[.skipped[]|select(.reason=="type-swap" or .reason=="symlink")]|length' <<<"$RES")
+KEPT=$([ -d "$AHOME/Library/Logs/keep" ] && echo true || echo false)   # symlink target untouched
+_test "symlinked-at-apply path skipped, not followed" "$([ "$TS" -ge 1 ] 2>/dev/null && [ "$KEPT" = true ] && echo true || echo false)" "skipped=$TS keep=$KEPT" ">=1 / true"
 rm -rf -- "$AHOME"
 
 # 7. mobilesync_rm removes a single iOS backup dir (per-backup shape)

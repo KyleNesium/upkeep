@@ -98,6 +98,18 @@ _clean_validate() {
   local raw="$1" action="$2" canon base parent gparent root ok=0
   local H; H=$(_clean_home)   # canonical home, for the shape-check patterns below
 
+  # (1) SYMLINK REFUSAL — every action this validator gates is destructive, and
+  # canonicalization (_clean_canon) FOLLOWS symlinks. A symlinked leaf inside one
+  # safe root can resolve to real data in another safe root (e.g.
+  # ~/Library/Caches/x -> ~/workspace/important), pass containment on the
+  # resolved target, and get rm -rf'd. The type-swap guard in cmd_apply only
+  # catches paths that BECOME symlinks after discovery, not ones already symlinked
+  # at discovery (is_symlink=true). Refuse the link outright — it is never worth
+  # following, and the reclaim from a symlink itself is negligible.
+  if [ -L "$raw" ]; then
+    printf 'REFUSE symlink %s\n' "$raw"; return 1
+  fi
+
   canon=$(_clean_canon "$raw")
   if [ -z "$canon" ]; then
     printf 'REFUSE unresolvable %s\n' "$raw"; return 1

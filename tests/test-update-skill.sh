@@ -596,6 +596,33 @@ V17_PLAN3=$(echo "$V17_RUBY" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/
 _assert_eq "synthesize: risk_categories excludes gems (not in groups)" \
   "$(echo "$V17_PLAN3" | jq -r 'if (.risk_categories | index("gems")) then "present" else "absent" end')" "absent"
 
+# 11d-bis (M4): a compat-edge formula with a PATCH bump must NOT fire a warning.
+# Pre-fix, node@patch fell back to severity_on_minor // "low" and spuriously
+# emitted a "low" compat warning, polluting risk_categories with brew.
+V17_PATCH=$(echo "$V17_SYNTH_DISC" | jq '.native.brew.outdated=[{"name":"node","from":"21.1.0","to":"21.1.1","bump":"patch"}]')
+V17_PLAN_PATCH=$(echo "$V17_PATCH" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: node PATCH bump fires no compat warning (M4)" \
+  "$(echo "$V17_PLAN_PATCH" | jq '[.warnings[]|select(.code|startswith("compat:"))]|length')" "0"
+_assert_eq "synthesize: node PATCH bump keeps risk_categories empty (M4)" \
+  "$(echo "$V17_PLAN_PATCH" | jq -rc '.risk_categories')" '[]'
+# regression guard the other way: a node MINOR bump still fires (severity_on_minor).
+V17_MINOR=$(echo "$V17_SYNTH_DISC" | jq '.native.brew.outdated=[{"name":"node","from":"21.0.0","to":"21.1.0","bump":"minor"}]')
+V17_PLAN_MINOR=$(echo "$V17_MINOR" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: node MINOR bump still fires compat warning (M4)" \
+  "$(echo "$V17_PLAN_MINOR" | jq '[.warnings[]|select(.code|startswith("compat:"))]|length >= 1')" "true"
+
+# 11d-ter (H6): disk-refuse guard must fail SAFE on a non-integer / absent free_gb.
+# A float free below the refuse threshold previously slipped past the bash
+# `[ -lt ]` test (integer-expression error swallowed by 2>/dev/null) → full plan.
+V17_DISKFLOAT=$(echo "$V17_SYNTH_DISC" | jq '.disk.free_gb=2.5')
+V17_PLAN_DF=$(echo "$V17_DISKFLOAT" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: float free_gb below threshold still refuses (H6)" \
+  "$(echo "$V17_PLAN_DF" | jq -r '[.warnings[]|select(.code=="disk-refuse")]|length')" "1"
+V17_NODISK=$(echo "$V17_SYNTH_DISC" | jq 'del(.disk)')
+V17_PLAN_ND=$(echo "$V17_NODISK" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: absent disk data refuses (H6 fail-safe)" \
+  "$(echo "$V17_PLAN_ND" | jq -r '[.warnings[]|select(.code=="disk-refuse")]|length')" "1"
+
 # 11e. update.sh plan surfaces risk_categories in its SKILL.md-facing JSON
 V17_PLANOUT=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
   UPKEEP_CLAUDE_SKILLS="$V17_SB/cs" UPKEEP_CODEX_SKILLS="$V17_SB/xs" \

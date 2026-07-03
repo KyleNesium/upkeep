@@ -33,13 +33,55 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ── Disk pre-flight ──────────────────────────────────────────────
-free_gb=$(df -k / 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}')
+# Report disk space the way macOS itself does (Finder / System Settings →
+# Storage), in base-10 GB. A naive `df -k /` hits three macOS traps:
+#   1. Unit: KiB ÷ 1024² yields GiB, not GB — macOS reports base-10 GB.
+#   2. Sealed APFS: `/` is the read-only system snapshot (Used ≈ 13 GB), so a
+#      total from used+avail on `/` is garbage (~227 GB vs the ~995 GB container).
+#   3. Purgeable: df AND diskutil report only strictly-free space (~215 GB),
+#      but macOS counts purgeable caches/snapshots as available (~374 GB) — so
+#      "free" must include purgeable to match what the user sees in Settings.
+# The authoritative source is URLResourceValues
+# (.volumeAvailableCapacityForImportantUsage / .volumeTotalCapacity) — exactly
+# what Finder and System Settings use. Read it via osascript (present on every
+# Mac, no Xcode needed); fall back to diskutil (strictly-free, no purgeable),
+# then df on Linux/WSL2 where `/` is a normal volume.
+free_gb=0
+total_gb=0
+if command -v osascript >/dev/null 2>&1; then
+  read -r _free_b _total_b < <(osascript -l JavaScript -e \
+'ObjC.import("Foundation");function c(k){var u=$.NSURL.fileURLWithPath("/"),v=Ref(),e=Ref();return u.getResourceValueForKeyError(v,k,e)?v[0].longLongValue:-1;}c($.NSURLVolumeAvailableCapacityForImportantUsageKey)+" "+c($.NSURLVolumeTotalCapacityKey)' 2>/dev/null)
+  if [ "${_free_b:-0}" -gt 0 ] 2>/dev/null && [ "${_total_b:-0}" -gt 0 ] 2>/dev/null; then
+    free_gb=$(awk -v b="$_free_b"  'BEGIN{printf "%d", (b/1e9)+0.5}')
+    total_gb=$(awk -v b="$_total_b" 'BEGIN{printf "%d", (b/1e9)+0.5}')
+  fi
+fi
+if [ "$free_gb" -eq 0 ] 2>/dev/null && command -v diskutil >/dev/null 2>&1; then
+  _disk_info=$(diskutil info / 2>/dev/null)
+  _free_b=$(awk -F'[()]' '/Container Free Space:/{print $2}'  <<<"$_disk_info" | awk '{print $1}')
+  _total_b=$(awk -F'[()]' '/Container Total Space:/{print $2}' <<<"$_disk_info" | awk '{print $1}')
+  if [ -n "${_free_b:-}" ] && [ -n "${_total_b:-}" ]; then
+    free_gb=$(awk -v b="$_free_b"  'BEGIN{printf "%d", (b/1e9)+0.5}')
+    total_gb=$(awk -v b="$_total_b" 'BEGIN{printf "%d", (b/1e9)+0.5}')
+  fi
+fi
+if [ "$free_gb" -eq 0 ] 2>/dev/null; then
+  # Linux / WSL2 / no macOS tooling: df -k reports KiB; ×1024 = bytes → base-10 GB.
+  # `-P` forces POSIX single-line output (GNU df wraps long device names —
+  # LVM/mapper, many WSL2 mounts — onto a second line, which would shift the
+  # columns onto the wrong row). Total is df's own total ($2), NOT used+avail:
+  # ext4 etc. reserve ~5% of blocks, so $3+$4 understates the real device size.
+  read -r free_gb total_gb < <(df -P -k / 2>/dev/null | awk 'NR==2 {
+    printf "%d %d\n", ($4*1024/1e9)+0.5, ($2*1024/1e9)+0.5 }')
+fi
 free_gb=${free_gb:-0}
+total_gb=${total_gb:-0}
 disk_json=$(jq -n \
   --argjson free "$free_gb" \
+  --argjson total "$total_gb" \
   --argjson warn 10 \
   --argjson refuse 5 \
-  '{free_gb:$free, warn_threshold_gb:$warn, refuse_threshold_gb:$refuse}')
+  '{free_gb:$free, total_gb:$total, warn_threshold_gb:$warn, refuse_threshold_gb:$refuse}')
 
 # ── Helpers ──────────────────────────────────────────────────────
 _jq_string() { jq -Rs '.' <<<"$1"; }
@@ -106,7 +148,7 @@ discover_skills() {
     local mgr="claude"
     [ "$root" = "$CODEX_SKILLS_ROOT" ] && mgr="codex"
 
-    local d name path remote_url branch trusted dirty detached current_ver behind subjects
+    local d name path remote_url branch trusted dirty detached current_ver behind subjects breaking_lines
     for d in "$root"/*/; do
       [ -d "$d/.git" ] || continue
       name=$(basename "$d")
@@ -126,9 +168,12 @@ discover_skills() {
       branch=""
       [ "$detached" = "false" ] && branch=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null || echo "")
 
-      current_ver=$(tr -d '[:space:]' < "$path/VERSION" 2>/dev/null \
-        || (jq -r '.version // empty' "$path/.claude-plugin/plugin.json" 2>/dev/null) \
-        || echo "")
+      # A VERSION file that exists but is blank/whitespace makes `tr` succeed
+      # with empty output, so a `||` chain never falls through to plugin.json.
+      # Test for an empty result explicitly instead.
+      current_ver=$(tr -d '[:space:]' < "$path/VERSION" 2>/dev/null)
+      [ -z "$current_ver" ] && current_ver=$(jq -r '.version // empty' "$path/.claude-plugin/plugin.json" 2>/dev/null)
+      current_ver="${current_ver:-}"
 
       behind=0
       subjects='[]'
@@ -261,11 +306,30 @@ discover_skills() {
         # flag it so the user can reconcile.
         is_outdated=1
       else
-        local _highest
-        _highest=$(printf '%s\n%s\n' "$pl_installed" "$pl_available" | sort -V | tail -1)
-        if [ "$_highest" = "$pl_available" ] && [ "$_highest" != "$pl_installed" ]; then
-          is_outdated=1
+        # SemVer-aware: `sort -V` alone orders a prerelease AFTER its release
+        # (1.0.0-beta > 1.0.0), the opposite of SemVer, which both false-flags
+        # release→prerelease as an "update" and misses prerelease→release. So
+        # compare the MAJOR.MINOR.PATCH core first, and only break ties by
+        # prerelease (a release outranks any prerelease of the same core).
+        local _core_i="${pl_installed%%-*}" _core_a="${pl_available%%-*}"
+        local _pre_i="" _pre_a=""
+        [ "$pl_installed" != "$_core_i" ] && _pre_i="${pl_installed#*-}"
+        [ "$pl_available" != "$_core_a" ] && _pre_a="${pl_available#*-}"
+        local _hi_core
+        _hi_core=$(printf '%s\n%s\n' "$_core_i" "$_core_a" | sort -V | tail -1)
+        if [ "$_core_a" != "$_core_i" ]; then
+          # different release core → outdated iff the available core is higher
+          [ "$_hi_core" = "$_core_a" ] && is_outdated=1
+        elif [ -n "$_pre_i" ] && [ -z "$_pre_a" ]; then
+          is_outdated=1   # prerelease installed, stable release available → upgrade
+        elif [ -n "$_pre_i" ] && [ -n "$_pre_a" ] && [ "$_pre_i" != "$_pre_a" ]; then
+          # both prereleases of the same core → higher prerelease wins
+          local _hi_full
+          _hi_full=$(printf '%s\n%s\n' "$pl_installed" "$pl_available" | sort -V | tail -1)
+          [ "$_hi_full" = "$pl_available" ] && is_outdated=1
         fi
+        # remaining case (stable installed, prerelease available of same core)
+        # is NOT an upgrade → is_outdated stays 0
       fi
       [ "$is_outdated" = "1" ] || continue
 
@@ -343,6 +407,9 @@ discover_native() {
     # `brew update` already writes — no separate timestamp file needed.
     local brew_sentinel="$HOME/Library/Caches/Homebrew/api/formula.jws.json"
     local brew_ttl="${UPKEEP_BREW_TTL:-3600}"  # seconds
+    # A non-numeric override (e.g. UPKEEP_BREW_TTL=abc) would be treated as an
+    # unbound variable name inside $(( )) and abort discovery under set -u.
+    case "$brew_ttl" in ''|*[!0-9]*) brew_ttl=3600 ;; esac
     local brew_ttl_min=$(( brew_ttl / 60 ))
     [ "$brew_ttl_min" -lt 1 ] && brew_ttl_min=1
     local skip_update=0
@@ -387,7 +454,10 @@ discover_native() {
   fi
 
   local sw_raw sw_lines
-  sw_raw=$(softwareupdate -l 2>&1 || true)
+  # LC_ALL=C so softwareupdate emits its English "restart" keyword — under a
+  # localized UI (e.g. de/fr) the output is translated and the grep below would
+  # silently miss a required reboot, telling the user none is needed.
+  sw_raw=$(LC_ALL=C softwareupdate -l 2>&1 || true)
   if echo "$sw_raw" | grep -qiE "restart"; then
     restart_required=true
   fi
@@ -440,7 +510,8 @@ discover_native_linux() {
       if command -v apt-get >/dev/null 2>&1; then
         sys_installed=true
         local apt_raw
-        apt_raw=$(apt-get upgrade --dry-run 2>/dev/null | grep '^Inst' || true)
+        # LC_ALL=C: apt localizes its banners, and we key on the English "Inst" line prefix.
+        apt_raw=$(LC_ALL=C apt-get upgrade --dry-run 2>/dev/null | grep '^Inst' || true)
         if [ -n "$apt_raw" ]; then
           # "Inst <name> [<from>] (<to> <repo> [arch])". The version bracket
           # [<from>] sits BEFORE the "("; the arch bracket [amd64] sits
@@ -465,7 +536,8 @@ discover_native_linux() {
       if command -v dnf >/dev/null 2>&1; then
         sys_installed=true
         local dnf_raw dnf_rc
-        dnf_raw=$(dnf check-update 2>/dev/null); dnf_rc=$?
+        # LC_ALL=C: pins the "Obsoleting"/banner keywords the parser keys on.
+        dnf_raw=$(LC_ALL=C dnf check-update 2>/dev/null); dnf_rc=$?
         if [ "$dnf_rc" != "0" ] && [ "$dnf_rc" != "100" ]; then
           errors=$(jq '. + ["dnf check-update failed"]' <<<"$errors")
         fi
@@ -474,10 +546,20 @@ discover_native_linux() {
         # those rows are NOT separate upgrades, so stop parsing once we hit
         # that header (otherwise they double-count as phantom packages).
         # Also skip the leading metadata banner.
+        # dnf wraps a long "name.arch" onto its own line, pushing version+repo
+        # onto the next, indented line. The full-row rule (NF>=3) misses both
+        # halves, dropping the update entirely. Carry a pending name from a
+        # lone NF==1 "name.arch" line and pair it with the indented version
+        # line that follows.
         sys_upgradable=$(printf '%s\n' "$dnf_raw" \
           | awk '
               /^Obsoleting/ { stop=1 }
               stop { next }
+              pend != "" {
+                if ($0 ~ /^[[:space:]]/ && NF>=1) { n=pend; sub(/\.[^.]*$/, "", n); printf "%s\t%s\n", n, $1 }
+                pend=""
+              }
+              NF==1 && $1 ~ /\./ && $1 !~ /^(Last|Security|Installing|Obsoleting)/ { pend=$1; next }
               NF>=3 && $1 ~ /\./ && $1 !~ /^(Last|Security|Installing)/ {
                 n=$1; sub(/\.[^.]*$/, "", n); printf "%s\t%s\n", n, $2 }' \
           | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
@@ -600,7 +682,11 @@ discover_language() {
     pipx_raw=$(pipx list --short 2>/dev/null | awk '{print $1}')
     if [ -n "$pipx_raw" ]; then
       pipx_tools=$(echo "$pipx_raw" | jq -Rsc 'split("\n") | map(select(length > 0))')
-      pipx_outdated_count=$(echo "$pipx_raw" | wc -l | tr -d ' ')
+      # Count the built array, not `wc -l` (which undercounts by one when the
+      # last line lacks a trailing newline). pipx has no cheap per-tool outdated
+      # query, so this is the installed-tool count — the set `pipx upgrade-all`
+      # processes, which is what synthesize keys on via `.tools | length`.
+      pipx_outdated_count=$(jq 'length' <<<"$pipx_tools")
     fi
   fi
 

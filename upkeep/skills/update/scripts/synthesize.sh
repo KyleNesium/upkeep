@@ -145,6 +145,13 @@ MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
   + [ ($d.skills.git_repos // [])[] | select((.dirty_files // []) | length > 0) |
     {kind: "skill-dirty",
      message: ("Skill " + .name + " has uncommitted changes; commit or stash before next /upkeep:update")} ]
+  # Major macOS upgrades → never auto-installed (v1.9). softwareupdate marks
+  # them Recommended, so they would otherwise ride along with point releases.
+  + [ ($d.native.softwareupdate.major_upgrades // [])[] |
+    {kind: "macos-major",
+     label: .label,
+     message: (.title + " (major upgrade) is available — not auto-installed;"
+               + " upgrade from System Settings › General › Software Update when you are ready")} ]
   # PATH shadows → informational
   + [ ($d.shadow.duplicates // [])[] |
     {kind: "path-shadow",

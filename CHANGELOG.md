@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Recommended major macOS upgrade could be installed by apply.** The
+  `macos` step ran `softwareupdate -ia`, and `softwareupdate -l` marks a major
+  upgrade (e.g. macOS 26.x → 27.0.1) as `Recommended: YES`, so it rode along
+  with point releases. Discovery now parses each update (label, title,
+  version, restart) and moves any `macOS` entry whose major version differs
+  from the running OS into `softwareupdate.major_upgrades[]`, surfaced as a
+  `macos-major` manual step. Apply installs the planned labels one at a time
+  (`softwareupdate -i <label>`) and refuses labels that start with `-` or
+  contain characters outside `[A-Za-z0-9 ._()+-]`. `updates[]` now holds bare
+  labels instead of raw `* Label: …` lines, and `restart_required` only
+  counts updates that will actually be installed.
+- **Duplicate PATH-shadow warnings.** A directory listed twice in `$PATH`
+  re-emitted every shadow row once per extra occurrence; the PATH walk now
+  skips directories it has already seen.
 - **`/upkeep:update skills` crashed on every run since v1.6** with
   `jq: invalid JSON text passed to --argjson` → `synthesize.sh failed`. The
   OS-aware native stubs in `_cmd_plan` were jq object literals (unquoted keys)

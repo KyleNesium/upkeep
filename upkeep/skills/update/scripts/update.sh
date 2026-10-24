@@ -114,7 +114,7 @@ _cmd_plan() {
           _native_stub=$(jq -nc '{
             brew: {installed:false, outdated:[]},
             mas:  {installed:false, outdated:[]},
-            softwareupdate: {installed:false, updates:[], restart_required:false},
+            softwareupdate: {installed:false, updates:[], major_upgrades:[], restart_required:false},
             errors: []
           }')
           ;;
@@ -506,7 +506,22 @@ _cmd_apply() {
       uv)    uv self update >> "$log" 2>&1; rc=$? ;;
       bun)   bun upgrade >> "$log" 2>&1; rc=$? ;;
       mas)   mas upgrade >> "$log" 2>&1; rc=$? ;;
-      macos) softwareupdate -ia >> "$log" 2>&1; rc=$? ;;
+      macos)
+        # v1.9: install the planned labels one by one instead of
+        # `softwareupdate -ia`, which also installs a Recommended major OS
+        # upgrade (discover.sh keeps those out of updates[]). Labels come from
+        # the plan file, so anything outside the expected charset is refused.
+        rc=0
+        local _label
+        while IFS= read -r _label; do
+          [ -z "$_label" ] && continue
+          case "$_label" in
+            -*|*[!A-Za-z0-9\ ._\(\)+-]*)
+              echo "macos: refusing update label: $_label" >> "$log"; rc=1; continue ;;
+          esac
+          softwareupdate -i "$_label" >> "$log" 2>&1 || rc=$?
+        done < <(jq -r '.native.softwareupdate.updates[]?' <<<"$discovery")
+        ;;
       # Linux user-scoped apps (no sudo). snap refresh may polkit-prompt in
       # the user's own session; flatpak update -y operates on the user install.
       snap)    snap refresh >> "$log" 2>&1; rc=$? ;;

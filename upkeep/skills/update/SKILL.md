@@ -330,6 +330,8 @@ Risks flagged:
   • <one line per warnings[] entry, severity-ordered>
 
 Manual steps (you run these — NOT auto-applied):
+  • macos-major entries: a major macOS upgrade upkeep deliberately did NOT
+    install — show the message verbatim (the user upgrades via System Settings).
   • <one line per manual_steps[] entry>
   • system-sudo entries are apt/dnf/pacman upgrades: show the literal
     `sudo …` command verbatim. upkeep NEVER runs sudo.

@@ -800,6 +800,78 @@ _assert_eq "contract: every plugin-update manual step has name + update_command"
 
 rm -rf "$V17_SB" "$V17_AB" "$V17_FR" "$V17_PF2" 2>/dev/null
 
+# ── 12. v1.9: macOS major-upgrade guard + PATH-shadow dedupe ────
+echo
+echo "── 12. macOS updates + PATH shadows (v1.9) ──"
+if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  V19_SW=$(mktemp -d /tmp/upkeep-v19sw.XXXXXX)
+  # Stub softwareupdate: a point release (no restart), a Safari update, and a
+  # Recommended major upgrade (restart). The running OS is pinned to 26.5.
+  cat > "$V19_SW/softwareupdate" <<'FAKE'
+#!/bin/sh
+if [ "$1" = "-l" ]; then
+cat <<'OUT'
+Software Update Tool
+
+Finding available software
+Software Update found the following new or updated software:
+* Label: Safari27.0TahoeAuto-27.0
+	Title: Safari, Version: 27.0, Size: 249465KiB, Recommended: YES, 
+* Label: macOS Tahoe 26.7.1-25G241
+	Title: macOS Tahoe 26.7.1, Version: 26.7.1, Size: 3852999KiB, Recommended: YES, 
+* Label: macOS 27.0.1-26A434
+	Title: macOS 27.0.1, Version: 27.0.1, Size: 11852702KiB, Recommended: YES, Action: restart, 
+OUT
+else
+  printf '%s\n' "$*" >> "$(dirname "$0")/calls"
+fi
+FAKE
+  printf '#!/bin/sh\necho 26.5\n' > "$V19_SW/sw_vers"
+  # PATH-shadow fixture: a stub that shadows one real brew binary, with the
+  # brew bin dir listed TWICE in PATH.
+  V19_BREW_BIN="$(brew --prefix)/bin"
+  V19_SHADOWED=$(ls "$V19_BREW_BIN" | grep -E '^[a-z][a-z0-9-]+$' \
+    | grep -v -E '^(jq|git|bash|awk|sed|grep|find|sort|brew|mas|npm|node|ruby|gem|pipx|uv|bun|python3|curl)$' | head -1)
+  printf '#!/bin/sh\nexit 0\n' > "$V19_SW/$V19_SHADOWED"
+  chmod +x "$V19_SW"/*
+  V19_DISC=$(PATH="$V19_SW:$V19_BREW_BIN:$PATH:$V19_BREW_BIN" bash "$SCRIPTS/discover.sh" 2>/dev/null)
+  _assert_eq "macos discover: updates[] are bare labels, major upgrade excluded" \
+    "$(echo "$V19_DISC" | jq -c '.native.softwareupdate.updates')" \
+    '["Safari27.0TahoeAuto-27.0","macOS Tahoe 26.7.1-25G241"]'
+  _assert_eq "macos discover: major upgrade listed separately" \
+    "$(echo "$V19_DISC" | jq -r '.native.softwareupdate.major_upgrades | map(.label) | join(",")')" \
+    "macOS 27.0.1-26A434"
+  _assert_eq "macos discover: restart_required ignores the excluded major upgrade" \
+    "$(echo "$V19_DISC" | jq '.native.softwareupdate.restart_required')" "false"
+  _assert_eq "shadow: a PATH dir listed twice yields one row per binary" \
+    "$(echo "$V19_DISC" | jq --arg b "$V19_SHADOWED" '[.shadow.duplicates[] | select(.binary == $b)] | length')" "1"
+  V19_SYN=$(echo "$V19_DISC" | bash "$SCRIPTS/synthesize.sh" \
+    "$REPO_ROOT/upkeep/skills/update/compatibility.json" /nonexistent-history 2>/dev/null)
+  _assert_eq "synth: major macOS upgrade surfaced as macos-major manual step" \
+    "$(echo "$V19_SYN" | jq -r '[.manual_steps[] | select(.kind == "macos-major") | .label] | join(",")')" \
+    "macOS 27.0.1-26A434"
+
+  # Apply installs exactly the planned labels, one `softwareupdate -i` each,
+  # and refuses labels that look like flags or carry shell metacharacters.
+  V19_MPF=$(mktemp /tmp/upkeep-v19mplan.XXXXXX)
+  jq -n '{schema_version:"1",mode:"all",created_at:"2026-01-01T00:00:00Z",
+    plan:{schema_version:"1",summary:{category_counts:{},eta_minutes_p50:1,eta_minutes_p90:1,disk_free_gb:100},warnings:[],manual_steps:[],ordered_groups:[{name:"stores",parallelism:"serial",tools:["macos"],item_count:3}],tool_specs:{},risk_categories:[]},
+    discovery:{schema_version:"1",os:{type:"macos",arch:"arm64"},
+      skills:{git_repos:[],managed:[],info:{},errors:[]},
+      native:{brew:{installed:false,outdated:[]},mas:{installed:false,outdated:[]},
+        softwareupdate:{installed:true,updates:["macOS Tahoe 26.7.1-25G241","-ia","x; touch /tmp/upkeep-pwn"],major_upgrades:[],restart_required:false},errors:[]},
+      language:{npm:{installed:false,outdated:[]},pipx:{installed:false,tools:[],outdated_count:0},gems:{installed:false,system_ruby:false,outdated:[]},uv:{installed:false},bun:{installed:false},deno:{installed:false},rustup:{installed:false},cargo:{installed:false},mise:{installed:false},errors:[]},
+      shadow:{duplicates:[],broken_symlinks:[],errors:[]},
+      disk:{free_gb:100,warn_threshold_gb:10,refuse_threshold_gb:5}}}' > "$V19_MPF"
+  V19_DATA=$(mktemp -d /tmp/upkeep-v19data.XXXXXX)
+  PATH="$V19_SW:$PATH" UPKEEP_DATA_DIR="$V19_DATA" bash "$SCRIPTS/update.sh" apply "$V19_MPF" >/dev/null 2>&1
+  _assert_eq "apply macos: one softwareupdate -i per safe label, unsafe labels refused" \
+    "$(cat "$V19_SW/calls" 2>/dev/null)" "-i macOS Tahoe 26.7.1-25G241"
+  rm -rf "$V19_SW" "$V19_DATA" "$V19_MPF"
+else
+  echo "  (skipped: needs macOS with Homebrew)"
+fi
+
 # ── Summary ────────────────────────────────────────────────────
 echo
 echo "════════════════════════════════════════"

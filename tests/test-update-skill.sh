@@ -114,6 +114,10 @@ esac
 echo
 echo "── 4. Mode filters ──"
 SKILLS_OUT=$(bash "$SCRIPTS/update.sh" plan skills 2>/dev/null)
+# A failed plan has no .ordered_groups, so the leak check below would pass
+# vacuously — assert the plan itself succeeded first.
+_assert_eq "skills mode plan succeeds (macOS native stub)" \
+  "$(echo "$SKILLS_OUT" | jq -r '(.error // .mode) // "invalid"' 2>/dev/null)" "skills"
 SKILLS_LANG=$(echo "$SKILLS_OUT" | jq -r '[.ordered_groups[]?.name] | join(",")')
 case "$SKILLS_LANG" in
   *brew*|*language*|*pipx*|*gems*|*uv*|*bun*|*mas*|*macos*)
@@ -404,6 +408,10 @@ _assert_eq "linux plan: snap in ordered_groups tools" \
   "$(echo "$LPLAN" | jq '[.ordered_groups[]?.tools[]?] | any(. == "snap")')" "true"
 _assert_eq "linux plan: flatpak in ordered_groups tools" \
   "$(echo "$LPLAN" | jq '[.ordered_groups[]?.tools[]?] | any(. == "flatpak")')" "true"
+LSKILLS=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt \
+  bash "$SCRIPTS/update.sh" plan skills 2>/dev/null)
+_assert_eq "linux skills mode plan succeeds (linux native stub)" \
+  "$(echo "$LSKILLS" | jq -r '(.error // .mode) // "invalid"' 2>/dev/null)" "skills"
 
 # --- 10d. WSL2: windows audit (detected via .exe, surfaced as manual step) ---
 # Name the fake with the .exe extension only — WSL interop exposes Windows

@@ -97,24 +97,26 @@ _cmd_plan() {
       # directly. The language stub is OS-agnostic (shared verbatim).
       local _os_type
       _os_type=$(jq -r '.os.type // "macos"' <<<"$discovery")
+      # The stubs are jq object literals (unquoted keys), which --argjson
+      # rejects as invalid JSON — compile them with `jq -nc` first.
       local _native_stub
       case "$_os_type" in
         linux|wsl2)
-          _native_stub='{
+          _native_stub=$(jq -nc '{
             system: {manager:"unknown", installed:false, upgradable:[], count:0, requires_sudo:true},
             snap:   {installed:false, refreshable:[]},
             flatpak:{installed:false, updatable:[]},
             windows:{wsl2:false, mnt_c:false, managers:[]},
             errors: []
-          }'
+          }')
           ;;
         *)
-          _native_stub='{
+          _native_stub=$(jq -nc '{
             brew: {installed:false, outdated:[]},
             mas:  {installed:false, outdated:[]},
             softwareupdate: {installed:false, updates:[], restart_required:false},
             errors: []
-          }'
+          }')
           ;;
       esac
       discovery=$(jq --argjson native "$_native_stub" '

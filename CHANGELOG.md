@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-10-24
+
+### Added
+
+- **Headless plugin updates.** `update.sh apply` now finishes each outdated
+  plugin's update through Claude Code's own
+  `claude plugin update <name>@<marketplace> --scope user --json` instead of
+  handing every one off as a manual `/plugin update`. The report gains
+  `plugins.updated[]` (`{plugin, status}`, status `updated` / `up_to_date` /
+  `failed` / `no-cli` / `refused`) and a note that only asks for a relaunch
+  when everything updated. No `-y` is passed, so a marketplace-declared
+  command still needs a human; plugin ids are validated before they reach the
+  CLI; upkeep still never writes `installed_plugins.json` or the cache itself.
+  Without the CLI (or when it fails) the `/plugin update` hand-off remains.
+  New `UPKEEP_CLAUDE_BIN` knob / test seam.
+
+### Fixed
+
+- **`/upkeep:update skills` crashed on every run since v1.6** with
+  `jq: invalid JSON text passed to --argjson` → `synthesize.sh failed`. The
+  OS-aware native stubs in `_cmd_plan` were jq object literals (unquoted keys)
+  passed to `--argjson`, which only accepts strict JSON; they are now compiled
+  with `jq -nc`. The mode-filter test passed vacuously (a failed plan has no
+  `ordered_groups`), so new tests assert the skills plan succeeds on both the
+  macOS and Linux stubs.
+
 ## [1.8.1] - 2026-06-30
 
 ### Fixed

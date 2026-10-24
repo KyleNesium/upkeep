@@ -17,6 +17,9 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPTS="$REPO_ROOT/upkeep/skills/update/scripts"
+# Never let apply reach the real `claude plugin update` — tests that exercise
+# the CLI path point this at a stub instead.
+export UPKEEP_CLAUDE_BIN=/nonexistent/claude
 
 PASS=0
 FAIL=0
@@ -703,6 +706,54 @@ _assert_eq "apply: --drop=plugins leaves marketplace HEAD untouched" \
   "$(git -C "$V17_AB/mkts/acme" rev-parse HEAD)" "$V17_BEFORE2"
 _assert_eq "apply: --drop=plugins still surfaces /plugin update hand-off" \
   "$(echo "$V17_APPLY3" | jq -r '.plugins.outdated[0].name')" "foo"
+
+# 11j. apply: no claude CLI → status no-cli, note keeps the manual hand-off
+_assert_eq "apply: missing claude CLI → plugin status no-cli" \
+  "$(echo "$V17_APPLY" | jq -r '.plugins.updated[0].status')" "no-cli"
+_assert_eq "apply: missing claude CLI → note keeps /plugin update hand-off" \
+  "$(echo "$V17_APPLY" | jq -r '.plugins.note | test("/plugin update")')" "true"
+
+# 11k. apply: claude CLI present → headless update via `claude plugin update`
+V19_BIN=$(mktemp -d /tmp/upkeep-v19bin.XXXXXX)
+cat > "$V19_BIN/claude-ok" <<'FAKE'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/calls"
+echo "Updating marketplaces..."
+printf '{"command":"update","outcome":"ok","pluginId":"%s","updateOutcome":"updated"}\n' "$3"
+FAKE
+cat > "$V19_BIN/claude-fail" <<'FAKE'
+#!/bin/sh
+printf '{"command":"update","outcome":"failed","pluginId":"%s","failureCode":"not_found"}\n' "$3"
+exit 1
+FAKE
+chmod +x "$V19_BIN/claude-ok" "$V19_BIN/claude-fail"
+V19_PF=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+V19_APPLY=$(UPKEEP_CLAUDE_BIN="$V19_BIN/claude-ok" UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" \
+  UPKEEP_DATA_DIR="$V17_AB/data" bash "$SCRIPTS/update.sh" apply "$V19_PF" 2>/dev/null)
+_assert_eq "apply: CLI invoked as plugin update <name>@<marketplace> --scope user --json" \
+  "$(cat "$V19_BIN/calls" 2>/dev/null)" "plugin update foo@acme --scope user --json"
+_assert_eq "apply: CLI success → status updated" \
+  "$(echo "$V19_APPLY" | jq -r '.plugins.updated[0] | "\(.plugin) \(.status)"')" "foo@acme updated"
+_assert_eq "apply: all updated → note asks only for a relaunch" \
+  "$(echo "$V19_APPLY" | jq -r '.plugins.note | test("Relaunch") and (test("/plugin update") | not)')" "true"
+
+V19_PF2=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+V19_APPLY2=$(UPKEEP_CLAUDE_BIN="$V19_BIN/claude-fail" UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" \
+  UPKEEP_DATA_DIR="$V17_AB/data" bash "$SCRIPTS/update.sh" apply "$V19_PF2" 2>/dev/null)
+_assert_eq "apply: CLI failure → status failed, hand-off kept" \
+  "$(echo "$V19_APPLY2" | jq -r '"\(.plugins.updated[0].status) \(.plugins.note | test("/plugin update"))"')" "failed true"
+
+# 11l. apply: malformed plugin id never reaches the CLI
+rm -f "$V19_BIN/calls"
+V19_PF3=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+jq '.discovery.skills.managed[0].name = "foo;rm -rf ~"' "$V19_PF3" > "$V19_PF3.tmp" && mv "$V19_PF3.tmp" "$V19_PF3"
+V19_APPLY3=$(UPKEEP_CLAUDE_BIN="$V19_BIN/claude-ok" UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" \
+  UPKEEP_DATA_DIR="$V17_AB/data" bash "$SCRIPTS/update.sh" apply "$V19_PF3" 2>/dev/null)
+_assert_eq "apply: malformed plugin id refused" \
+  "$(echo "$V19_APPLY3" | jq -r '.plugins.updated[0].status')" "refused"
+_assert_eq "apply: malformed plugin id never passed to CLI" \
+  "$([ -f "$V19_BIN/calls" ] && echo called || echo not-called)" "not-called"
+rm -rf "$V19_BIN"
 
 # 11j. --fresh: detection compares against the UPSTREAM manifest, catching an
 #      update the local marketplace clone hasn't pulled yet.

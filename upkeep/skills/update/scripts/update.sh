@@ -321,6 +321,7 @@ _cmd_apply() {
   local upgraded_formulas_file="$TMP_ROOT_APPLY/upgraded_formulas"
   local upgraded_tools_file="$TMP_ROOT_APPLY/upgraded_tools"
   local plugins_refreshed_file="$TMP_ROOT_APPLY/plugins_refreshed"
+  local plugins_updated_file="$TMP_ROOT_APPLY/plugins_updated"
   local failure_log_file="$TMP_ROOT_APPLY/failure_log"
   local deprecation_log="$TMP_ROOT_APPLY/deprecation_log"
   local apply_log_root="$TMP_ROOT_APPLY/logs"
@@ -328,7 +329,7 @@ _cmd_apply() {
   trap 'rm -rf -- "${TMP_ROOT_APPLY:-/dev/null/_unset}"' EXIT
 
   touch "$upgraded_formulas_file" "$upgraded_tools_file" \
-        "$plugins_refreshed_file" "$failure_log_file" "$deprecation_log"
+        "$plugins_refreshed_file" "$plugins_updated_file" "$failure_log_file" "$deprecation_log"
 
   # ── Dropped tools set (from gate's "drop categories" path) ───
   # v1.5.1: bash 3.2 (macOS default) has no associative arrays. Encode
@@ -511,10 +512,8 @@ _cmd_apply() {
       snap)    snap refresh >> "$log" 2>&1; rc=$? ;;
       flatpak) flatpak update -y >> "$log" 2>&1; rc=$? ;;
       plugins)
-        # v1.7: refresh the marketplace git source for each OUTDATED plugin.
-        # This is the ONLY part of a plugin update that is safe to automate —
-        # the reinstall (`/plugin update` + relaunch) has no headless path and
-        # is surfaced as a manual step. Each marketplace is pulled once
+        # v1.7: refresh the marketplace git source for each OUTDATED plugin
+        # (v1.9 then reinstalls via the claude CLI, below). Each marketplace is pulled once
         # (ff-only), dirty/detached trees are skipped, and the path is fenced
         # to MARKETPLACES_ROOT via canonical containment. A pull failure is
         # recorded per-marketplace and never fails the group (we don't want
@@ -559,6 +558,38 @@ _cmd_apply() {
           else
             printf '%s\tpull-failed\n' "$_mpath" >> "$plugins_refreshed_file"
           fi
+        done < <(jq -c '.skills.managed[]?' <<<"$discovery")
+
+        # v1.9: finish each update through Claude Code's own CLI
+        # (`claude plugin update <name>@<marketplace>`), which reinstalls the
+        # cache headlessly — upkeep still never writes installed_plugins.json
+        # or the cache itself. No -y: a marketplace-declared command needs a
+        # human to confirm, so the CLI refuses it and we report "failed".
+        # Without the CLI, status is "no-cli" and the manual hand-off stands.
+        local _claude_bin="${UPKEEP_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
+        local _pid _out _status
+        while read -r _pj; do
+          [ -z "$_pj" ] && continue
+          _pid=$(jq -r '(.name // "") + "@" + (.marketplace // "")' <<<"$_pj")
+          case "$_pid" in
+            @*|*@|*@*@*|*[!A-Za-z0-9._@-]*)
+              echo "plugins: refusing malformed plugin id: $_pid" >> "$log"
+              printf '%s\trefused\n' "$_pid" >> "$plugins_updated_file"
+              continue ;;
+          esac
+          if [ -z "$_claude_bin" ] || [ ! -x "$_claude_bin" ]; then
+            printf '%s\tno-cli\n' "$_pid" >> "$plugins_updated_file"
+            continue
+          fi
+          _out=$("$_claude_bin" plugin update "$_pid" --scope user --json \
+            </dev/null 2>>"$log" | grep '^{' | tail -1)
+          _status=$(jq -r 'if .outcome == "ok" then (.updateOutcome // "updated")
+                           else "failed" end' <<<"$_out" 2>/dev/null)
+          case "$_status" in
+            updated|up_to_date) ;;
+            *) echo "plugins: $_pid update failed: $_out" >> "$log"; _status=failed ;;
+          esac
+          printf '%s\t%s\n' "$_pid" "$_status" >> "$plugins_updated_file"
         done < <(jq -c '.skills.managed[]?' <<<"$discovery")
         rc=0
         ;;
@@ -759,6 +790,9 @@ _cmd_apply() {
     | jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
                | {marketplace:.[0], status:.[1]})')
   [ -z "$plugins_refreshed_json" ] && plugins_refreshed_json='[]'
+  local plugins_updated_json
+  plugins_updated_json=$(jq -Rsc 'split("\n") | map(select(length>0) | split("\t")
+               | {plugin:.[0], status:.[1]})' < "$plugins_updated_file")
 
   # ────────────────────────────────────────────────────────────
   # REPORT JSON for SKILL.md to render
@@ -769,6 +803,7 @@ _cmd_apply() {
     --argjson skills_skipped "$skills_skipped" \
     --argjson plugins_outdated "$plugins_outdated_json" \
     --argjson plugins_refreshed "$plugins_refreshed_json" \
+    --argjson plugins_updated "$plugins_updated_json" \
     --argjson upgraded_formulas "$(echo "$upgraded_formulas" | tr ' ' '\n' | grep -v '^$' | jq -R '.' | jq -s -c '.')" \
     --argjson upgraded_tools "$(echo "$upgraded_tools" | tr ' ' '\n' | grep -v '^$' | jq -R '.' | jq -s -c '.')" \
     --argjson diagnoses "$diagnoses_json" \
@@ -781,9 +816,13 @@ _cmd_apply() {
       plugins: {
         outdated: $plugins_outdated,
         marketplaces_refreshed: $plugins_refreshed,
-        note: (if ($plugins_outdated | length) > 0
-               then "Marketplace sources refreshed where possible. To finish each update, run the listed /plugin update command(s) then relaunch Claude Code — the plugin cache reinstall has no headless path."
-               else null end)
+        updated: $plugins_updated,
+        note: (if ($plugins_outdated | length) == 0 then null
+               elif ($plugins_updated | length) > 0
+                    and ($plugins_updated | all(.status == "updated" or .status == "up_to_date"))
+               then "Plugins updated via claude plugin update. Relaunch Claude Code to load the new versions."
+               else "Some plugins were not updated headlessly (see updated[].status). For each, run the listed /plugin update command, then relaunch Claude Code."
+               end)
       },
       upgraded_formulas: $upgraded_formulas,
       upgraded_tools: $upgraded_tools,

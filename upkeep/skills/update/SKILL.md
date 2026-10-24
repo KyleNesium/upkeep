@@ -13,9 +13,9 @@ description: |
   real Claude Code plugin handling: discovery compares installed_plugins.json
   against each marketplace's declared version so only GENUINELY-OUTDATED
   plugins are flagged (no more "update all 18"); apply refreshes the
-  trusted marketplace git source (ff-only); and because the plugin cache
-  reinstall has no headless path, the consolidated `/plugin update`
-  command + relaunch is handed off as a manual step. v1.7 also adds an
+  trusted marketplace git source (ff-only); and v1.9 finishes each update
+  headlessly via `claude plugin update` (falling back to a `/plugin update`
+  hand-off when the CLI is absent or refuses), leaving only a relaunch. v1.7 also adds an
   "apply all except flagged risks" gate option (drops categories a compat
   warning implicates) and a standing compatibility disclaimer — an absent
   risk flag is not a guarantee of safety. The failure-diagnoser is a
@@ -210,8 +210,10 @@ By default this compares against the marketplace clone already on disk; pass
 `--fresh` (`/upkeep:update <mode> --fresh`) to git-fetch each marketplace
 first and compare against its upstream manifest, catching updates the local
 clone hasn't pulled yet. Apply refreshes the trusted marketplace git source
-(ff-only); the cache reinstall is NOT auto-appliable — `/plugin update
-<name>` + a relaunch is handed off as a manual step.
+(ff-only), then (v1.9) runs `claude plugin update <name>@<marketplace>
+--scope user --json` for each outdated plugin. Any plugin the CLI could not
+update (status `failed`/`no-cli`/`refused`) falls back to a `/plugin update
+<name>` hand-off. A Claude Code relaunch is always needed to load new versions.
 
 The legacy v1.0 sequential flow (per-category gates) was retired in v1.6;
 all platforms now get the single-gate UX. If `$OS_TYPE` is `unknown`, report
@@ -348,11 +350,9 @@ Disk free: <summary.disk_free_gb> GB of <summary.disk_total_gb> GB total
   matrix, not that none exist. Review the plan before applying.
 ```
 
-When `summary.category_counts.plugins > 0`, also restate the plugin hand-off
-limitation in the gate (one line): refreshing the marketplace source is the
-only part upkeep can automate — completing each plugin update needs the
-`/plugin update <name>` command plus a Claude Code relaunch (the cache
-reinstall has no headless path).
+When `summary.category_counts.plugins > 0`, also say in the gate (one line)
+that apply updates those plugins via `claude plugin update` and that a
+Claude Code relaunch is needed afterwards to load them.
 
 On Linux/WSL2 the `system-sudo` manual step(s) are the apt/dnf/pacman
 upgrades. They are intentionally NOT in `ordered_groups` and NOT applied by
@@ -427,8 +427,9 @@ The script:
 8. Prints SKILL.md-facing JSON: `{mode, skills, plugins, upgraded_formulas,
    upgraded_tools, doctor, shadow_hits, resolution_failures, diagnoses,
    diagnosis_errors}`. `plugins` is `{outdated[], marketplaces_refreshed[],
-   note}` — the marketplace sources upkeep refreshed plus the hand-off list
-   for the manual `/plugin update` + relaunch step.
+   updated[], note}` — the marketplace sources upkeep refreshed, the
+   per-plugin `claude plugin update` result (`{plugin, status}`, status one of
+   `updated`/`up_to_date`/`failed`/`no-cli`/`refused`), and the next step.
 
 #### Report render
 
@@ -446,7 +447,8 @@ Render the JSON as the final report:
 
 ── Update Report ───────────────────────────────────────
   Skills   ✓ applied <N> / skipped <M>     (from .skills)
-  Plugins  ↻ <N> marketplace(s) refreshed  (from .plugins.marketplaces_refreshed)
+  Plugins  ✓ updated <N> / ↻ <M> marketplace(s) refreshed
+                                           (from .plugins.updated + .marketplaces_refreshed)
   brew     ✓ upgraded <N> packages         (from .upgraded_formulas)
   npm      <symbol> <result>                (from .upgraded_tools)
   pipx     <symbol> <result>
@@ -458,13 +460,12 @@ Render the JSON as the final report:
   snap     <symbol> <result>                (Linux — from .upgraded_tools)
   flatpak  <symbol> <result>                (Linux — from .upgraded_tools)
 
-── Finish plugin updates (run yourself) ────────────────  (if .plugins.outdated non-empty)
-  upkeep refreshed the marketplace source(s) above. To complete each
-  update, run the command then relaunch Claude Code (the cache reinstall
-  has no headless path — that's .plugins.note):
-  • <one `/plugin update <name>` per .plugins.outdated[] entry, with
-    <installed_version> → <available_version]>
-  Then relaunch Claude Code.
+── Finish plugin updates ───────────────────────────────  (if .plugins.outdated non-empty)
+  <.plugins.note>
+  • <one line per .plugins.updated[] entry whose status is NOT updated or
+    up_to_date: `/plugin update <name>` (from the matching .plugins.outdated[]
+    entry) with <installed_version> → <available_version>>
+  Then relaunch Claude Code to load the new versions.
 
 ── Manual (run yourself) ───────────────────────────────  (Linux/WSL2, if any)
   • <system-sudo command(s) from the plan's manual_steps — apt/dnf/pacman>
@@ -534,8 +535,10 @@ walks add 30–60s and most users want speed over the upfront context.
   `~/.claude/plugins/marketplaces/*` (canonical containment), each
   marketplace is pulled once, dirty/detached trees are skipped, pulls are
   `--ff-only`. upkeep NEVER rewrites `installed_plugins.json` or touches the
-  plugin cache — completing a plugin update (`/plugin update` + relaunch) is
-  always a manual hand-off, because the cache reinstall has no headless path.
+  plugin cache itself — the reinstall goes through Claude Code's own
+  `claude plugin update` (no `-y`, so a marketplace-declared command is never
+  auto-accepted). Plugin ids are validated (`name@marketplace`, `[A-Za-z0-9._-]`)
+  before they reach the CLI.
 - `update.sh` strict-mode aborts on bad mktemp / missing jq — the
   orchestrator never runs on a half-initialized state.
 - The `failure-diagnoser` pattern table emits the same JSON shape as the
@@ -557,6 +560,7 @@ walks add 30–60s and most users want speed over the upfront context.
 | `UPKEEP_INSTALLED_PLUGINS` | `~/.claude/plugins/installed_plugins.json` | Active-plugin state read for outdated detection |
 | `UPKEEP_PLUGIN_MARKETPLACES` | `~/.claude/plugins/marketplaces` | Marketplace git-source root; apply fences the ff-only pull to it |
 | `UPKEEP_FRESH_MARKETPLACES` | unset | `1` (or `--fresh`) — git-fetch each plugin marketplace during discovery and compare against its upstream manifest, not the local clone |
+| `UPKEEP_CLAUDE_BIN` | `command -v claude` | Claude Code CLI used for `claude plugin update`; unset/missing → plugins fall back to the manual hand-off (`no-cli`) |
 
 ---
 
@@ -577,6 +581,6 @@ audit-only — now driven by `discover.sh` + `synthesize.sh` instead of prose.
 - One approval gate covers the whole plan; "Drop categories" lets the user exclude tools before apply
 - Always show the compatibility disclaimer above the gate — flagged risks are not exhaustive; an absent flag never guarantees safety
 - When `risk_categories[]` is non-empty, offer "apply all except flagged risks" (default) and require an explicit "are you sure?" confirmation before applying flagged risks
-- Completing a plugin update is always a manual hand-off (`/plugin update <name>` + relaunch) — upkeep only auto-refreshes the marketplace source, never rewrites Claude Code's plugin state
+- Plugin updates go through `claude plugin update` only — upkeep never rewrites Claude Code's plugin state itself; anything the CLI can't finish falls back to a `/plugin update <name>` hand-off, and a relaunch is always the user's step
 - macOS updates with `[restart]` always get an explicit restart warning before running
 - The `$ <command>` lines in diagnosis fix-options and the manual sudo steps are text only — never auto-executed

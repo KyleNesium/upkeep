@@ -394,7 +394,7 @@ user to re-run — do not retry blindly.
 
 The engine enforces, for both modes: manifest TTL, per-item re-validation through
 the path-safety boundary (canonical containment + per-action shape), TOCTOU
-re-stat (vanished / type-swap / size-drift → skip), Electron `pgrep` recheck,
+re-stat (vanished / type-swap / size-drift → skip), Electron running-app recheck,
 per-item failure isolation, and the sudo boundary. `build_artifacts` are
 `report_only` in quick; `report_only`/opt-in items (pipx) are never auto-applied.
 

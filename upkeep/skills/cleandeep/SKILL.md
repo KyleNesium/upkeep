@@ -115,7 +115,7 @@ bash "${CLAUDE_SKILL_DIR}/../upkeep/scripts/clean.sh" apply "$MANIFEST_FILE" \
 
 The script: enforces the 15-min manifest TTL; re-validates every item through
 the path-safety boundary; TOCTOU re-stat (vanished / type-swap / size-drift →
-skip); re-checks `pgrep` for Electron apps; dispatches hardcoded commands
+skip); re-checks whether Electron apps are running; dispatches hardcoded commands
 per action with per-item isolation; reports before/after disk delta; consumes
 the manifest. Output JSON: `{applied[], failed[], skipped[], applied_count,
 failed_count, skipped_count, reclaimed_bytes}`.

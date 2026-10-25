@@ -91,6 +91,37 @@ _clean_canon() {
   printf '%s/%s' "$canon" "$base"
 }
 
+# Lexically normalize an absolute path WITHOUT touching the filesystem:
+# collapse `//`, drop `.`, resolve `..` against the components seen so far,
+# strip any trailing slash. Never follows symlinks — that is the point: the
+# validator compares this against _clean_canon to detect a symlinked ancestor.
+# Echoes empty for a relative path (callers treat that as unresolvable).
+_clean_lexnorm() {
+  local p="$1" out="" comp rest
+  case "$p" in /*) ;; *) return 0 ;; esac
+  rest="${p#/}"
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      */*) comp="${rest%%/*}"; rest="${rest#*/}" ;;
+      *)   comp="$rest"; rest="" ;;
+    esac
+    case "$comp" in
+      ''|.) ;;
+      ..)   out="${out%/*}" ;;
+      *)    out="$out/$comp" ;;
+    esac
+  done
+  printf '%s' "${out:-/}"
+}
+
+# Echo $1 if it is a non-negative integer, else the default $2. Every numeric
+# UPKEEP_* override goes through this: a typo like UPKEEP_CLEAN_TTL=abc must
+# fall back to the safe default, never reach `[ -gt ]` (which then evaluates
+# false and fails the guard OPEN) or $(( )) (which aborts mid-apply).
+_numeric_or() {
+  case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$((10#$1))" ;; esac
+}
+
 # Is canonical path $1 strictly under root $2? Trailing-slash discipline
 # prevents `/a/b-evil` from matching root `/a/b`. Equal paths are NOT
 # "under" (you can never delete a SAFE_ROOT itself).

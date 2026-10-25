@@ -75,6 +75,11 @@ ln -s "$HOME/.claude" "$HOME/Library/Caches/evil-link"
 # the resolved target, and rm -rf'd ~/workspace/important. Must REFUSE.
 mkdir -p "$HOME/workspace/important"
 ln -s "$HOME/workspace/important" "$HOME/Library/Caches/sneaky-link"
+mkdir -p "$HOME/workspace/important/sub"
+# Ancestor-symlink regression: App Support/Slack is a symlink to another app's
+# real data dir. Slack/Cache must not resolve to — and wipe — Signal/Cache.
+mkdir -p "$HOME/Library/Application Support/Signal/Cache"
+ln -s "$HOME/Library/Application Support/Signal" "$HOME/Library/Application Support/Slack"
 
 # ── Source under test (after HOME is set so root lists resolve to fake) ──
 # shellcheck source=../upkeep/skills/upkeep/scripts/lib/common.sh
@@ -102,8 +107,22 @@ _assert_verdict "traversal into .claude"     "$HOME/Library/Caches/../../.claude
 # App Support/Claude case below. Here we only assert it is REFUSED.
 _assert_verdict "symlink escape to .claude"  "$HOME/Library/Caches/evil-link" rm REFUSE symlink
 _assert_verdict "C1: symlink into another safe root" "$HOME/Library/Caches/sneaky-link" rm REFUSE symlink
-SNEAK_KEPT=$([ -d "$HOME/workspace/important" ] && echo true || echo false)
-_test "C1: symlink target not deleted" "$SNEAK_KEPT" "$SNEAK_KEPT" "true"
+# Symlinked ANCESTOR (not leaf): the leaf check alone let these canonicalize
+# into another app's / another safe root's real data and pass.
+_assert_verdict "ancestor symlink: App Support/Slack -> Signal" "$HOME/Library/Application Support/Slack/Cache" electron_cache REFUSE symlink-ancestor
+_assert_verdict "ancestor symlink: same, generic rm" "$HOME/Library/Application Support/Slack/Cache" rm REFUSE symlink-ancestor
+_assert_verdict "ancestor symlink: Caches/x -> workspace" "$HOME/Library/Caches/sneaky-link/sub" rm REFUSE symlink-ancestor
+_assert_verdict "ancestor symlink: vanished leaf under link" "$HOME/Library/Caches/sneaky-link/not-there" rm REFUSE symlink-ancestor
+# A symlinked $HOME itself is legitimate and must still validate: only links
+# BELOW home are refused. Run in a subshell with a fresh home cache.
+LINKDIR=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-linkhome.XXXXXX")
+ln -s "$FAKE_HOME" "$LINKDIR/home"
+LH_OUT=$(HOME="$LINKDIR/home"; _CLEAN_HOME=""; _clean_validate "$HOME/Library/Caches/com.example.foo" rm)
+_test "symlinked \$HOME itself still validates" "$([ "${LH_OUT%% *}" = OK ] && echo true || echo false)" "$LH_OUT" "OK"
+LH_OUT=$(HOME="$LINKDIR/home"; _CLEAN_HOME=""; _clean_validate "$HOME/Library/Application Support/Slack/Cache" electron_cache)
+LH_WHY=$(printf '%s' "$LH_OUT" | awk '{print $1" "$2}')
+_test "symlinked \$HOME: ancestor link still refused" "$([ "$LH_WHY" = "REFUSE symlink-ancestor" ] && echo true || echo false)" "$LH_OUT" "REFUSE symlink-ancestor"
+rm -rf -- "$LINKDIR"
 _assert_verdict "outside safe roots (/etc)"  "/etc/passwd" rm REFUSE outside-safe-roots
 _assert_verdict "protected under safe root"  "$HOME/Library/Application Support/Claude" rm REFUSE protected
 _assert_verdict "protected Claude subdir"    "$HOME/Library/Application Support/Claude/cache" rm REFUSE protected
@@ -120,6 +139,39 @@ SANITIZED=$(_sanitize_text "$LONGTEXT")
 _test "sanitize caps free-text at 256" "$([ "${#SANITIZED}" -le 256 ] && echo true || echo false)" "${#SANITIZED}" "<=256"
 CTRL=$(_sanitize_text "$(printf 'a\tb\nc')")
 _test "sanitize strips control chars" "$([ "$CTRL" = "abc" ] && echo true || echo false)" "$CTRL" "abc"
+
+_eq() { [ "$1" = "$2" ] && echo true || echo false; }
+_test "lexnorm: collapses // and ."    "$(_eq "$(_clean_lexnorm "/a//b/./c/")" /a/b/c)" "$(_clean_lexnorm "/a//b/./c/")" /a/b/c
+_test "lexnorm: resolves .."           "$(_eq "$(_clean_lexnorm "/a/b/../../c")" /c)" "$(_clean_lexnorm "/a/b/../../c")" /c
+_test "lexnorm: .. above root stays /" "$(_eq "$(_clean_lexnorm "/../..")" /)" "$(_clean_lexnorm "/../..")" /
+_test "lexnorm: relative → empty"      "$(_eq "$(_clean_lexnorm "a/b")" "")" "$(_clean_lexnorm "a/b")" "(empty)"
+_test "lexnorm: keeps spaces"          "$(_eq "$(_clean_lexnorm "/x/My App/y")" "/x/My App/y")" "$(_clean_lexnorm "/x/My App/y")" "/x/My App/y"
+
+_test "numeric_or: integer passes"     "$(_eq "$(_numeric_or 30 900)" 30)" "$(_numeric_or 30 900)" 30
+_test "numeric_or: abc → default"      "$(_eq "$(_numeric_or abc 900)" 900)" "$(_numeric_or abc 900)" 900
+_test "numeric_or: empty → default"    "$(_eq "$(_numeric_or "" 50)" 50)" "$(_numeric_or "" 50)" 50
+_test "numeric_or: negative → default" "$(_eq "$(_numeric_or -5 50)" 50)" "$(_numeric_or -5 50)" 50
+_test "numeric_or: 0900 not octal"     "$(_eq "$(_numeric_or 0900 1)" 900)" "$(_numeric_or 0900 1)" 900
+
+echo "── Running-app detection (Electron guard) ──"
+PSF=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-ps.XXXXXX")
+cat > "$PSF" <<'PS'
+/opt/homebrew/bin/codex exec --full-auto
+/System/Library/PrivateFrameworks/PasscodeSettings.framework/Versions/A/XPCServices/PasscodeSettingsSubscriber.xpc/Contents/MacOS/PasscodeSettingsSubscriber
+/Applications/Slack.app/Contents/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer) --type=renderer
+/Applications/Visual Studio Code.app/Contents/MacOS/Code
+/Applications/Some Very Long Electron Application Name.app/Contents/MacOS/Some Very Long Electron Application Name
+PS
+_ar() { if UPKEEP_PS_FILE="$PSF" _clean_app_running "$1"; then echo running; else echo stopped; fi; }
+_test "app-running: Slack helper detected"         "$(_eq "$(_ar Slack)" running)" "$(_ar Slack)" running
+_test "app-running: Code main binary detected"     "$(_eq "$(_ar Code)" running)" "$(_ar Code)" running
+_test "app-running: long name (>15 chars) detected" "$(_eq "$(_ar "Some Very Long Electron Application Name")" running)" "$(_ar "Some Very Long Electron Application Name")" running
+_test "app-running: case-insensitive"              "$(_eq "$(_ar slack)" running)" "$(_ar slack)" running
+grep -v 'Visual Studio Code' "$PSF" > "$PSF.t" && mv "$PSF.t" "$PSF"
+_test "app-running: codex/Passcode ≠ Code"         "$(_eq "$(_ar Code)" stopped)" "$(_ar Code)" stopped
+_test "app-running: regex chars are literal"       "$(_eq "$(_ar "S.ack")" stopped)" "$(_ar "S.ack")" stopped
+_test "app-running: absent app stopped"            "$(_eq "$(_ar Discord)" stopped)" "$(_ar Discord)" stopped
+rm -f -- "$PSF"
 
 OS_TYPE=""; UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt _detect_os
 _test "OS override seam (linux/apt)" "$([ "$OS_TYPE" = "linux" ] && [ "$PKG_MGR" = "apt" ] && echo true || echo false)" "$OS_TYPE/$PKG_MGR" "linux/apt"
@@ -287,6 +339,42 @@ _apply_run "$MF" >/dev/null
 BGONE=$([ ! -d "$AHOME/Library/Application Support/MobileSync/Backup/00008110-DEAD" ] && echo true || echo false)
 BKEEP=$([ -d "$AHOME/Library/Application Support/MobileSync/Backup" ] && echo true || echo false)
 _test "mobilesync_rm removes the backup, keeps Backup/" "$([ "$BGONE" = true ] && [ "$BKEEP" = true ] && echo true || echo false)" "gone=$BGONE keepparent=$BKEEP" "true/true"
+rm -rf -- "$AHOME"
+
+# 8. non-numeric env overrides fall back to safe defaults (finding #6). Before:
+# UPKEEP_CLEAN_TTL=abc made `[ age -gt abc ]` false → stale manifest ACCEPTED.
+_fresh_apply_home
+MF=$(_apply_disc deep)
+jq '.created_at = 1' "$MF" > "$MF.t" && mv "$MF.t" "$MF"
+TERR=$(HOME="$AHOME" UPKEEP_DATA_DIR="$AHOME/data" UPKEEP_CLEAN_TTL=abc /bin/bash "$CLEAN" apply "$MF" 2>/dev/null | jq -r '.error // empty')
+TSTILL=$([ -d "$AHOME/Library/Caches/com.foo" ] && echo true || echo false)
+_test "UPKEEP_CLEAN_TTL=abc: stale manifest still refused" "$([ -n "$TERR" ] && [ "$TSTILL" = true ] && echo true || echo false)" "err=$TERR kept=$TSTILL" "error/true"
+rm -rf -- "$AHOME"
+# UPKEEP_CLEAN_DRIFT_PCT=abc used to abort apply mid-loop in $(( )).
+_fresh_apply_home
+MF=$(_apply_disc deep)
+DRES=$(HOME="$AHOME" UPKEEP_DATA_DIR="$AHOME/data" UPKEEP_CLEAN_DRIFT_PCT=abc /bin/bash "$CLEAN" apply "$MF" 2>/dev/null)
+DGONE=$([ ! -d "$AHOME/Library/Caches/com.foo" ] && echo true || echo false)
+_test "UPKEEP_CLEAN_DRIFT_PCT=abc: apply completes" "$([ "$(jq -r '.applied_count' <<<"$DRES" 2>/dev/null)" -ge 1 ] 2>/dev/null && [ "$DGONE" = true ] && echo true || echo false)" "gone=$DGONE" "applied>=1/gone"
+rm -rf -- "$AHOME"
+
+# 9. ancestor swapped for a symlink between discover and apply (finding #1):
+# App Support/Slack becomes a link to Signal → Slack/Cache must be skipped and
+# Signal's real cache must survive. (Replaces the old C1 "target not deleted"
+# check, which could never fail because nothing ever tried to delete it.)
+_fresh_apply_home
+mkdir -p "$AHOME/Library/Application Support/Slack/Cache" "$AHOME/Library/Application Support/Signal/Cache"
+echo keep > "$AHOME/Library/Application Support/Signal/Cache/data"
+MF=$(_apply_disc deep)
+rm -rf "$AHOME/Library/Application Support/Slack"
+ln -s "$AHOME/Library/Application Support/Signal" "$AHOME/Library/Application Support/Slack"
+# Drop Signal's own manifest item so only the swapped Slack path could touch it;
+# an empty ps list keeps a real running Slack/Signal on this box out of the test.
+jq '.items |= map(select(.path | endswith("/Signal/Cache") | not))' "$MF" > "$MF.t" && mv "$MF.t" "$MF"
+ARES=$(HOME="$AHOME" UPKEEP_DATA_DIR="$AHOME/data" UPKEEP_PS_FILE=/dev/null /bin/bash "$CLEAN" apply "$MF" 2>/dev/null)
+AKEEP=$([ -f "$AHOME/Library/Application Support/Signal/Cache/data" ] && echo true || echo false)
+ASK=$(jq -r '[.skipped[]|select(.reason=="symlink-ancestor")]|length' <<<"$ARES")
+_test "ancestor swapped to symlink: skipped, other app's cache kept" "$([ "$AKEEP" = true ] && [ "$ASK" -ge 1 ] 2>/dev/null && echo true || echo false)" "kept=$AKEEP skipped=$ASK" "true/>=1"
 rm -rf -- "$AHOME"
 
 echo "── Non-path actions (brew/docker, PATH-stubbed) ──"
@@ -473,6 +561,10 @@ _test "UPKEEP_NO_REUSE forces fresh scan" "$([ "$FRESH_N" -ge 1 ] 2>/dev/null &&
 jq '.created_at = 1' "$PWFILE" > "$PWFILE.t" && mv "$PWFILE.t" "$PWFILE"
 STALE_N=$(_pw discover quick | jq -r '.item_count')
 _test "stale prewarm ignored (TTL), fresh scan runs" "$([ "$STALE_N" -ge 1 ] 2>/dev/null && echo true || echo false)" "$STALE_N" ">=1"
+# corrupt created_at (finding #8): ignored → fresh scan, no arithmetic abort
+jq '.created_at = "garbage"' "$PWFILE" > "$PWFILE.t" && mv "$PWFILE.t" "$PWFILE"
+CORRUPT_N=$(_pw discover quick | jq -r '.item_count')
+_test "corrupt prewarm created_at ignored, fresh scan runs" "$([ "$CORRUPT_N" -ge 1 ] 2>/dev/null && echo true || echo false)" "$CORRUPT_N" ">=1"
 rm -rf -- "$PWHOME"
 
 # hook is a no-op when disabled (default)

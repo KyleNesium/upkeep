@@ -72,7 +72,7 @@ bash "${CLAUDE_SKILL_DIR}/../upkeep/scripts/clean.sh" apply "$MANIFEST_FILE" \
 ```
 
 Same engine guarantees as cleandeep (TTL, re-validation, TOCTOU re-stat,
-Electron pgrep recheck, per-item isolation). `report_only` build artifacts are
+Electron running-app recheck, per-item isolation). `report_only` build artifacts are
 never deleted even under "Apply all". Surface an `error` field if present.
 
 ### Report render

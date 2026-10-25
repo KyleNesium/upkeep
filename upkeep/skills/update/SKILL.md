@@ -330,6 +330,7 @@ Risks flagged:
   • <one line per warnings[] entry, severity-ordered>
 
 Manual steps (you run these — NOT auto-applied):
+  • system-ruby-skipped entries: informational — show the message verbatim.
   • macos-major entries: a major macOS upgrade upkeep deliberately did NOT
     install — show the message verbatim (the user upgrades via System Settings).
   • <one line per manual_steps[] entry>
@@ -562,9 +563,32 @@ walks add 30–60s and most users want speed over the upfront context.
 | `UPKEEP_INSTALLED_PLUGINS` | `~/.claude/plugins/installed_plugins.json` | Active-plugin state read for outdated detection |
 | `UPKEEP_PLUGIN_MARKETPLACES` | `~/.claude/plugins/marketplaces` | Marketplace git-source root; apply fences the ff-only pull to it |
 | `UPKEEP_FRESH_MARKETPLACES` | unset | `1` (or `--fresh`) — git-fetch each plugin marketplace during discovery and compare against its upstream manifest, not the local clone |
+| `UPKEEP_CONFIG` | `~/.claude/data/upkeep-config.json` | Optional user config (see below) |
 | `UPKEEP_CLAUDE_BIN` | `command -v claude` | Claude Code CLI used for `claude plugin update`; unset/missing → plugins fall back to the manual hand-off (`no-cli`) |
 
 ---
+
+### User config (`~/.claude/data/upkeep-config.json`, v1.9)
+
+Optional JSON file; every key is optional and a missing/invalid file means
+defaults. Edit it when the user asks to silence a warning or opt in:
+
+```json
+{
+  "shadow_ignore_dirs": ["~/.superset/bin"],
+  "system_ruby_gems": false
+}
+```
+
+- `shadow_ignore_dirs` — PATH directories whose binaries shadow Homebrew's on
+  purpose (wrappers). They are skipped by the PATH-shadow scan. `~` expands.
+- `system_ruby_gems` — `false` (default) leaves Apple's system Ruby gems alone
+  and reports them as a `system-ruby-skipped` manual step; `true` restores
+  `gem update --user-install` for them.
+
+Skill repos count as dirty only for tracked changes (`git status
+--untracked-files=no`) — untracked marker files that self-managing skills
+like gstack write no longer block or warn.
 
 ## Legacy v1.0 sequential flow — retired in v1.6
 

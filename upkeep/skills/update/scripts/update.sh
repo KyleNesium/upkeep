@@ -437,7 +437,7 @@ _cmd_apply() {
       continue
     fi
 
-    if [ -n "$(git -C "$repo_path" status --porcelain 2>/dev/null)" ]; then
+    if [ -n "$(git -C "$repo_path" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
       echo "skills: $repo_name dirty — skipped" >> "$skills_log"
       skills_skipped=$((skills_skipped+1))
       continue
@@ -559,7 +559,7 @@ _cmd_apply() {
             printf '%s\tnot-git\n' "$_mpath" >> "$plugins_refreshed_file"
             continue
           fi
-          if [ -n "$(git -C "$_resolved" status --porcelain 2>/dev/null)" ]; then
+          if [ -n "$(git -C "$_resolved" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
             echo "plugins: $_pname marketplace dirty — skipped ($_mpath)" >> "$log"
             printf '%s\tdirty-skipped\n' "$_mpath" >> "$plugins_refreshed_file"
             continue

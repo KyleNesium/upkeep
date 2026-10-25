@@ -21,8 +21,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Without the CLI (or when it fails) the `/plugin update` hand-off remains.
   New `UPKEEP_CLAUDE_BIN` knob / test seam.
 
+- **User config file** `~/.claude/data/upkeep-config.json` (override with
+  `UPKEEP_CONFIG`): `shadow_ignore_dirs` silences intentional PATH wrappers
+  (e.g. `~/.superset/bin`), `system_ruby_gems` opts back in to updating gems
+  on Apple's system Ruby.
+
+### Changed
+
+- **Apple's system Ruby is left alone by default.** `gem update
+  --user-install` on macOS's Ruby 2.6 mostly fails (current gems need Ruby
+  >= 2.7) and those gems belong to the OS. Its outdated gems now become a
+  `system-ruby-skipped` manual step (no gems group, count, ETA or warning)
+  unless `system_ruby_gems: true` is set.
+- **Untracked files no longer make a skill repo or marketplace "dirty".**
+  They can't break a `--ff-only` pull, and gstack writes its own marker
+  files, so it was flagged on every run.
+- The `plugin-update` manual step now says apply updates the plugin via
+  `claude plugin update`, with `/plugin update` as the fallback.
+
 ### Fixed
 
+- **The test suite wrote into the real `~/.claude/data`** — every run left
+  plan files and appended to the ETA history. It now sandboxes
+  `UPKEEP_DATA_DIR` and `UPKEEP_CONFIG`.
 - **A Recommended major macOS upgrade could be installed by apply.** The
   `macos` step ran `softwareupdate -ia`, and `softwareupdate -l` marks a major
   upgrade (e.g. macOS 26.x → 27.0.1) as `Recommended: YES`, so it rode along

@@ -20,6 +20,13 @@ SCRIPTS="$REPO_ROOT/upkeep/skills/update/scripts"
 # Never let apply reach the real `claude plugin update` — tests that exercise
 # the CLI path point this at a stub instead.
 export UPKEEP_CLAUDE_BIN=/nonexistent/claude
+# Sandbox plan/history/config so the suite never writes the user's real
+# ~/.claude/data (plans, ETA history) or reads their upkeep-config.json. The
+# data dir is left uncreated so the 0700 check below tests update.sh's mkdir.
+TEST_SANDBOX=$(mktemp -d /tmp/upkeep-test.XXXXXX)
+export UPKEEP_DATA_DIR="$TEST_SANDBOX/data"
+export UPKEEP_CONFIG="$TEST_SANDBOX/no-config.json"
+trap 'rm -rf "$TEST_SANDBOX"' EXIT
 
 PASS=0
 FAIL=0
@@ -107,7 +114,7 @@ _assert_eq "zero command/preconditions fields in plan JSON" "$CMD_FIELDS" "0"
 CMD_FIELDS_IN_FILE=$(jq '[.. | objects | (.command // empty), (.preconditions // empty)] | length' "$PLAN_FILE")
 _assert_eq "zero command/preconditions in stored plan file" "$CMD_FIELDS_IN_FILE" "0"
 
-DATA_DIR_MODE=$(stat -f '%Sp' "$HOME/.claude/data" 2>/dev/null || stat -c '%A' "$HOME/.claude/data" 2>/dev/null)
+DATA_DIR_MODE=$(stat -f '%Sp' "$UPKEEP_DATA_DIR" 2>/dev/null || stat -c '%A' "$UPKEEP_DATA_DIR" 2>/dev/null)
 case "$DATA_DIR_MODE" in
   drwx------) _assert_eq "DATA_DIR mode 0700" "drwx------" "drwx------" ;;
   *) _assert_eq "DATA_DIR mode 0700" "$DATA_DIR_MODE" "drwx------" ;;
@@ -871,6 +878,68 @@ FAKE
 else
   echo "  (skipped: needs macOS with Homebrew)"
 fi
+
+# ── 13. v1.9: config file, system-Ruby gems, untracked-only "dirty" ──
+echo
+echo "── 13. config + system Ruby + dirty (v1.9) ──"
+V19_GEM_DISC=$(echo "$V17_SYNTH_DISC" | jq -c '.language.gems = {installed:true, system_ruby:true,
+  system_ruby_opt_in:false, ruby_version:"2.6",
+  outdated:[{name:"bundler",from:"1.17.2",to:"4.0.23",bump:"major"},{name:"csv",from:"3.3.5",to:"3.3.6",bump:"patch"}]}')
+V19_GEM_PLAN=$(echo "$V19_GEM_DISC" | bash "$SCRIPTS/synthesize.sh" \
+  "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "system Ruby (default): no gems in ordered_groups" \
+  "$(echo "$V19_GEM_PLAN" | jq '[.ordered_groups[].tools[]? | select(. == "gems")] | length')" "0"
+_assert_eq "system Ruby (default): category_counts.gems = 0" \
+  "$(echo "$V19_GEM_PLAN" | jq '.summary.category_counts.gems')" "0"
+_assert_eq "system Ruby (default): no major-gem warning, skipped step lists 2 gems" \
+  "$(echo "$V19_GEM_PLAN" | jq -r '"\([.warnings[] | select(.code == "system-ruby-major-gems")] | length) \([.manual_steps[] | select(.kind == "system-ruby-skipped") | .count] | add)"')" "0 2"
+V19_GEM_PLAN2=$(echo "$V19_GEM_DISC" | jq -c '.language.gems.system_ruby_opt_in = true' \
+  | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "system Ruby (opted in): gems planned with the major-gem warning" \
+  "$(echo "$V19_GEM_PLAN2" | jq -r '"\([.ordered_groups[].tools[]? | select(. == "gems")] | length) \([.warnings[] | select(.code == "system-ruby-major-gems")] | length)"')" "1 1"
+
+# Config + skills-dirty, via a fast Linux-forced discovery.
+V19_CF=$(mktemp -d /tmp/upkeep-v19cf.XXXXXX)
+mkdir -p "$V19_CF/cs" "$V19_CF/xs"
+git init -q -b main --bare "$V19_CF/origin.git"
+git clone -q "$V19_CF/origin.git" "$V19_CF/cs/selfmanaged" 2>/dev/null
+( cd "$V19_CF/cs/selfmanaged" && git config user.email t@t && git config user.name t && \
+  echo '---' > SKILL.md && git add -A && git commit -qm init && git push -q origin main && \
+  touch .feature-prompted-marker )
+printf '{"system_ruby_gems": true}\n' > "$V19_CF/config.json"
+V19_CDISC=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V19_CF/cs" UPKEEP_CODEX_SKILLS="$V19_CF/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V19_CF/none.json" UPKEEP_CONFIG="$V19_CF/config.json" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "dirty: untracked-only skill repo is not dirty" \
+  "$(echo "$V19_CDISC" | jq -r '[.skills.git_repos[] | select(.name == "selfmanaged") | (.dirty_files // []) | length] | join(",")')" "0"
+( cd "$V19_CF/cs/selfmanaged" && echo changed >> SKILL.md )
+V19_CDISC2=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V19_CF/cs" UPKEEP_CODEX_SKILLS="$V19_CF/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V19_CF/none.json" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "dirty: a modified tracked file still marks the repo dirty" \
+  "$(echo "$V19_CDISC2" | jq -r '[.skills.git_repos[] | select(.name == "selfmanaged") | (.dirty_files // []) | length > 0] | join(",")')" "true"
+if command -v gem >/dev/null 2>&1; then
+  _assert_eq "config: system_ruby_gems=true reaches discovery" \
+    "$(echo "$V19_CDISC" | jq '.language.gems.system_ruby_opt_in')" "true"
+  _assert_eq "config: absent config file → system_ruby_opt_in false" \
+    "$(echo "$V19_CDISC2" | jq '.language.gems.system_ruby_opt_in')" "false"
+fi
+
+# shadow_ignore_dirs: a stub dir that shadows a brew binary is not reported.
+if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  V19_IG="$V19_CF/wrappers"; mkdir -p "$V19_IG"
+  V19_IG_BIN="$(brew --prefix)/bin"
+  V19_IG_NAME=$(ls "$V19_IG_BIN" | grep -E '^[a-z][a-z0-9-]+$' \
+    | grep -v -E '^(jq|git|bash|awk|sed|grep|find|sort|brew|mas|npm|node|ruby|gem|pipx|uv|bun|python3|curl)$' | head -1)
+  printf '#!/bin/sh\nexit 0\n' > "$V19_IG/$V19_IG_NAME"; chmod +x "$V19_IG/$V19_IG_NAME"
+  printf '{"shadow_ignore_dirs": ["%s/"]}\n' "$V19_IG" > "$V19_CF/ignore.json"
+  V19_IGDISC=$(PATH="$V19_IG:$PATH" UPKEEP_CONFIG="$V19_CF/ignore.json" bash "$SCRIPTS/discover.sh" 2>/dev/null)
+  _assert_eq "config: shadow_ignore_dirs suppresses that dir's shadow rows" \
+    "$(echo "$V19_IGDISC" | jq --arg b "$V19_IG_NAME" '[.shadow.duplicates[] | select(.binary == $b)] | length')" "0"
+fi
+rm -rf "$V19_CF"
 
 # ── Summary ────────────────────────────────────────────────────
 echo

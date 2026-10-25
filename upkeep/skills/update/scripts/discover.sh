@@ -12,6 +12,14 @@
 set -uo pipefail
 
 TRUST_FILE="${UPKEEP_TRUST_FILE:-$HOME/.claude/data/upkeep-skill-trust.json}"
+# v1.9: optional user config. Keys: shadow_ignore_dirs (array of PATH dirs
+# whose binaries shadow others on purpose; `~` expanded) and system_ruby_gems
+# (bool, default false — opt in to `gem update --user-install` on Apple's Ruby).
+CONFIG_FILE="${UPKEEP_CONFIG:-$HOME/.claude/data/upkeep-config.json}"
+_config() {  # $1 = jq filter over the config; prints nothing if absent/invalid
+  [ -f "$CONFIG_FILE" ] || return 0
+  jq -r --arg home "$HOME" "$1" "$CONFIG_FILE" 2>/dev/null || true
+}
 CLAUDE_SKILLS_ROOT="${UPKEEP_CLAUDE_SKILLS:-$HOME/.claude/skills}"
 CODEX_SKILLS_ROOT="${UPKEEP_CODEX_SKILLS:-$HOME/.codex/skills}"
 PLUGIN_CACHE_ROOT="${UPKEEP_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}"
@@ -161,7 +169,9 @@ discover_skills() {
         trusted="true"
       fi
 
-      dirty=$(git -C "$path" status --porcelain 2>/dev/null | head -20)
+      # Untracked files can't break a --ff-only pull, and self-managing skills
+      # (gstack) drop marker files in their own tree — only tracked changes count.
+      dirty=$(git -C "$path" status --porcelain --untracked-files=no 2>/dev/null | head -20)
       detached="false"
       git -C "$path" symbolic-ref --quiet HEAD >/dev/null 2>&1 || detached="true"
 
@@ -717,6 +727,8 @@ discover_language() {
 
   # gems (system Ruby detection)
   local gems_installed=false system_ruby=false ruby_version="" gems_outdated='[]'
+  local system_ruby_opt_in=false
+  [ "$(_config '.system_ruby_gems == true')" = "true" ] && system_ruby_opt_in=true
   if command -v gem >/dev/null 2>&1; then
     gems_installed=true
     local ruby_path ruby_ver_str
@@ -779,6 +791,7 @@ discover_language() {
     --argjson pipx_outdated_count "$pipx_outdated_count" \
     --argjson gems_installed "$gems_installed" \
     --argjson system_ruby "$system_ruby" \
+    --argjson system_ruby_opt_in "$system_ruby_opt_in" \
     --arg ruby_version "$ruby_version" \
     --argjson gems_outdated "$gems_outdated" \
     --argjson uv_installed "$uv_installed" \
@@ -792,7 +805,8 @@ discover_language() {
     --argjson mise_installed "$mise_installed" \
     '{npm: {installed:$npm_installed, outdated:$npm_outdated},
       pipx:{installed:$pipx_installed, tools:$pipx_tools, outdated_count:$pipx_outdated_count},
-      gems:{installed:$gems_installed, system_ruby:$system_ruby, ruby_version:$ruby_version, outdated:$gems_outdated},
+      gems:{installed:$gems_installed, system_ruby:$system_ruby, system_ruby_opt_in:$system_ruby_opt_in,
+            ruby_version:$ruby_version, outdated:$gems_outdated},
       uv:  {installed:$uv_installed, current:$uv_current},
       bun: {installed:$bun_installed, current:$bun_current},
       deno:{installed:$deno_installed, current:$deno_current},
@@ -837,7 +851,9 @@ discover_shadow() {
   shadow_input=$(
     IFS=':' read -r -a _path_dirs <<<"$PATH"
     shopt -s nullglob
-    _seen_dirs=":"
+    # Dirs the user marked as intentional shadows (config shadow_ignore_dirs)
+    # are skipped entirely, so their binaries never claim a name.
+    _seen_dirs=":$(_config '(.shadow_ignore_dirs // [])[] | strings | sub("^~"; $home) | rtrimstr("/")' | tr '\n' ':')"
     for _d in "${_path_dirs[@]}"; do
       [ -z "$_d" ] && continue
       [ -d "$_d" ] || continue

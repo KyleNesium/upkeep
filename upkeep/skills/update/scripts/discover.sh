@@ -12,6 +12,14 @@
 set -uo pipefail
 
 TRUST_FILE="${UPKEEP_TRUST_FILE:-$HOME/.claude/data/upkeep-skill-trust.json}"
+# v1.8.3: optional user config. Keys: shadow_ignore_dirs (array of PATH dirs
+# whose binaries shadow others on purpose; `~` expanded) and system_ruby_gems
+# (bool, default false — opt in to `gem update --user-install` on Apple's Ruby).
+CONFIG_FILE="${UPKEEP_CONFIG:-$HOME/.claude/data/upkeep-config.json}"
+_config() {  # $1 = jq filter over the config; prints nothing if absent/invalid
+  [ -f "$CONFIG_FILE" ] || return 0
+  jq -r --arg home "$HOME" "$1" "$CONFIG_FILE" 2>/dev/null || true
+}
 CLAUDE_SKILLS_ROOT="${UPKEEP_CLAUDE_SKILLS:-$HOME/.claude/skills}"
 CODEX_SKILLS_ROOT="${UPKEEP_CODEX_SKILLS:-$HOME/.codex/skills}"
 PLUGIN_CACHE_ROOT="${UPKEEP_PLUGIN_CACHE:-$HOME/.claude/plugins/cache}"
@@ -161,7 +169,9 @@ discover_skills() {
         trusted="true"
       fi
 
-      dirty=$(git -C "$path" status --porcelain 2>/dev/null | head -20)
+      # Untracked files can't break a --ff-only pull, and self-managing skills
+      # (gstack) drop marker files in their own tree — only tracked changes count.
+      dirty=$(git -C "$path" status --porcelain --untracked-files=no 2>/dev/null | head -20)
       detached="false"
       git -C "$path" symbolic-ref --quiet HEAD >/dev/null 2>&1 || detached="true"
 
@@ -395,7 +405,7 @@ _bump_class() {
 # ── Native section (brew, mas, softwareupdate) ───────────────────
 discover_native() {
   local brew_installed=false mas_installed=false sw_installed=true
-  local brew_outdated='[]' mas_outdated='[]' sw_updates='[]'
+  local brew_outdated='[]' mas_outdated='[]' sw_updates='[]' sw_major='[]'
   local restart_required=false
   local errors='[]'
 
@@ -458,15 +468,38 @@ discover_native() {
   # localized UI (e.g. de/fr) the output is translated and the grep below would
   # silently miss a required reboot, telling the user none is needed.
   sw_raw=$(LC_ALL=C softwareupdate -l 2>&1 || true)
-  if echo "$sw_raw" | grep -qiE "restart"; then
-    restart_required=true
-  fi
-  # Note: do NOT chain `|| echo '[]'` after a pipeline here. With set -o pipefail,
-  # a non-matching grep fails the pipeline AND the fallback fires — both jq's
-  # output and echo's output get captured, producing invalid JSON like "[]\n[]".
-  # jq -Rsc on empty input already returns "[]", so no fallback is needed.
-  sw_lines=$(echo "$sw_raw" | grep -E "^\s*\*" || true)
-  sw_updates=$(printf '%s' "$sw_lines" | jq -Rsc 'split("\n") | map(select(length > 0))')
+  # v1.8.3: one TSV row per update — label, title, version, restart (0/1). Each
+  # `* Label:` line is followed by its `Title: …, Version: …, Action: restart`
+  # line. updates[] now holds bare labels (was the raw `* Label: …` line), so
+  # apply can install them one by one.
+  local sw_tsv sw_all os_major
+  sw_tsv=$(printf '%s\n' "$sw_raw" | awk '
+    function flush() { if (lbl != "") print lbl "\t" title "\t" ver "\t" rs }
+    /^[[:space:]]*\* / {
+      flush(); lbl = $0; sub(/^[[:space:]]*\* /, "", lbl); sub(/^Label: /, "", lbl)
+      title = ""; ver = ""; rs = 0; next
+    }
+    /^[[:space:]]*Title: / && lbl != "" {
+      t = $0; sub(/^[[:space:]]*Title: /, "", t)
+      title = t; sub(/,.*/, "", title)
+      v = t; if (sub(/.*Version: /, "", v)) { sub(/,.*/, "", v); ver = v }
+      if (t ~ /Action: restart/) rs = 1
+    }
+    END { flush() }')
+  # A macOS entry whose major version differs from the running OS is a major
+  # upgrade (e.g. 26.x → 27.0). softwareupdate marks those Recommended too, so
+  # the old `softwareupdate -ia` would have installed one. Keep them out of
+  # updates[] and surface them as a manual step instead.
+  os_major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+  sw_all=$(printf '%s' "$sw_tsv" | jq -Rsc --arg os_major "$os_major" '
+    split("\n") | map(select(length > 0) | split("\t")
+      | {label: .[0], title: (.[1] // ""), version: (.[2] // ""), restart: (.[3] == "1")}
+      | .major = ((.title | test("^macOS ")) and ($os_major != "")
+                  and ((.version | split(".")[0]) != $os_major)))')
+  [ -z "$sw_all" ] && sw_all='[]'
+  sw_updates=$(jq -c '[.[] | select(.major | not) | .label]' <<<"$sw_all")
+  sw_major=$(jq -c '[.[] | select(.major) | {label, title, version}]' <<<"$sw_all")
+  restart_required=$(jq '[.[] | select(.major | not) | .restart] | any' <<<"$sw_all")
 
   jq -n \
     --argjson brew_installed "$brew_installed" \
@@ -475,11 +508,13 @@ discover_native() {
     --argjson mas_outdated "$mas_outdated" \
     --argjson sw_installed "$sw_installed" \
     --argjson sw_updates "$sw_updates" \
+    --argjson sw_major "$sw_major" \
     --argjson restart "$restart_required" \
     --argjson errors "$errors" \
     '{brew:{installed:$brew_installed, outdated:$brew_outdated},
       mas:{installed:$mas_installed, outdated:$mas_outdated},
-      softwareupdate:{installed:$sw_installed, updates:$sw_updates, restart_required:$restart},
+      softwareupdate:{installed:$sw_installed, updates:$sw_updates,
+                      major_upgrades:$sw_major, restart_required:$restart},
       errors:$errors}'
 }
 
@@ -692,6 +727,8 @@ discover_language() {
 
   # gems (system Ruby detection)
   local gems_installed=false system_ruby=false ruby_version="" gems_outdated='[]'
+  local system_ruby_opt_in=false
+  [ "$(_config '.system_ruby_gems == true')" = "true" ] && system_ruby_opt_in=true
   if command -v gem >/dev/null 2>&1; then
     gems_installed=true
     local ruby_path ruby_ver_str
@@ -754,6 +791,7 @@ discover_language() {
     --argjson pipx_outdated_count "$pipx_outdated_count" \
     --argjson gems_installed "$gems_installed" \
     --argjson system_ruby "$system_ruby" \
+    --argjson system_ruby_opt_in "$system_ruby_opt_in" \
     --arg ruby_version "$ruby_version" \
     --argjson gems_outdated "$gems_outdated" \
     --argjson uv_installed "$uv_installed" \
@@ -767,7 +805,8 @@ discover_language() {
     --argjson mise_installed "$mise_installed" \
     '{npm: {installed:$npm_installed, outdated:$npm_outdated},
       pipx:{installed:$pipx_installed, tools:$pipx_tools, outdated_count:$pipx_outdated_count},
-      gems:{installed:$gems_installed, system_ruby:$system_ruby, ruby_version:$ruby_version, outdated:$gems_outdated},
+      gems:{installed:$gems_installed, system_ruby:$system_ruby, system_ruby_opt_in:$system_ruby_opt_in,
+            ruby_version:$ruby_version, outdated:$gems_outdated},
       uv:  {installed:$uv_installed, current:$uv_current},
       bun: {installed:$bun_installed, current:$bun_current},
       deno:{installed:$deno_installed, current:$deno_current},
@@ -812,9 +851,16 @@ discover_shadow() {
   shadow_input=$(
     IFS=':' read -r -a _path_dirs <<<"$PATH"
     shopt -s nullglob
+    # Dirs the user marked as intentional shadows (config shadow_ignore_dirs)
+    # are skipped entirely, so their binaries never claim a name.
+    _seen_dirs=":$(_config '(.shadow_ignore_dirs // [])[] | strings | sub("^~"; $home) | rtrimstr("/")' | tr '\n' ':')"
     for _d in "${_path_dirs[@]}"; do
       [ -z "$_d" ] && continue
       [ -d "$_d" ] || continue
+      # v1.8.3: a dir listed twice in $PATH (common after re-sourcing a shell
+      # rc) re-emitted every shadow row once per extra occurrence.
+      case "$_seen_dirs" in (*":$_d:"*) continue ;; esac
+      _seen_dirs="$_seen_dirs$_d:"
       # Skip CWD-relative entries (don't trust `.` or `./*` in $PATH).
       if [ "${_d:0:1}" = "." ]; then
         if [ "$_d" = "." ] || [ "${_d:0:2}" = "./" ]; then
@@ -905,7 +951,7 @@ case "$OS_TYPE" in
     [ -z "$NATIVE_JSON" ] && NATIVE_JSON='{"system":{"manager":"unknown","installed":false,"upgradable":[],"count":0,"requires_sudo":true},"snap":{"installed":false,"refreshable":[]},"flatpak":{"installed":false,"updatable":[]},"windows":{"wsl2":false,"mnt_c":false,"managers":[]},"errors":["native section failed"]}'
     ;;
   *)
-    [ -z "$NATIVE_JSON" ] && NATIVE_JSON='{"brew":{"installed":false,"outdated":[]},"mas":{"installed":false,"outdated":[]},"softwareupdate":{"installed":false,"updates":[],"restart_required":false},"errors":["native section failed"]}'
+    [ -z "$NATIVE_JSON" ] && NATIVE_JSON='{"brew":{"installed":false,"outdated":[]},"mas":{"installed":false,"outdated":[]},"softwareupdate":{"installed":false,"updates":[],"major_upgrades":[],"restart_required":false},"errors":["native section failed"]}'
     ;;
 esac
 [ -z "$LANGUAGE_JSON" ] && LANGUAGE_JSON='{"npm":{"installed":false,"outdated":[]},"pipx":{"installed":false,"tools":[],"outdated_count":0},"gems":{"installed":false,"system_ruby":false,"ruby_version":"","outdated":[]},"uv":{"installed":false,"current":""},"bun":{"installed":false,"current":""},"deno":{"installed":false,"current":""},"rustup":{"installed":false},"cargo":{"installed":false},"mise":{"installed":false},"errors":["language section failed"]}'

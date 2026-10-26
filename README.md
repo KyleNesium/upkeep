@@ -2,14 +2,14 @@
 
 # upkeep
 
-**Cross-platform system cleanup and updater Skill for Claude Code**
+**Disk cleanup and one-gate updates for macOS, Linux, and WSL2 — a Claude Code plugin**
 
-Discovery-based disk audit, cleanup, and one-command updates for macOS 14+, Linux (Debian/Ubuntu, Fedora/RHEL, Arch), and WSL2. Finds orphaned app data, stale caches, dead LaunchAgents, Linux package cruft, systemd journal bloat, and configuration drift. Also updates AI skills (upkeep, gstack, etc.), Claude Code plugins, and package managers (brew, apt/dnf/pacman, snap, flatpak, npm, pipx, gems, rustup, bun, deno, mise, uv) in one sweep.
+upkeep scans your machine for reclaimable space (caches, Trash, build artifacts, Xcode data, old installers, orphaned LaunchAgents, Docker/Homebrew cruft) and updates your AI skills, Claude Code plugins, and package managers (brew, mas, macOS updates, npm, pipx, gems, uv, bun, deno, mise, rustup, cargo, snap, flatpak) in one sweep. Every change goes through a single approval gate, and every deletion goes through a tested path-safety validator.
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Linux](https://img.shields.io/badge/Linux-Debian%20%7C%20Fedora%20%7C%20Arch-FCC624?logo=linux&logoColor=black)](https://www.kernel.org/)
 [![WSL2](https://img.shields.io/badge/WSL2-supported-4EAA25?logo=windowsterminal&logoColor=white)](https://learn.microsoft.com/windows/wsl/)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-skill-7C3AED?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgMkw0IDdWMTdMMTIgMjJMMjAgMTdWN0wxMiAyWiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-7C3AED?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgMkw0IDdWMTdMMTIgMjJMMjAgMTdWN0wxMiAyWiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
 [![Version](https://img.shields.io/github/v/release/KyleNesium/upkeep?color=green)](https://github.com/KyleNesium/upkeep/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -32,7 +32,7 @@ Discovery-based disk audit, cleanup, and one-command updates for macOS 14+, Linu
 - [Privacy](#privacy)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
-- [Changelog](#changelog)
+- [Version History](#version-history)
 - [Security](#security)
 - [Test Coverage](#test-coverage)
 - [License](#license)
@@ -43,11 +43,12 @@ Discovery-based disk audit, cleanup, and one-command updates for macOS 14+, Linu
 
 ## Why upkeep?
 
-macOS doesn't clean up after you. Every time you remove an app, install a dev tool, or run a build, it leaves data behind — caches, orphaned support files, stale LaunchAgents, old iOS backups. Over months and years this compounds into dozens of gigabytes that macOS never reclaims automatically.
+Machines don't clean up after you. Caches grow without bound, uninstalled apps leave their support data behind, builds leave `node_modules` and `target/` dirs in every repo, and installers pile up in Downloads. Keeping tools current means remembering a dozen different upgrade commands.
 
-Most cleanup tools work from a hardcoded list of known apps and paths. **upkeep is discovery-based**: it looks at what's actually installed and cross-references what's left over, so it catches orphaned data from tools that aren't on any list — renamed apps, one-off installers, anything.
+upkeep does both jobs from Claude Code, with two design rules:
 
-First deep clean on a migrated Mac typically recovers **10–50GB**. Monthly quick sweeps keep dev caches and Electron bloat in check with minimal effort.
+- **Scripts decide, the model presents.** Discovery, planning, and every destructive action run in tested bash scripts (`clean.sh`, `update.sh`). Claude renders the findings and the approval gate; it never composes the delete or upgrade commands.
+- **Nothing changes without one explicit approval**, and deletions are re-validated at apply time (containment, symlink refusal, drift and running-app checks).
 
 ---
 
@@ -55,37 +56,34 @@ First deep clean on a migrated Mac typically recovers **10–50GB**. Monthly qui
 
 ### Supported platforms
 
-- **macOS 14+** (Sonoma or later) — full 15-phase coverage
+- **macOS 14+** (Sonoma or later) — full coverage
 - **Linux** — Debian/Ubuntu (apt), Fedora/RHEL (dnf), Arch (pacman). Optional: snap, flatpak.
-- **WSL2** on Windows 10/11 — Ubuntu, Debian, Fedora, or Arch distro. /mnt/c bridge required for Windows-side bonus phases.
+- **WSL2** on Windows 10/11 — runs the Linux code path; Windows package managers are audit-only in update mode.
 
 ### Required
 
-- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (for `/upkeep` slash command)
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)**
+- **bash** (stock macOS `/bin/bash` 3.2 is fine) and **`jq`** — the scripts depend on both
 
-### Optional (detected at runtime — skipped gracefully if absent)
+### Optional (detected at runtime — skipped if absent)
 
-- **macOS:** Homebrew, Xcode Command Line Tools, Docker
-- **Linux/WSL2:** apt / dnf / pacman, snap, flatpak, systemd (for journalctl vacuum)
-- **Both:** git (for skill updates), node/npm/bun/pipx/uv/cargo/etc. for their respective cache cleanups
+- **macOS:** Homebrew, mas, Xcode, Docker, pipx
+- **Linux/WSL2:** snap, flatpak, Docker, pipx
+- **All:** git (skill/marketplace updates); npm, uv, bun, deno, mise, rustup, cargo + `cargo-install-update`, gem for their updates
 
 ---
 
 ## Platform Support
 
-upkeep routes each phase based on detected OS. Phases skip cleanly on platforms where they don't apply (e.g., Homebrew on Linux, systemd journal on macOS) with a visible "skipped" note — never errors.
+The OS is detected once per run (`uname -s`, `/etc/os-release`, and a `microsoft` kernel-release check for WSL2). Sections that don't apply to the platform are skipped silently.
 
-| Platform       | Package managers                                                  | Platform-specific phases                                                                     |
-|----------------|-------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| macOS 14+      | brew, mas                                                         | Homebrew, LaunchAgents, Xcode, iOS backups, Electron caches, orphaned app data (mdfind)      |
-| Ubuntu/Debian  | apt, snap (opt), flatpak (opt)                                    | apt clean, ~/.cache sweep, journalctl vacuum, snap/flatpak cleanup, orphaned kernels + .deb  |
-| Fedora/RHEL    | dnf, flatpak (opt)                                                | dnf clean, ~/.cache sweep, journalctl vacuum, flatpak cleanup, orphaned .rpm + kernels       |
-| Arch           | pacman, flatpak (opt)                                             | pacman -Sc, ~/.cache sweep, journalctl vacuum, flatpak cleanup, orphaned packages            |
-| WSL2 (Windows) | Linux pkg mgr + Windows audit (winget, scoop, choco — audit only) | Everything Linux offers + Windows %TEMP% and %LOCALAPPDATA% npm/pip cache audit via /mnt/c   |
+| Platform | Cleanup | Updates |
+|----------|---------|---------|
+| macOS 14+ | All [cleanup categories](#cleanup-categories) | brew, mas, `softwareupdate` (minor updates only — major macOS upgrades are never auto-installed), language managers, skills, plugins |
+| Linux (apt/dnf/pacman) | `~/.cache`, Trash, build artifacts, Docker, pipx (report), snap disabled revisions, unused flatpak runtimes; system package-cache cleanup surfaced as a **manual `sudo` step** | snap, flatpak, language managers, skills, plugins auto-applied; apt/dnf/pacman upgrades surfaced as **manual `sudo` steps** |
+| WSL2 | Same as Linux | Same as Linux; winget/scoop/choco detected and reported, never run |
 
-Detection runs once at the top of every skill invocation via `uname -s`, `/etc/os-release`, and `uname -r | grep -qi microsoft` (for WSL2). The result is exported as `$OS_TYPE`, `$OS_DISTRO`, and `$PKG_MGR` for every downstream phase.
-
-Cross-platform phases that run everywhere: disk baseline (Phase 1), dev tool caches (Phase 3), Docker (Phase 7), project build artifacts (Phase 8), stale logs (Phase 9), shell config audit (Phase 10), large files (Phase 12), trash (Phase 13), pipx tools (Phase 15).
+upkeep never runs `sudo`.
 
 ---
 
@@ -102,9 +100,9 @@ In Claude Code, run these two slash commands:
 
 The first command registers this repository as a marketplace named `KyleNesium`. The second installs the `upkeep` plugin from it.
 
-Then run `/reload-plugins` (or restart Claude Code) — the skill is then available as `/upkeep` (and the namespaced variants `/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`, `/upkeep:update`).
+Then run `/reload-plugins` (or restart Claude Code). The skills are available as `/upkeep`, `/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`, and `/upkeep:update`.
 
-To update later:
+To update later (or let `/upkeep:update skills` do it):
 
 ```
 /plugin update upkeep@KyleNesium
@@ -120,8 +118,8 @@ To remove:
 Alternative for local hacking: `git clone` this repo and load it with `--plugin-dir` (no marketplace registration needed):
 
 ```bash
-git clone https://github.com/KyleNesium/upkeep ~/src/upkeep
-claude --plugin-dir ~/src/upkeep/upkeep
+git clone https://github.com/KyleNesium/upkeep ~/workspace/upkeep
+claude --plugin-dir ~/workspace/upkeep/upkeep
 ```
 
 ---
@@ -133,115 +131,90 @@ claude --plugin-dir ~/src/upkeep/upkeep
 ```
 # Mode selector — asks if no keyword detected
 /upkeep                     # asks which mode
-/upkeep deep                # full 15-phase audit + cleanup
-/upkeep quick               # routine cache + brew sweep
+/upkeep deep                # full scan + cleanup
+/upkeep quick               # caches + Trash sweep
 /upkeep audit               # full scan, report only, no changes
 
 # Direct sub-skill commands (bypass mode selector)
-/upkeep:cleandeep           # full 15-phase cleanup, no prompt
-/upkeep:cleanquick          # fast sweep (phases 1-3, 8, 11, 13), no prompt
-/upkeep:audit               # report-only scan, no prompt
+/upkeep:cleandeep           # full scan + cleanup
+/upkeep:cleanquick          # caches + Trash sweep
+/upkeep:audit               # report-only scan
 
 # Update mode
 /upkeep:update              # asks which update sub-mode
 /upkeep:update audit        # check what's outdated, no changes
-/upkeep:update skills       # update AI skills only
-/upkeep:update packages     # upgrade brew, npm, pip, gems, etc.
-/upkeep:update all          # skills + packages, full sweep
+/upkeep:update skills       # AI skills + Claude Code plugins only
+/upkeep:update packages     # package managers only
+/upkeep:update all          # skills + plugins, then packages
 ```
 
 ### Trigger phrases
 
-Claude will load the skill automatically when you ask for a cleanup in natural language. Some examples that work:
+Claude loads the skill automatically for natural-language requests such as:
 
-- "clean up my mac"
-- "free up disk space"
+- "clean up my mac" / "free up disk space" / "quick cleanup"
 - "audit my mac — what's taking up space?"
 - "I just migrated from my old Mac, do a deep clean"
-- "quick cleanup"
 - "find orphaned app data"
-- "update everything"
-- "update my AI skills"
-- "upgrade my packages"
-- "check for updates"
-
-The skill scans your system, presents a summary table with reclaimable space per category, and asks before removing anything. Before/after disk usage comparison at the end.
+- "update everything" / "update my AI skills" / "upgrade my packages" / "check for updates"
 
 > [!TIP]
-> Run `/upkeep deep` after migrating to a new Mac — migrations carry over gigabytes of orphaned data from apps you no longer use.
+> Run `/upkeep audit` first on a new machine — it shows everything that's reclaimable without changing anything.
 
 ---
 
 ## How It Works
 
-**Discovery-based, not hardcoded.** Instead of checking a fixed list of known apps and caches, the skill:
+Cleanup and update share one shape: **discover → one approval gate → validated apply**, split across two turns so nothing runs in the same turn it was proposed.
 
-1. Lists what's actually installed in `/Applications/`
-2. Scans `~/Library/Application Support/`, `~/Library/Containers/`, and `$HOME` dotdirs
-3. Cross-references to find **orphaned data** — directories that belong to apps no longer installed
-4. Scans `~/.cache/*/` and `~/Library/Caches/*/` for any large cache, not just known ones
-5. Auto-discovers project workspace directories (`~/workspace`, `~/dev`, `~/code`, etc.)
+**Cleanup** (`upkeep/skills/upkeep/scripts/clean.sh`):
 
-This catches cleanup targets that a hardcoded list would miss — new tools, renamed apps, one-off installers.
+1. `clean.sh discover <audit|quick|deep>` scans the filesystem read-only and writes a manifest of candidate items to `~/.claude/data/` (each with size, category, safety tier `safe` / `warn` / `report_only`, and a reason).
+2. Claude renders the findings and asks once which categories to apply.
+3. `clean.sh apply <manifest> [--drop=…]` refuses a manifest older than 15 minutes, then re-validates every item through `clean-validate.sh` before acting (see [Safety](#safety)). `report_only` items are never applied.
+
+Orphaned app data is **discovered**, not looked up from a list: every `~/Library/Application Support/*` dir is matched against what's installed in `/Applications`, `~/Applications`, and Homebrew (casks + formulae). Unmatched dirs are reported as orphan candidates for you to investigate.
+
+**Updates** (`upkeep/skills/update/scripts/update.sh`): `update.sh plan <mode>` runs discovery (`discover.sh`) and synthesis (`synthesize.sh` — semver classification, cross-manager compatibility warnings, ordering), and the gate is rendered from the plan. `update.sh apply <plan>` runs a hardcoded dispatcher over allowlisted tool ids, then post-flight checks and a pattern-table failure diagnoser (`diagnose.sh`).
 
 ---
 
 ## Cleanup Categories
 
-| # | Category | Platform | Deep | Quick | Audit | What it finds | Typical savings |
-|---|----------|----------|:----:|:-----:|:-----:|---------------|----------------|
-| 1 | Baseline | all | ✓ | ✓ | ✓ | Disk state snapshot for before/after comparison | — |
-| 2 | Homebrew | macOS | ✓ | ✓ | ✓ | Outdated packages, stale downloads, orphan deps, deprecated formulae | 500MB – 5GB |
-| 3 | Dev caches | all | ✓ | ✓ | ✓ | npm, bun, yarn, pnpm, uv, pip, Playwright, Go, cargo, CocoaPods, Gradle, Maven, Dart/Flutter, Swift PM, Terraform, asdf, volta, mise, Deno, Bundler, Bazel, and more | 1 – 10GB |
-| 4 | Orphaned app data | macOS | ✓ | | ✓ | Application Support, Containers, dotfiles, Saved State, Crash Reports | 0 – 20GB |
-| 5 | LaunchAgents | macOS | ✓ | | ✓ | Stale or unloaded agents from removed apps | < 100MB |
-| 6 | Xcode & dev tools | macOS | ✓ | | ✓ | DerivedData, Archives, iOS DeviceSupport, Simulators | 1 – 20GB |
-| 7 | Docker | all | ✓ | | ✓ | Unused images/containers, orphaned Docker.app data | 0 – 30GB |
-| 8 | Build artifacts | all | ✓ | report | ✓ | node_modules, .venv, .next, dist, \_\_pycache\_\_, target, Pods, .build, out, coverage, .nx across repos | 0 – 10GB |
-| 9 | Stale logs | all | ✓ | | ✓ | `~/Library/Logs/` from removed apps, rotated log files | 100MB – 2GB |
-| 10 | Shell config | all | ✓ | | ✓ | Dead PATH entries, aliases to missing binaries, broken sources | report only |
-| 11 | Electron caches | macOS | ✓ | ✓ | ✓ | Slack, Spotify, VS Code, Discord cache bloat | 200MB – 3GB |
-| 12 | Large files | all | ✓ | | ✓ | Leftover .dmg, .pkg, .iso, .zip installers | 0 – 10GB |
-| 13 | Trash | all | ✓ | ✓ | ✓ | `~/.Trash/` contents | varies |
-| 14 | iOS backups | macOS | ✓ | | ✓ | Local iPhone/iPad backups (can be 50-100GB+) | 10 – 100GB |
-| 15 | pipx tools | all | ✓ | | ✓ | Unused CLI tools installed via pipx | 100MB – 2GB |
+| Category | Platform | Quick | Deep | Audit | What it targets | Tier |
+|----------|----------|:-----:|:----:|:-----:|-----------------|------|
+| Dev / app caches | all | ✓ | ✓ | ✓ | Every dir directly under `~/Library/Caches/` and `~/.cache/` (Claude's are excluded) | safe |
+| Electron caches | macOS | ✓ | ✓ | ✓ | `Cache`, `Code Cache`, `GPUCache`, `Service Worker`, `CachedData`, `CachedExtension*`, `PersistentCache` under `~/Library/Application Support/` — skipped at apply if the app is running | safe |
+| Trash | all | ✓ | ✓ | ✓ | `~/.Trash/*` | safe |
+| Build artifacts | all | report | ✓ | ✓ | `node_modules`, `.venv`, `venv`, `.next`, `dist`, `build`, `target`, `__pycache__`, `.pytest_cache`, `.turbo` up to 4 levels under `~/workspace`, `~/dev`, `~/Developer`, `~/code`, `~/src`, `~/projects`, `~/repos` | safe in deep |
+| Saved application state | macOS | | ✓ | ✓ | `~/Library/Saved Application State/*` | safe |
+| Xcode | macOS | | ✓ | ✓ | DerivedData per project (safe); Archives (warn) | safe / warn |
+| Homebrew | macOS | | ✓ | ✓ | `brew cleanup` (safe); `brew autoremove` orphan deps (warn) | safe / warn |
+| Docker | all | | ✓ | ✓ | `docker system prune -f` (stopped containers, unused networks, dangling images, build cache), only if the daemon is up | warn |
+| iOS backups | macOS | | ✓ | ✓ | Each device backup under `MobileSync/Backup/` | warn |
+| Large files | macOS | | ✓ | ✓ | `.dmg`, `.pkg`, `.iso`, `.zip` in `~/Downloads` and `~/Desktop` (3 levels) | warn |
+| LaunchAgents | macOS | | ✓ | ✓ | `~/Library/LaunchAgents/*.plist` whose program no longer exists (unloaded, then removed; `homebrew.mxcl.*` never touched) | warn |
+| Shell config | macOS | | ✓ | ✓ | Dead `source` / path-`alias` lines in `~/.zshrc`, `.zprofile`, `.zshenv`, `.bash_profile`, `.bashrc`, `.profile` — edited with a backup, syntax-checked, auto-restored on failure | warn |
+| Orphaned app data | macOS | | ✓ | ✓ | `~/Library/Application Support/*` with no matching installed app | report only |
+| pipx tools | all | | ✓ | ✓ | Installed pipx tools, for you to uninstall manually | report only |
+| snap revisions | Linux/WSL2 | | ✓ | ✓ | Disabled snap revisions | safe |
+| flatpak runtimes | Linux/WSL2 | | ✓ | ✓ | Runtimes no installed app depends on | safe |
+| System package cache | Linux/WSL2 | | ✓ | ✓ | `apt`/`dnf`/`pacman` cache cleanup — shown as a manual `sudo` command | manual |
 
-Platform column: `all` = runs on macOS/Linux/WSL2. `macOS` = skipped with a "skipped (macOS only)" note on Linux/WSL2. Linux adds its own phases (package cache, ~/.cache sweep, journalctl, snap/flatpak, orphaned kernels) documented in the [Platform Support](#platform-support) section. WSL2 adds Windows %TEMP% and %LOCALAPPDATA% bonus phases on top of Linux coverage.
+**Tiers:** `safe` items are preselected at the gate; `warn` items carry a reason you see before approving; `report_only` items are listed but never deleted by upkeep.
 
 ---
 
 ## Modes
 
-### Deep
+| Mode | Scans | Applies | Use it for |
+|------|-------|---------|-----------|
+| **Audit** | Everything in the table | Nothing — report only | Seeing where space went |
+| **Quick** | Caches, Electron caches, Trash, build artifacts (report only) | After one approval | Routine monthly sweep |
+| **Deep** | Everything in the table | After one approval | After a migration, or a periodic deep clean |
+| **Update** | Outdated skills, plugins, packages | After one approval | Keeping tools current — see [Updating](#updating) |
 
-Full 15-phase audit. Use after migrating to a new Mac, or as a periodic deep clean. Covers everything and offers to clean what it finds. Typical recovery on a migrated Mac: **10-50GB**.
-
-### Quick
-
-Phases 1-3, 8, 11, 13 only. Covers Homebrew, dev tool caches, build artifacts (report only), Electron app caches, and Trash. Skips the slower discovery scans. Good for monthly maintenance. Typical recovery: **1-5GB**.
-
-### Audit
-
-All 15 phases, but **never offers to remove anything**. Pure report — shows what's reclaimable, where space is going, and what might be stale. Use when you want visibility without making changes.
-
-### Update
-
-Separate from cleanup entirely. As of v1.6 a single OS-aware shell orchestrator serves macOS, Linux, and WSL2: it discovers outdated tools, plans the upgrade order with cross-manager risk flags, and presents one approval gate instead of per-category Y/N fatigue. Four sub-modes:
-
-| Sub-mode | What it does |
-|----------|--------------|
-| `update audit` | Scan everything — show what's outdated, no changes |
-| `update skills` | Git-pull AI skills in `~/.claude/skills/` + `~/.codex/skills/`, and refresh outdated Claude Code plugins |
-| `update packages` | macOS: brew, mas, macOS updates. Linux: snap, flatpak (apt/dnf/pacman as manual sudo steps). All: npm, pipx, gems, uv, bun |
-| `update all` | Skills + plugins first, then packages — full sweep, single approval gate |
-
-On macOS the flow flags cross-manager risks before you approve (e.g. `brew:node` upgrade ⇒ npm globals may need rebuild; `brew:openssl` upgrade ⇒ ruby native gems like `nokogiri` need recompile; system Ruby 2.x ⇒ `gem update` auto-uses `--user-install`), and post-flight runs `brew doctor` + PATH-shadow re-check. On Linux/WSL2 the same gate surfaces apt/dnf/pacman upgrades as **manual `sudo …` steps** (never auto-run — upkeep never uses sudo) while snap, flatpak, and the language managers are auto-applied; WSL2 Windows managers are audit-only.
-
-**Claude Code plugins (v1.7).** upkeep flags only the plugins that are genuinely behind — it compares each plugin's active version in `installed_plugins.json` against the version its marketplace declares, so you no longer get told to "update all N plugins" on every run. By default it reads the marketplace clone already on disk; add **`--fresh`** (e.g. `/upkeep:update all --fresh`) to git-fetch each marketplace first and compare against its upstream manifest, catching updates the local clone hasn't pulled yet. During apply it refreshes the marketplace git source (`--ff-only`, fenced to `~/.claude/plugins/marketplaces/*`). The actual cache reinstall has **no headless path** — completing a plugin update needs `/plugin update <name>` plus a Claude Code relaunch — so upkeep hands that off as a manual step with the exact commands, and never rewrites Claude Code's plugin state itself.
-
-**Risk handling (v1.7).** When the plan carries flagged compatibility risks, the gate offers **"apply all except flagged risks"** (drops the categories a warning implicates) as the default, alongside an "apply *including* flagged risks" path guarded by an explicit confirmation. A standing disclaimer reminds you the risk matrix is **not exhaustive** — an unflagged upgrade can still break something.
-
-Nothing applies without your approval. `softwareupdate` (macOS system updates) always gets an extra restart warning, even under "Apply all".
+Deletes are permanent (`rm -rf`), not moved to Trash — that's why the gate shows sizes and reasons first, and why audit mode exists.
 
 ---
 
@@ -249,72 +222,24 @@ Nothing applies without your approval. `softwareupdate` (macOS system updates) a
 
 Say **"update everything"** in Claude Code, or run `/upkeep:update`.
 
-Four sub-modes:
+| Sub-mode | What it does |
+|----------|--------------|
+| `update audit` | Show what's outdated across skills, plugins, and packages — no changes |
+| `update skills` | `git pull` each repo in `~/.claude/skills/` and `~/.codex/skills/`; update outdated Claude Code plugins |
+| `update packages` | macOS: brew, mas, `softwareupdate`. Linux: snap, flatpak (apt/dnf/pacman as manual `sudo` steps). All: npm globals, pipx, gems, uv, bun, deno, mise, rustup, cargo (with `cargo-install-update`) |
+| `update all` | Skills + plugins first, then packages — one gate |
 
-| Mode | What it does |
-|------|--------------|
-| `update audit` | Check what's outdated across skills, plugins + packages — no changes |
-| `update skills` | Git-pull all AI skills (upkeep, gstack, any others in `~/.claude/skills/`) + refresh outdated Claude Code plugins |
-| `update packages` | Upgrade brew, npm globals, pipx, gems, rustup, bun, deno, mise, uv, mas, macOS updates |
-| `update all` | Skills + plugins first, then packages — full sweep |
+**What the gate shows.** Each upgrade is classified by semver bump, and known cross-manager risks are flagged (e.g. `brew:node` major ⇒ npm globals may need a rebuild; `brew:openssl` ⇒ native Ruby gems may need a recompile). When risks are flagged, the default option is **"apply all except flagged risks"**. The risk matrix (`upkeep/skills/update/compatibility.json`) is not exhaustive — an unflagged upgrade can still break something.
 
-Everything is confirmation-gated. Nothing applies without your approval. Destructive or disruptive operations (macOS system updates, brew toolchain changes) get extra warnings.
+**Claude Code plugins.** Only plugins that are genuinely behind are flagged: the installed version in `installed_plugins.json` is compared with the version the marketplace declares. Add `--fresh` (e.g. `/upkeep:update all --fresh`) to `git fetch` each marketplace first. Apply fast-forwards the marketplace clone, then runs `claude plugin update <name>@<marketplace> --scope user --json`; anything the CLI can't finish falls back to a `/plugin update <name>` hand-off. Relaunch Claude Code to load new plugin versions.
 
-All three platforms (macOS, Linux, WSL2) use the same single-shot, single-gate flow as of v1.6 — see the version notes below.
+**macOS system updates.** Each safe update is installed with `softwareupdate -i <label>` (never `-ia`); a major macOS upgrade is listed as a manual step and never auto-installed. System updates always carry a restart warning.
 
-### v1.3: AI update advisor (macOS)
+**Speed.** `brew update` is TTL-cached (1h; `UPKEEP_NO_CACHE=1` to bypass), so a warm run reaches the gate in a few seconds. `--advisor` adds opt-in changelog summaries and project-impact notes, which run after the gate.
 
-Discovery and apply remained hardcoded for security (see v1.2 hardening), but v1.3 wraps three reasoning agents around them so the approval gate and final report tell you *what each upgrade means*, not just *what's outdated*:
+**Config.** `~/.claude/data/upkeep-config.json` (override path with `UPKEEP_CONFIG`) accepts `shadow_ignore_dirs` (PATH dirs whose shadowing is intentional) and `system_ruby_gems` (default `false`: Apple's system Ruby gems are left alone).
 
-- **`changelog-reader`** — for every major bump and every cross-manager-flagged upgrade, fetches official release notes from an allowlisted set of upstream hosts (`github.com`, `nodejs.org`, `python.org`, `rubygems.org`, etc.) and returns a severity grade (`low|medium|high|critical`), a one-sentence summary, the concrete breaking changes, and any CVEs explicitly fixed. The grep-CHANGELOG approach from v1.2 is replaced.
-- **`project-impact`** — walks your workspace roots (`~/workspace`, `~/Github`, `~/Projects`, `~/src`, `~/code`, `~/dev` — whichever exist) and reads per-language manifests (`package.json`, `Gemfile`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `.tool-versions`, `Dockerfile`) to surface "node 26 will affect N of your projects" callouts. Reads only — never executes manifest scripts.
-- **`failure-diagnoser`** — fires only when something actually failed during apply. Reads the relevant log excerpt and identifies the root cause from known patterns (missing build deps, version constraints, permission errors, broken native modules after brew major bump), then proposes 1–3 ranked fix options. **All suggested commands are surfaced as text only and are never auto-executed** — you copy them into your shell yourself.
-
-The advisor is layered on top of the v1.2 hardcoded-dispatcher contract: none of these agents author shell commands the orchestrator will execute, all their outputs pass through allowlist-projection sanitization, and the diagnoser's `command` field has an additional denylist scrub for destructive patterns (`rm -rf`, `--force`, `chmod 777`, `curl | sh`, etc.).
-
-### v1.4: discovery & synthesis to bash (macOS)
-
-The v1.3 advisor was useful but the four parallel scout agents + the compatibility synthesizer agent added ~2 minutes of LLM overhead before the approval gate, on top of any actual `brew update` time. v1.4 replaces that mechanical work with two bundled scripts:
-
-- **`scripts/discover.sh`** runs the four discovery sweeps (skills, native, language, shadow) concurrently in pure bash + `jq`, including `brew update` so the outdated list is accurate before approval. ~15s wall time vs the agent flow's ~90s+.
-- **`scripts/synthesize.sh`** does the semver classification, compat-matrix edge materialisation, and ETA bake-ins in deterministic `jq`. ~300ms vs the agent's 5–10s.
-
-Same security invariants as v1.3 (hardcoded dispatcher, allowlisted tool ids, discovery sanitization, trust-on-first-use) — only the implementation language changed.
-
-### v1.5: single-shot orchestrator (macOS)
-
-v1.4 cut the *script* time but the SKILL.md was still structured as 5+ LLM turns (discover → synthesize → enrich → apply → post-flight → diagnose → report), each turn paying ~3–5s of round-trip overhead. v1.5 collapses the whole macOS flow into **two LLM turns**:
-
-- **`scripts/update.sh plan <mode>`** composes `discover.sh` + `synthesize.sh`, writes the full plan to a temp file in `~/.claude/data/`, and emits a compact JSON envelope for SKILL.md to render the approval gate.
-- **`scripts/update.sh apply <plan-file>`** reads the plan, runs the hardcoded dispatcher, post-flight (`brew doctor`, PATH-shadow re-check, resolution re-check), the new pattern-table failure diagnoser, history write, and emits a report JSON for SKILL.md to render.
-
-`brew update` is TTL-cached against `~/Library/Caches/Homebrew/api/formula.jws.json` mtime (1h default; `UPKEEP_NO_CACHE=1` to bypass), removing the 8–14s long pole on warm runs. The v1.3 LLM `failure-diagnoser` agent is replaced by **`scripts/diagnose.sh`** — a hand-authored pattern table covering ~80% of real failures (Ruby version, native build deps, EACCES, broken pipx venv, `dyld` load, arch mismatch, solver constraints, brew post-install). ~100ms vs the agent's 10–20s, deterministic, easier to extend.
-
-The two enrichment agents (`changelog-reader`, `project-impact`) from v1.3 are now opt-in via `--advisor` and run *after* the gate in parallel with apply, so they never block the user reaching the approval gate.
-
-User-perceived pre-gate latency on a real machine drops from ~60–90s (v1.4 with multi-turn skill overhead) to **~5s on warm cache** — 12–18× speedup. All v1.2/v1.3/v1.4 security invariants preserved verbatim, plus three new ones in v1.5: canonical-path containment for skill repo pulls (rejects `../` and symlinks), TOCTOU-safe plan-file write via `mktemp -d` + atomic rename, and TSV-row validation in `diagnose.sh`.
-
-### v1.6: Linux/WSL2 fast-path port
-
-v1.5 only sped up macOS — Linux and WSL2 still ran the slow v1.0 sequential flow. v1.6 ports the single-shot orchestrator to **all three platforms**: `discover.sh` detects the OS (`uname` + `/etc/os-release`) and `update.sh`/`synthesize.sh` branch internally, so there is now one fast path and one approval-gate UX everywhere. The legacy sequential flow (old SKILL.md Steps 1–6, ~330 lines) is retired.
-
-The defining constraint is the **sudo boundary**: apt/dnf/pacman require root and upkeep never runs sudo, so those upgrades are surfaced as **manual `sudo …` steps** and are deliberately excluded from the apply dispatcher's allowlist (the allowlist guard is the hard guarantee a malformed plan can't smuggle a root command into execution). User-scoped managers — language tools, `snap refresh`, `flatpak update -y`, skills git pulls — are auto-applied. On WSL2, Windows package managers (winget/scoop/choco) are detected and surfaced **audit-only**. `scripts/diagnose.sh` gains four Linux failure patterns (dpkg/apt lock, dnf metadata/conflict, snap change-in-progress, flatpak runtime-missing).
-
-Linux/WSL2 paths are contract-tested via a `UPKEEP_OS_OVERRIDE` / `UPKEEP_PKG_MGR_OVERRIDE` seam plus PATH-stubbed fake package managers (the dev box is macOS); a pre-merge adversarial parser review fixed four real bugs in the package-manager output parsers. Live validation against a real Linux/WSL2 box is the remaining follow-up.
-
-### v1.7: Claude Code plugin updates + risk-exclusion gate
-
-Through v1.6, `/upkeep:update` listed **every** installed plugin as a `/plugin update` manual step on every run — whether or not it was behind. v1.7 makes plugins first-class: discovery reads `installed_plugins.json` and compares each `<plugin>@<marketplace>`'s active version against the version its marketplace's `marketplace.json` declares (`sort -V`), so **only genuinely-outdated plugins are flagged**. Add **`--fresh`** (e.g. `/upkeep:update all --fresh`) to git-fetch each marketplace first and compare against its upstream manifest, catching updates the local clone hasn't pulled yet. Apply refreshes the marketplace git source `--ff-only`, canonical-path-fenced to `~/.claude/plugins/marketplaces/*`. The cache reinstall has **no headless path** — `/plugin update <name>` is interactive-only and needs a Claude Code relaunch to take effect — so upkeep hands that off as a manual step and never rewrites `installed_plugins.json` itself.
-
-The approval gate gains an **"apply all except flagged risks"** default when the plan carries compatibility warnings (it drops the categories a warning implicates), alongside an "apply *including* flagged risks" path guarded by an explicit confirmation, plus a standing disclaimer that the compat matrix is **not exhaustive** — an unflagged upgrade can still break something. New test seams `UPKEEP_INSTALLED_PLUGINS` / `UPKEEP_PLUGIN_MARKETPLACES`; 30 new tests bring the suite to 103.
-
-### v1.7.1: automated releases
-
-v1.7.0 merged to `main` but sat unreleased — the GitHub release lagged a version behind because tagging was a manual `git tag` + `gh release create` step with nothing enforcing it. `.github/workflows/release.yml` now fires on any push to `main` that changes `VERSION`: it creates the `vX.Y.Z` tag and publishes a release whose notes are the matching `## [X.Y.Z]` section of the changelog. It is idempotent (no-ops if the tag already exists, so a one-off manual tag is never clobbered) and ships a placeholder body rather than failing on a missing changelog section. No skill, script, or user-facing behavior changed.
-
-When you run `/upkeep` it checks once per day whether a newer version is available. Both install layouts are supported: git-cloned skills compare `HEAD` against `origin/main`, and plugin-managed installs compare the installed `plugin.json` against the marketplace clone. If the check finds an update, you'll be asked whether to update first or continue with the current version. The narrow entrypoints (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`) skip the check — re-enter via `/upkeep` if you want the prompt.
-
-To disable the daily check entirely: `export UPKEEP_SKIP_UPDATE_CHECK=1`
+**Self-update check.** `/upkeep` checks once a day whether a newer upkeep is available and asks whether to update first. The direct entrypoints (`/upkeep:audit`, `/upkeep:cleandeep`, `/upkeep:cleanquick`) skip the check. Disable it with `export UPKEEP_SKIP_UPDATE_CHECK=1`.
 
 ---
 
@@ -322,39 +247,40 @@ To disable the daily check entirely: `export UPKEEP_SKIP_UPDATE_CHECK=1`
 
 | Rule | Detail |
 |------|--------|
-| Installed apps | Never removes data for apps currently in `/Applications/` |
-| Claude data | Never touches `~/.claude/` or `~/Library/Application Support/Claude/` |
-| Apple system dirs | Never removes `com.apple.*` directories |
-| Keychains & Prefs | Never touches `~/Library/Keychains/` or `~/Library/Preferences/` |
-| Size reporting | Always reports sizes before any removal |
-| LaunchAgents | Always unloads before deleting plist files |
-| Approval required | Always asks before removing brew packages, LaunchAgents, or ambiguous items |
-| No sudo | Never runs sudo — surfaces exact commands for you to run manually |
-| iOS backups | Explicit warning about backup implications before removal |
-| Docker images | Two-tier options: safe prune vs aggressive prune with clear warnings |
+| One approval gate | Nothing is deleted, edited, or upgraded until you approve it; audit modes never change anything |
+| Fresh plans only | A cleanup manifest older than 15 minutes (or future-dated) is refused — re-run discovery |
+| Path containment | Every deletion target must resolve strictly under an allowed root (`~/Library/Caches`, `~/.cache`, `~/.Trash`, `~/Library/Logs`, Xcode/CoreSimulator dirs, `~/Library/Saved Application State`, `~/Library/Application Support`, `~/Library/LaunchAgents`, `~/Downloads`, `~/Desktop`, workspace dirs) — never a root itself |
+| Protected paths | Never touches `~/.claude`, `~/.config/claude`, `~/Library/Application Support/Claude`, `~/Library/Keychains`, `~/Library/Preferences`, `~/Documents`, `/System`, `/Library`, `/Applications` |
+| Symlinks | A symlinked target, or any symlinked directory on the way to it (below `$HOME`), is refused — a link can't redirect a delete into other data |
+| Per-action shape | Electron deletes must be a known cache leaf; LaunchAgent deletes must be a single `.plist` in `~/Library/LaunchAgents` (never `homebrew.mxcl.*`); iOS backup deletes must be a single backup dir |
+| Apply-time re-checks | Each item is re-validated immediately before acting: vanished → skip, became a symlink → skip, grew > 50% since discovery → skip, Electron app now running → skip |
+| No sudo | Root-level commands (apt/dnf/pacman, system cache cleanup) are shown for you to run; upkeep never runs them |
+| No model-authored commands | Commands are hardcoded per action in the scripts; plans and manifests carry data, never commands. Failure-diagnosis suggestions are text only and pass a denylist |
+| Major OS upgrades | Never auto-installed |
 
 ---
 
 ## Privacy
 
-- **Fully local** — no network calls, no telemetry, no data collection
-- All operations run on your machine using standard system commands (rm, brew, apt/dnf/pacman, launchctl, systemctl, etc.)
-- The skill only reads filesystem metadata (directory sizes, file lists) and presents findings to you
-- Nothing is removed without explicit approval
+- **Runs locally.** There is no upkeep server and no telemetry.
+- **Network access happens only through the tools it runs:** `brew update`, `git pull` / `git fetch` for skills and marketplaces, `claude plugin update`, package-manager upgrades, and `softwareupdate`. Cleanup modes make no network requests. `--advisor` additionally fetches release notes from an allowlist of upstream hosts.
+- **Local files it writes** (in `~/.claude/data/`, mode `0700`): update plans, cleanup manifests (consumed on apply), an update history file (`upkeep-history.json`), and optional prewarm manifests. Shell-config edits keep a backup next to the original (`~/.zshrc.upkeep-bak.<timestamp>`).
 
 ### Privacy Policy
 
-**Effective date:** April 14, 2026
+**Effective date:** October 27, 2026
 
 upkeep is a Claude Code plugin that runs entirely on your local machine. This policy explains what data the plugin accesses and how it is handled.
 
-**Data collection:** None. upkeep makes zero network requests. No telemetry, analytics, crash reports, or usage data are collected or transmitted.
+**Data collection:** None. upkeep has no telemetry, analytics, or crash reporting, and sends nothing to the plugin author or to Anthropic.
 
-**Data access:** The plugin reads filesystem metadata (directory names, file sizes, modification dates) in standard system locations (`~/Library/` and `/Applications/` on macOS; `~/.cache/` and package manager metadata on Linux/WSL2; and project workspace directories on all platforms). This metadata is used solely to identify cleanup candidates and calculate reclaimable disk space. File contents are never read.
+**Network use:** Update mode runs your package managers and `git`, which contact their own upstream sources (e.g. Homebrew, npm, GitHub). The optional `--advisor` flag fetches public release notes from an allowlisted set of upstream hosts. Cleanup modes make no network requests.
 
-**Data storage:** upkeep stores no data. It produces no log files, databases, or caches of its own. All findings are presented in the Claude Code conversation and exist only in that session.
+**Data access:** The plugin reads filesystem metadata (directory names, sizes, modification times) in standard locations — `~/Library/` and `/Applications/` on macOS, `~/.cache/` on Linux/WSL2, and project workspace directories on all platforms — plus your shell startup files (to find dead `source`/`alias` lines) and package-manager metadata. It does not read the contents of your documents or project files.
 
-**Data deletion:** When upkeep removes files (with your explicit approval), it uses standard system commands (`rm`, `brew cleanup` on macOS, `apt/dnf/pacman autoremove` on Linux, `launchctl` for macOS agents). No copies are made. Deleted files go to Trash where applicable, or are permanently removed where noted.
+**Data storage:** Working files (plans, manifests, update history, optional prewarm manifests) are kept in `~/.claude/data/` with owner-only permissions. Findings are otherwise shown only in your Claude Code session.
+
+**Data deletion:** With your explicit approval, upkeep removes files with standard commands (`rm`, `brew cleanup`/`autoremove`, `docker system prune`, `launchctl bootout`, `snap remove`, `flatpak uninstall --unused`). Removed files are deleted permanently, not moved to Trash.
 
 **Third parties:** No data is shared with Anthropic, the plugin author, or any third party. The plugin has no server component.
 
@@ -367,58 +293,81 @@ upkeep is a Claude Code plugin that runs entirely on your local machine. This po
 ## Architecture
 
 ```
-upkeep/
-├── .claude-plugin/
-│   └── marketplace.json           # Marketplace manifest
+upkeep/                                  # repo root (also the marketplace)
+├── .claude-plugin/marketplace.json      # marketplace manifest
 ├── .github/
+│   ├── workflows/release.yml            # tags + publishes a release when VERSION changes on main
 │   ├── ISSUE_TEMPLATE/
 │   └── PULL_REQUEST_TEMPLATE.md
-├── upkeep/
-│   ├── .claude-plugin/
-│   │   └── plugin.json            # Plugin metadata
+├── upkeep/                              # the plugin
+│   ├── .claude-plugin/plugin.json
+│   ├── hooks/
+│   │   ├── hooks.json                   # SessionStart hook registration
+│   │   └── prewarm.sh                   # opt-in background discovery (off by default)
 │   └── skills/
 │       ├── upkeep/
-│       │   ├── SKILL.md           # /upkeep — mode selector + all 15 phases
-│       │   └── reference/
-│       │       ├── dev-tool-caches.md      # Cache paths by tool
-│       │       ├── apple-system-dirs.md    # Protected system directories
-│       │       └── known-cli-dotdirs.md    # CLI tool dotdir ownership
-│       ├── audit/
-│       │   └── SKILL.md           # /upkeep:audit — report-only scan (all 15 phases)
-│       ├── cleandeep/
-│       │   └── SKILL.md           # /upkeep:cleandeep — full 15-phase cleanup
-│       ├── cleanquick/
-│       │   └── SKILL.md           # /upkeep:cleanquick — fast sweep (phases 1-3, 8, 11, 13)
+│       │   ├── SKILL.md                 # /upkeep — mode selector, self-update gate, cleanup wrapper
+│       │   ├── reference/               # cache paths, Apple system dirs, CLI dotdir ownership
+│       │   └── scripts/
+│       │       ├── clean.sh             # cleanup engine: discover / apply / prewarm
+│       │       ├── clean-validate.sh    # path-safety validator (the deletion boundary)
+│       │       └── lib/common.sh        # OS detection, canonicalization, shared helpers
+│       ├── audit/SKILL.md               # /upkeep:audit      → clean.sh discover audit
+│       ├── cleanquick/SKILL.md          # /upkeep:cleanquick → clean.sh discover/apply quick
+│       ├── cleandeep/SKILL.md           # /upkeep:cleandeep  → clean.sh discover/apply deep
 │       └── update/
-│           └── SKILL.md           # /upkeep:update — update skills + package managers
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── LICENSE
-├── README.md
-└── SECURITY.md
+│           ├── SKILL.md                 # /upkeep:update — two-turn wrapper
+│           ├── compatibility.json       # cross-manager risk matrix
+│           └── scripts/
+│               ├── update.sh            # plan / apply orchestrator
+│               ├── discover.sh          # outdated-tool discovery
+│               ├── synthesize.sh        # semver, compat warnings, ordering
+│               └── diagnose.sh          # failure pattern table
+├── tests/
+│   ├── test-clean-skill.sh
+│   └── test-update-skill.sh
+├── VERSION                              # bump on main → automatic GitHub release
+├── CHANGELOG.md · CONTRIBUTING.md · SECURITY.md · LICENSE
 ```
 
-Each skill is a `SKILL.md` — a structured prompt that Claude Code follows when invoked. Sub-skills (`audit`, `cleandeep`, `cleanquick`, `update`) are direct-invocation shortcuts; `/upkeep` is the mode-selector entry point that routes to the same logic. Reference files provide lookup tables for cache locations, protected directories, and CLI tool ownership. No runtime dependencies, no binaries, no build step.
+Each `SKILL.md` is a thin two-turn wrapper: turn 1 runs discovery/plan and renders the gate, turn 2 runs apply and renders the report. All logic that touches the system lives in the bash scripts.
+
+**Opt-in prewarm.** `touch ~/.claude/data/upkeep-prewarm-enabled` (or `export UPKEEP_PREWARM=1`) makes the SessionStart hook run `clean.sh prewarm` in the background, so a later `/upkeep quick` can reuse a fresh manifest instead of rescanning. Set the mode with `UPKEEP_PREWARM_MODE` (default `quick`).
 
 ---
 
 ## Contributing
 
-1. Fork the repo
-2. Edit the relevant `SKILL.md` — the main skill at `upkeep/skills/upkeep/SKILL.md`, or a sub-skill (`audit/`, `cleandeep/`, `cleanquick/`, `update/`)
-3. Test by running the affected command in Claude Code pointed at your fork
-4. Open a PR with a description of what you changed and why
+1. Fork the repo and clone it under your workspace.
+2. Change the script that owns the behavior — cleanup: `upkeep/skills/upkeep/scripts/`; updates: `upkeep/skills/update/scripts/`. Edit a `SKILL.md` only for gate/report rendering.
+3. Add or update tests and run both suites with stock bash:
+   ```bash
+   /bin/bash tests/test-clean-skill.sh
+   /bin/bash tests/test-update-skill.sh
+   ```
+4. Try it live with `claude --plugin-dir <your-clone>/upkeep`.
+5. Open a PR describing what changed and why. Any change to `clean-validate.sh` needs regression tests that fail without it.
 
-Ideas for contributions:
-- New cleanup categories (e.g., Time Machine local snapshots, Rosetta 2 cache)
-- Smarter orphan detection heuristics
-- Platform support beyond macOS
+Ideas: Time Machine local snapshots, CoreSimulator cleanup, stale log cleanup, journald vacuum on Linux, live validation on a real Linux/WSL2 box.
 
 ---
 
-## Changelog
+## Version History
 
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+Full notes: [CHANGELOG.md](CHANGELOG.md).
+
+| Version | Highlights |
+|---------|-----------|
+| 1.8.3 | Plugin updates finish headlessly via `claude plugin update`; major macOS upgrades never auto-installed; `upkeep-config.json`; system-Ruby gems skipped by default; fixes `/upkeep:update skills` crash (broken since 1.6) |
+| 1.8.2 | Validator refuses symlinked ancestors; Electron running-app check rewritten; non-numeric env overrides fall back to safe defaults |
+| 1.8.1 | Audit-driven hardening: symlinked-target refusal, `--drop` fix, fail-safe disk guard, git argument-injection fix |
+| 1.8 | Cleanup skills moved from prompt-orchestrated phases to the `clean.sh` engine + path-safety validator; opt-in prewarm hook |
+| 1.7.1 | Automated releases on `VERSION` bump |
+| 1.7 | Only genuinely-outdated Claude Code plugins flagged; "apply all except flagged risks" gate |
+| 1.6 | Single-shot update flow ported to Linux and WSL2; sudo boundary |
+| 1.5 | Two-turn update orchestrator; brew TTL cache; pattern-table diagnoser |
+| 1.4 | Update discovery and synthesis moved from agents to bash |
+| 1.3 | Opt-in AI update advisor (changelog reader, project impact) |
 
 ---
 
@@ -430,7 +379,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**237 tests** across 2 automated test files (129 `clean` + 108 `update`). Run with
+**262 tests** across 2 automated test files (129 `clean` + 133 `update`). Run with
 `bash tests/test-clean-skill.sh` and `bash tests/test-update-skill.sh` (both
 pass under `/bin/bash`, macOS 3.2.57). The `clean` suite includes a pre-merge
 security-regression set (shell-config command-injection, future-dated manifest
@@ -460,20 +409,23 @@ out of LLM prose into a tested, hardcoded path-safety validator.
 | Shared helpers | ~15 | `_sanitize_text` caps free-text/strips control chars (never paths); `_detect_os` override seam; `_clean_lexnorm` (`//`, `.`, `..`, relative → empty); `_numeric_or` (non-numeric/negative/overflow → default, no octal, epoch passes) |
 | Running-app detection | 9 | Electron guard via `_clean_app_running` on a fixture process list: helper / main binary / >15-char / case-insensitive matches; vendor dir → app name (BraveSoftware); `Code` ≠ `codex`/`PasscodeSettings`; regex chars literal; real `ps` never self-matches |
 
-### `update` skill (v1.1–v1.7) — `tests/test-update-skill.sh`
+### `update` skill (v1.1–v1.8.3) — `tests/test-update-skill.sh`
 
 | Area | Tests | What's covered |
 |------|-------|----------------|
 | Syntax | 4 | `bash -n` across all four `scripts/*.sh` |
 | `update.sh plan` contract | ~6 | Valid JSON, plan_file (non-symlink), audit short-circuit, summary shape |
 | Security invariants | ~4 | No `command`/`preconditions` in plan JSON or stored file, `DATA_DIR` 0700 |
-| Mode filters | 2 | `skills` excludes package groups; `packages` excludes plugin-update steps |
+| Mode filters | 4 | `skills` plan succeeds on the macOS and Linux native stubs; `skills` excludes package groups; `packages` excludes plugin-update steps |
 | `diagnose.sh` validation | ~7 | Tool allowlist, numeric rc, kind, path-traversal / non-absolute / metachar log paths |
 | `diagnose.sh` denylist | ~13 | Destructive-command filter (rm -rf, curl\|sh, eval, dd of=/dev, …) vs allowed fixes |
 | `update.sh apply` contract | ~5 | Empty/`--drop` CSV safety, report JSON shape, plan-file cleanup |
 | `jq`-missing contract | 2 | `{"error":…}` to stdout when `jq` absent |
 | Linux/WSL2 fast path (v1.6) | ~29 | OS-detection seam, `discover_native_linux` shape, dnf exit-100 + Obsoleting-section exclusion, apt from-less line parsing, flatpak app-ID column, WSL2 `winget.exe` detection, sudo boundary (apt → manual steps not ordered_groups), snap/flatpak auto-apply, allowlist rejection of sudo managers, Linux diagnose patterns, macOS regression guard |
 | Plugin updates + risk gate (v1.7) | 30 | Outdated-plugin detection (installed_plugins.json vs marketplace version: outdated flagged, current/absent skipped, real-version-vs-marketplace-"unknown" not mis-flagged, version resolved from plugin's own plugin.json when the marketplace omits it incl. `source` subdir + `./` root, `..`/absolute `source` path-traversal blocked, version surfacing, `plugins_outdated` count); `--fresh` upstream-manifest fetch (stale local clone hides update without it, detected with it); `risk_categories` computation (cause→category mapping, empty-when-no-warning, intersection-with-groups guard); plan-contract field/type guards; plan-output surfacing; packages-mode plugin-group exclusion; apply-phase marketplace pull (ff-only success + HEAD advance, path-containment refusal, `--drop=plugins` skip-but-still-hand-off) |
+| Headless plugin update (v1.8.3) | 8 | Apply runs `claude plugin update <name>@<marketplace> --scope user --json` (exact argv asserted via a stub CLI); success → `updated` + relaunch-only note; CLI failure → `failed` + `/plugin update` hand-off kept; no CLI → `no-cli` + hand-off; malformed plugin id (`;`, spaces) refused and never passed to the CLI |
+| macOS updates + PATH shadows (v1.8.3) | 6 | Stub `softwareupdate`/`sw_vers`: bare labels, Recommended major upgrade excluded into `major_upgrades[]`, `restart_required` ignores it, `macos-major` manual step; apply runs one `softwareupdate -i <label>` per safe label and refuses `-ia` / metacharacter labels; PATH dir listed twice → one shadow row (macOS + Homebrew only) |
+| Config, system Ruby, dirty (v1.8.3) | 9 | System-Ruby gems skipped by default (no group/count/warning, `system-ruby-skipped` step) and planned when opted in; `upkeep-config.json` `system_ruby_gems` reaches discovery, absent file → default; `shadow_ignore_dirs` suppresses that dir's shadow rows; untracked-only skill repo not dirty, tracked edit still dirty. Suite sandboxes `UPKEEP_DATA_DIR`/`UPKEEP_CONFIG` |
 
 ### Skill-level coverage (live invocation)
 
@@ -492,6 +444,7 @@ out of LLM prose into a tested, hardcoded path-safety validator.
 | `/upkeep:update` (single-shot, v1.5) | `scripts/update.sh plan` + `scripts/update.sh apply` two-turn flow, `brew update` TTL cache (`formula.jws.json` mtime, 1h default), `scripts/diagnose.sh` 8-pattern failure table replacing LLM agent, opt-in `--advisor` post-gate enrichment, canonical-path skill containment, TOCTOU-safe plan-file write (`mktemp -d` + atomic rename), `DATA_DIR` mode 0700, TSV-row validation in `diagnose.sh`, JSON-to-stdout error contract on missing `jq`, bash 3.2 compatibility (no `declare -A`) |
 | `/upkeep:update` (Linux/WSL2 port, v1.6) | One OS-aware orchestrator for macOS/Linux/WSL2, `discover_native_linux` (apt/dnf/pacman audit + snap/flatpak + WSL2 Windows managers), sudo boundary (apt/dnf/pacman excluded from dispatcher allowlist → manual steps only), snap/flatpak auto-apply, `os.type`-branched synthesizer, 4 new Linux diagnose patterns, `UPKEEP_OS_OVERRIDE`/`UPKEEP_PKG_MGR_OVERRIDE` test seam, legacy v1.0 sequential flow retired |
 | `/upkeep:update` (plugins + risk gate, v1.7) | Claude Code plugin outdated detection (`installed_plugins.json` vs marketplace `marketplace.json` version) — only genuinely-behind plugins flagged; marketplace git source refreshed `--ff-only` (canonical-path containment to `~/.claude/plugins/marketplaces/*`, deduped, dirty/detached skipped); cache reinstall handed off as a `/plugin update` + relaunch manual step (no headless path — never rewrites `installed_plugins.json`); "apply all except flagged risks" gate option + explicit confirmation for applying flagged risks; standing compatibility disclaimer; `UPKEEP_INSTALLED_PLUGINS`/`UPKEEP_PLUGIN_MARKETPLACES` test seams |
+| `/upkeep:update` (headless plugin update, v1.8.3) | Apply finishes outdated-plugin updates via `claude plugin update` (no `-y`; plugin id validated; `UPKEEP_CLAUDE_BIN` test seam) with per-plugin `updated[]` status and a `/plugin update` fallback; fixes `plan skills` crashing on an invalid `--argjson` native stub (broken since v1.6); major macOS upgrades kept out of apply (`softwareupdate -i <label>` per planned update instead of `-ia`); PATH-shadow rows deduped; `upkeep-config.json` (`shadow_ignore_dirs`, `system_ruby_gems`); system-Ruby gems skipped by default; untracked files don't count as dirty |
 
 ---
 

@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3] - 2026-10-27
+
+### Added
+
+- **Headless plugin updates.** `update.sh apply` now finishes each outdated
+  plugin's update through Claude Code's own
+  `claude plugin update <name>@<marketplace> --scope user --json` instead of
+  handing every one off as a manual `/plugin update`. The report gains
+  `plugins.updated[]` (`{plugin, status}`, status `updated` / `up_to_date` /
+  `failed` / `no-cli` / `refused`) and a note that only asks for a relaunch
+  when everything updated. No `-y` is passed, so a marketplace-declared
+  command still needs a human; plugin ids are validated before they reach the
+  CLI; upkeep still never writes `installed_plugins.json` or the cache itself.
+  Without the CLI (or when it fails) the `/plugin update` hand-off remains.
+  New `UPKEEP_CLAUDE_BIN` knob / test seam.
+
+- **User config file** `~/.claude/data/upkeep-config.json` (override with
+  `UPKEEP_CONFIG`): `shadow_ignore_dirs` silences intentional PATH wrappers
+  (e.g. `~/.superset/bin`), `system_ruby_gems` opts back in to updating gems
+  on Apple's system Ruby.
+
+### Changed
+
+- **Apple's system Ruby is left alone by default.** `gem update
+  --user-install` on macOS's Ruby 2.6 mostly fails (current gems need Ruby
+  >= 2.7) and those gems belong to the OS. Its outdated gems now become a
+  `system-ruby-skipped` manual step (no gems group, count, ETA or warning)
+  unless `system_ruby_gems: true` is set.
+- **Untracked files no longer make a skill repo or marketplace "dirty".**
+  They can't break a `--ff-only` pull, and gstack writes its own marker
+  files, so it was flagged on every run.
+- The `plugin-update` manual step now says apply updates the plugin via
+  `claude plugin update`, with `/plugin update` as the fallback.
+- **README rewritten to match the code.** It described the pre-1.8
+  prompt-orchestrated phases: quick mode was said to include Homebrew (it
+  doesn't), several categories were listed that no script implements (stale
+  logs, Containers/Crash Reports orphans, iOS DeviceSupport/Simulators,
+  journald vacuum, orphaned kernels, WSL2 Windows cache audit), the safety
+  table claimed `com.apple.*` dirs are never removed (`~/Library/Caches/com.apple.*`
+  are cleaned as caches), and the privacy section claimed no network use and no
+  stored data. Categories, modes, safety rules, privacy policy, architecture,
+  and contributing steps now reflect `clean.sh` / `update.sh`; `jq` is listed
+  as required; per-version notes condensed into a Version History table.
+
+### Fixed
+
+- **The test suite wrote into the real `~/.claude/data`** — every run left
+  plan files and appended to the ETA history. It now sandboxes
+  `UPKEEP_DATA_DIR` and `UPKEEP_CONFIG`.
+- **A Recommended major macOS upgrade could be installed by apply.** The
+  `macos` step ran `softwareupdate -ia`, and `softwareupdate -l` marks a major
+  upgrade (e.g. macOS 26.x → 27.0.1) as `Recommended: YES`, so it rode along
+  with point releases. Discovery now parses each update (label, title,
+  version, restart) and moves any `macOS` entry whose major version differs
+  from the running OS into `softwareupdate.major_upgrades[]`, surfaced as a
+  `macos-major` manual step. Apply installs the planned labels one at a time
+  (`softwareupdate -i <label>`) and refuses labels that start with `-` or
+  contain characters outside `[A-Za-z0-9 ._()+-]`. `updates[]` now holds bare
+  labels instead of raw `* Label: …` lines, and `restart_required` only
+  counts updates that will actually be installed.
+- **Duplicate PATH-shadow warnings.** A directory listed twice in `$PATH`
+  re-emitted every shadow row once per extra occurrence; the PATH walk now
+  skips directories it has already seen.
+- **`/upkeep:update skills` crashed on every run since v1.6** with
+  `jq: invalid JSON text passed to --argjson` → `synthesize.sh failed`. The
+  OS-aware native stubs in `_cmd_plan` were jq object literals (unquoted keys)
+  passed to `--argjson`, which only accepts strict JSON; they are now compiled
+  with `jq -nc`. The mode-filter test passed vacuously (a failed plan has no
+  `ordered_groups`), so new tests assert the skills plan succeeds on both the
+  macOS and Linux stubs.
+
 ## [1.8.2] - 2026-10-26
 
 ### Fixed

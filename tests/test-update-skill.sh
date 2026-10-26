@@ -17,6 +17,16 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPTS="$REPO_ROOT/upkeep/skills/update/scripts"
+# Never let apply reach the real `claude plugin update` — tests that exercise
+# the CLI path point this at a stub instead.
+export UPKEEP_CLAUDE_BIN=/nonexistent/claude
+# Sandbox plan/history/config so the suite never writes the user's real
+# ~/.claude/data (plans, ETA history) or reads their upkeep-config.json. The
+# data dir is left uncreated so the 0700 check below tests update.sh's mkdir.
+TEST_SANDBOX=$(mktemp -d /tmp/upkeep-test.XXXXXX)
+export UPKEEP_DATA_DIR="$TEST_SANDBOX/data"
+export UPKEEP_CONFIG="$TEST_SANDBOX/no-config.json"
+trap 'rm -rf "$TEST_SANDBOX"' EXIT
 
 PASS=0
 FAIL=0
@@ -104,7 +114,7 @@ _assert_eq "zero command/preconditions fields in plan JSON" "$CMD_FIELDS" "0"
 CMD_FIELDS_IN_FILE=$(jq '[.. | objects | (.command // empty), (.preconditions // empty)] | length' "$PLAN_FILE")
 _assert_eq "zero command/preconditions in stored plan file" "$CMD_FIELDS_IN_FILE" "0"
 
-DATA_DIR_MODE=$(stat -f '%Sp' "$HOME/.claude/data" 2>/dev/null || stat -c '%A' "$HOME/.claude/data" 2>/dev/null)
+DATA_DIR_MODE=$(stat -f '%Sp' "$UPKEEP_DATA_DIR" 2>/dev/null || stat -c '%A' "$UPKEEP_DATA_DIR" 2>/dev/null)
 case "$DATA_DIR_MODE" in
   drwx------) _assert_eq "DATA_DIR mode 0700" "drwx------" "drwx------" ;;
   *) _assert_eq "DATA_DIR mode 0700" "$DATA_DIR_MODE" "drwx------" ;;
@@ -114,6 +124,10 @@ esac
 echo
 echo "── 4. Mode filters ──"
 SKILLS_OUT=$(bash "$SCRIPTS/update.sh" plan skills 2>/dev/null)
+# A failed plan has no .ordered_groups, so the leak check below would pass
+# vacuously — assert the plan itself succeeded first.
+_assert_eq "skills mode plan succeeds (macOS native stub)" \
+  "$(echo "$SKILLS_OUT" | jq -r '(.error // .mode) // "invalid"' 2>/dev/null)" "skills"
 SKILLS_LANG=$(echo "$SKILLS_OUT" | jq -r '[.ordered_groups[]?.name] | join(",")')
 case "$SKILLS_LANG" in
   *brew*|*language*|*pipx*|*gems*|*uv*|*bun*|*mas*|*macos*)
@@ -404,6 +418,10 @@ _assert_eq "linux plan: snap in ordered_groups tools" \
   "$(echo "$LPLAN" | jq '[.ordered_groups[]?.tools[]?] | any(. == "snap")')" "true"
 _assert_eq "linux plan: flatpak in ordered_groups tools" \
   "$(echo "$LPLAN" | jq '[.ordered_groups[]?.tools[]?] | any(. == "flatpak")')" "true"
+LSKILLS=$(PATH="$LINUX_PATH" UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt \
+  bash "$SCRIPTS/update.sh" plan skills 2>/dev/null)
+_assert_eq "linux skills mode plan succeeds (linux native stub)" \
+  "$(echo "$LSKILLS" | jq -r '(.error // .mode) // "invalid"' 2>/dev/null)" "skills"
 
 # --- 10d. WSL2: windows audit (detected via .exe, surfaced as manual step) ---
 # Name the fake with the .exe extension only — WSL interop exposes Windows
@@ -696,6 +714,54 @@ _assert_eq "apply: --drop=plugins leaves marketplace HEAD untouched" \
 _assert_eq "apply: --drop=plugins still surfaces /plugin update hand-off" \
   "$(echo "$V17_APPLY3" | jq -r '.plugins.outdated[0].name')" "foo"
 
+# 11j. apply: no claude CLI → status no-cli, note keeps the manual hand-off
+_assert_eq "apply: missing claude CLI → plugin status no-cli" \
+  "$(echo "$V17_APPLY" | jq -r '.plugins.updated[0].status')" "no-cli"
+_assert_eq "apply: missing claude CLI → note keeps /plugin update hand-off" \
+  "$(echo "$V17_APPLY" | jq -r '.plugins.note | test("/plugin update")')" "true"
+
+# 11k. apply: claude CLI present → headless update via `claude plugin update`
+V19_BIN=$(mktemp -d /tmp/upkeep-v19bin.XXXXXX)
+cat > "$V19_BIN/claude-ok" <<'FAKE'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/calls"
+echo "Updating marketplaces..."
+printf '{"command":"update","outcome":"ok","pluginId":"%s","updateOutcome":"updated"}\n' "$3"
+FAKE
+cat > "$V19_BIN/claude-fail" <<'FAKE'
+#!/bin/sh
+printf '{"command":"update","outcome":"failed","pluginId":"%s","failureCode":"not_found"}\n' "$3"
+exit 1
+FAKE
+chmod +x "$V19_BIN/claude-ok" "$V19_BIN/claude-fail"
+V19_PF=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+V19_APPLY=$(UPKEEP_CLAUDE_BIN="$V19_BIN/claude-ok" UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" \
+  UPKEEP_DATA_DIR="$V17_AB/data" bash "$SCRIPTS/update.sh" apply "$V19_PF" 2>/dev/null)
+_assert_eq "apply: CLI invoked as plugin update <name>@<marketplace> --scope user --json" \
+  "$(cat "$V19_BIN/calls" 2>/dev/null)" "plugin update foo@acme --scope user --json"
+_assert_eq "apply: CLI success → status updated" \
+  "$(echo "$V19_APPLY" | jq -r '.plugins.updated[0] | "\(.plugin) \(.status)"')" "foo@acme updated"
+_assert_eq "apply: all updated → note asks only for a relaunch" \
+  "$(echo "$V19_APPLY" | jq -r '.plugins.note | test("Relaunch") and (test("/plugin update") | not)')" "true"
+
+V19_PF2=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+V19_APPLY2=$(UPKEEP_CLAUDE_BIN="$V19_BIN/claude-fail" UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" \
+  UPKEEP_DATA_DIR="$V17_AB/data" bash "$SCRIPTS/update.sh" apply "$V19_PF2" 2>/dev/null)
+_assert_eq "apply: CLI failure → status failed, hand-off kept" \
+  "$(echo "$V19_APPLY2" | jq -r '"\(.plugins.updated[0].status) \(.plugins.note | test("/plugin update"))"')" "failed true"
+
+# 11l. apply: malformed plugin id never reaches the CLI
+rm -f "$V19_BIN/calls"
+V19_PF3=$(_mk_plugin_plan "$V17_AB/mkts/acme")
+jq '.discovery.skills.managed[0].name = "foo;rm -rf ~"' "$V19_PF3" > "$V19_PF3.tmp" && mv "$V19_PF3.tmp" "$V19_PF3"
+V19_APPLY3=$(UPKEEP_CLAUDE_BIN="$V19_BIN/claude-ok" UPKEEP_PLUGIN_MARKETPLACES="$V17_AB/mkts" \
+  UPKEEP_DATA_DIR="$V17_AB/data" bash "$SCRIPTS/update.sh" apply "$V19_PF3" 2>/dev/null)
+_assert_eq "apply: malformed plugin id refused" \
+  "$(echo "$V19_APPLY3" | jq -r '.plugins.updated[0].status')" "refused"
+_assert_eq "apply: malformed plugin id never passed to CLI" \
+  "$([ -f "$V19_BIN/calls" ] && echo called || echo not-called)" "not-called"
+rm -rf "$V19_BIN"
+
 # 11j. --fresh: detection compares against the UPSTREAM manifest, catching an
 #      update the local marketplace clone hasn't pulled yet.
 V17_FR=$(mktemp -d /tmp/upkeep-v17fr.XXXXXX)
@@ -740,6 +806,140 @@ _assert_eq "contract: every plugin-update manual step has name + update_command"
   "$(echo "$V17_CONTRACT" | jq '[.manual_steps[] | select(.kind=="plugin-update")] | length')"
 
 rm -rf "$V17_SB" "$V17_AB" "$V17_FR" "$V17_PF2" 2>/dev/null
+
+# ── 12. v1.8.3: macOS major-upgrade guard + PATH-shadow dedupe ────
+echo
+echo "── 12. macOS updates + PATH shadows (v1.8.3) ──"
+if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  V19_SW=$(mktemp -d /tmp/upkeep-v19sw.XXXXXX)
+  # Stub softwareupdate: a point release (no restart), a Safari update, and a
+  # Recommended major upgrade (restart). The running OS is pinned to 26.5.
+  cat > "$V19_SW/softwareupdate" <<'FAKE'
+#!/bin/sh
+if [ "$1" = "-l" ]; then
+cat <<'OUT'
+Software Update Tool
+
+Finding available software
+Software Update found the following new or updated software:
+* Label: Safari27.0TahoeAuto-27.0
+	Title: Safari, Version: 27.0, Size: 249465KiB, Recommended: YES, 
+* Label: macOS Tahoe 26.7.1-25G241
+	Title: macOS Tahoe 26.7.1, Version: 26.7.1, Size: 3852999KiB, Recommended: YES, 
+* Label: macOS 27.0.1-26A434
+	Title: macOS 27.0.1, Version: 27.0.1, Size: 11852702KiB, Recommended: YES, Action: restart, 
+OUT
+else
+  printf '%s\n' "$*" >> "$(dirname "$0")/calls"
+fi
+FAKE
+  printf '#!/bin/sh\necho 26.5\n' > "$V19_SW/sw_vers"
+  # PATH-shadow fixture: a stub that shadows one real brew binary, with the
+  # brew bin dir listed TWICE in PATH.
+  V19_BREW_BIN="$(brew --prefix)/bin"
+  V19_SHADOWED=$(ls "$V19_BREW_BIN" | grep -E '^[a-z][a-z0-9-]+$' \
+    | grep -v -E '^(jq|git|bash|awk|sed|grep|find|sort|brew|mas|npm|node|ruby|gem|pipx|uv|bun|python3|curl)$' | head -1)
+  printf '#!/bin/sh\nexit 0\n' > "$V19_SW/$V19_SHADOWED"
+  chmod +x "$V19_SW"/*
+  V19_DISC=$(PATH="$V19_SW:$V19_BREW_BIN:$PATH:$V19_BREW_BIN" bash "$SCRIPTS/discover.sh" 2>/dev/null)
+  _assert_eq "macos discover: updates[] are bare labels, major upgrade excluded" \
+    "$(echo "$V19_DISC" | jq -c '.native.softwareupdate.updates')" \
+    '["Safari27.0TahoeAuto-27.0","macOS Tahoe 26.7.1-25G241"]'
+  _assert_eq "macos discover: major upgrade listed separately" \
+    "$(echo "$V19_DISC" | jq -r '.native.softwareupdate.major_upgrades | map(.label) | join(",")')" \
+    "macOS 27.0.1-26A434"
+  _assert_eq "macos discover: restart_required ignores the excluded major upgrade" \
+    "$(echo "$V19_DISC" | jq '.native.softwareupdate.restart_required')" "false"
+  _assert_eq "shadow: a PATH dir listed twice yields one row per binary" \
+    "$(echo "$V19_DISC" | jq --arg b "$V19_SHADOWED" '[.shadow.duplicates[] | select(.binary == $b)] | length')" "1"
+  V19_SYN=$(echo "$V19_DISC" | bash "$SCRIPTS/synthesize.sh" \
+    "$REPO_ROOT/upkeep/skills/update/compatibility.json" /nonexistent-history 2>/dev/null)
+  _assert_eq "synth: major macOS upgrade surfaced as macos-major manual step" \
+    "$(echo "$V19_SYN" | jq -r '[.manual_steps[] | select(.kind == "macos-major") | .label] | join(",")')" \
+    "macOS 27.0.1-26A434"
+
+  # Apply installs exactly the planned labels, one `softwareupdate -i` each,
+  # and refuses labels that look like flags or carry shell metacharacters.
+  V19_MPF=$(mktemp /tmp/upkeep-v19mplan.XXXXXX)
+  jq -n '{schema_version:"1",mode:"all",created_at:"2026-01-01T00:00:00Z",
+    plan:{schema_version:"1",summary:{category_counts:{},eta_minutes_p50:1,eta_minutes_p90:1,disk_free_gb:100},warnings:[],manual_steps:[],ordered_groups:[{name:"stores",parallelism:"serial",tools:["macos"],item_count:3}],tool_specs:{},risk_categories:[]},
+    discovery:{schema_version:"1",os:{type:"macos",arch:"arm64"},
+      skills:{git_repos:[],managed:[],info:{},errors:[]},
+      native:{brew:{installed:false,outdated:[]},mas:{installed:false,outdated:[]},
+        softwareupdate:{installed:true,updates:["macOS Tahoe 26.7.1-25G241","-ia","x; touch /tmp/upkeep-pwn"],major_upgrades:[],restart_required:false},errors:[]},
+      language:{npm:{installed:false,outdated:[]},pipx:{installed:false,tools:[],outdated_count:0},gems:{installed:false,system_ruby:false,outdated:[]},uv:{installed:false},bun:{installed:false},deno:{installed:false},rustup:{installed:false},cargo:{installed:false},mise:{installed:false},errors:[]},
+      shadow:{duplicates:[],broken_symlinks:[],errors:[]},
+      disk:{free_gb:100,warn_threshold_gb:10,refuse_threshold_gb:5}}}' > "$V19_MPF"
+  V19_DATA=$(mktemp -d /tmp/upkeep-v19data.XXXXXX)
+  PATH="$V19_SW:$PATH" UPKEEP_DATA_DIR="$V19_DATA" bash "$SCRIPTS/update.sh" apply "$V19_MPF" >/dev/null 2>&1
+  _assert_eq "apply macos: one softwareupdate -i per safe label, unsafe labels refused" \
+    "$(cat "$V19_SW/calls" 2>/dev/null)" "-i macOS Tahoe 26.7.1-25G241"
+  rm -rf "$V19_SW" "$V19_DATA" "$V19_MPF"
+else
+  echo "  (skipped: needs macOS with Homebrew)"
+fi
+
+# ── 13. v1.8.3: config file, system-Ruby gems, untracked-only "dirty" ──
+echo
+echo "── 13. config + system Ruby + dirty (v1.8.3) ──"
+V19_GEM_DISC=$(echo "$V17_SYNTH_DISC" | jq -c '.language.gems = {installed:true, system_ruby:true,
+  system_ruby_opt_in:false, ruby_version:"2.6",
+  outdated:[{name:"bundler",from:"1.17.2",to:"4.0.23",bump:"major"},{name:"csv",from:"3.3.5",to:"3.3.6",bump:"patch"}]}')
+V19_GEM_PLAN=$(echo "$V19_GEM_DISC" | bash "$SCRIPTS/synthesize.sh" \
+  "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "system Ruby (default): no gems in ordered_groups" \
+  "$(echo "$V19_GEM_PLAN" | jq '[.ordered_groups[].tools[]? | select(. == "gems")] | length')" "0"
+_assert_eq "system Ruby (default): category_counts.gems = 0" \
+  "$(echo "$V19_GEM_PLAN" | jq '.summary.category_counts.gems')" "0"
+_assert_eq "system Ruby (default): no major-gem warning, skipped step lists 2 gems" \
+  "$(echo "$V19_GEM_PLAN" | jq -r '"\([.warnings[] | select(.code == "system-ruby-major-gems")] | length) \([.manual_steps[] | select(.kind == "system-ruby-skipped") | .count] | add)"')" "0 2"
+V19_GEM_PLAN2=$(echo "$V19_GEM_DISC" | jq -c '.language.gems.system_ruby_opt_in = true' \
+  | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "system Ruby (opted in): gems planned with the major-gem warning" \
+  "$(echo "$V19_GEM_PLAN2" | jq -r '"\([.ordered_groups[].tools[]? | select(. == "gems")] | length) \([.warnings[] | select(.code == "system-ruby-major-gems")] | length)"')" "1 1"
+
+# Config + skills-dirty, via a fast Linux-forced discovery.
+V19_CF=$(mktemp -d /tmp/upkeep-v19cf.XXXXXX)
+mkdir -p "$V19_CF/cs" "$V19_CF/xs"
+git init -q -b main --bare "$V19_CF/origin.git"
+git clone -q "$V19_CF/origin.git" "$V19_CF/cs/selfmanaged" 2>/dev/null
+( cd "$V19_CF/cs/selfmanaged" && git config user.email t@t && git config user.name t && \
+  echo '---' > SKILL.md && git add -A && git commit -qm init && git push -q origin main && \
+  touch .feature-prompted-marker )
+printf '{"system_ruby_gems": true}\n' > "$V19_CF/config.json"
+V19_CDISC=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V19_CF/cs" UPKEEP_CODEX_SKILLS="$V19_CF/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V19_CF/none.json" UPKEEP_CONFIG="$V19_CF/config.json" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "dirty: untracked-only skill repo is not dirty" \
+  "$(echo "$V19_CDISC" | jq -r '[.skills.git_repos[] | select(.name == "selfmanaged") | (.dirty_files // []) | length] | join(",")')" "0"
+( cd "$V19_CF/cs/selfmanaged" && echo changed >> SKILL.md )
+V19_CDISC2=$(UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V19_CF/cs" UPKEEP_CODEX_SKILLS="$V19_CF/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V19_CF/none.json" \
+  bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "dirty: a modified tracked file still marks the repo dirty" \
+  "$(echo "$V19_CDISC2" | jq -r '[.skills.git_repos[] | select(.name == "selfmanaged") | (.dirty_files // []) | length > 0] | join(",")')" "true"
+if command -v gem >/dev/null 2>&1; then
+  _assert_eq "config: system_ruby_gems=true reaches discovery" \
+    "$(echo "$V19_CDISC" | jq '.language.gems.system_ruby_opt_in')" "true"
+  _assert_eq "config: absent config file → system_ruby_opt_in false" \
+    "$(echo "$V19_CDISC2" | jq '.language.gems.system_ruby_opt_in')" "false"
+fi
+
+# shadow_ignore_dirs: a stub dir that shadows a brew binary is not reported.
+if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  V19_IG="$V19_CF/wrappers"; mkdir -p "$V19_IG"
+  V19_IG_BIN="$(brew --prefix)/bin"
+  V19_IG_NAME=$(ls "$V19_IG_BIN" | grep -E '^[a-z][a-z0-9-]+$' \
+    | grep -v -E '^(jq|git|bash|awk|sed|grep|find|sort|brew|mas|npm|node|ruby|gem|pipx|uv|bun|python3|curl)$' | head -1)
+  printf '#!/bin/sh\nexit 0\n' > "$V19_IG/$V19_IG_NAME"; chmod +x "$V19_IG/$V19_IG_NAME"
+  printf '{"shadow_ignore_dirs": ["%s/"]}\n' "$V19_IG" > "$V19_CF/ignore.json"
+  V19_IGDISC=$(PATH="$V19_IG:$PATH" UPKEEP_CONFIG="$V19_CF/ignore.json" bash "$SCRIPTS/discover.sh" 2>/dev/null)
+  _assert_eq "config: shadow_ignore_dirs suppresses that dir's shadow rows" \
+    "$(echo "$V19_IGDISC" | jq --arg b "$V19_IG_NAME" '[.shadow.duplicates[] | select(.binary == $b)] | length')" "0"
+fi
+rm -rf "$V19_CF"
 
 # ── Summary ────────────────────────────────────────────────────
 echo

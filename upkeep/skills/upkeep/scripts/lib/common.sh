@@ -118,8 +118,13 @@ _clean_lexnorm() {
 # UPKEEP_* override goes through this: a typo like UPKEEP_CLEAN_TTL=abc must
 # fall back to the safe default, never reach `[ -gt ]` (which then evaluates
 # false and fails the guard OPEN) or $(( )) (which aborts mid-apply).
+# Capped at 18 digits: 19+ can wrap in 64-bit arithmetic (a huge TTL could
+# come back negative or as another huge number). 18 still fits epoch seconds.
 _numeric_or() {
-  case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$((10#$1))" ;; esac
+  case "${1:-}" in
+    ''|*[!0-9]*|???????????????????*) printf '%s' "$2" ;;
+    *) printf '%s' "$((10#$1))" ;;
+  esac
 }
 
 # Is canonical path $1 strictly under root $2? Trailing-slash discipline

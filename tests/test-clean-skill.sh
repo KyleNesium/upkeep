@@ -152,6 +152,8 @@ _test "numeric_or: abc → default"      "$(_eq "$(_numeric_or abc 900)" 900)" "
 _test "numeric_or: empty → default"    "$(_eq "$(_numeric_or "" 50)" 50)" "$(_numeric_or "" 50)" 50
 _test "numeric_or: negative → default" "$(_eq "$(_numeric_or -5 50)" 50)" "$(_numeric_or -5 50)" 50
 _test "numeric_or: 0900 not octal"     "$(_eq "$(_numeric_or 0900 1)" 900)" "$(_numeric_or 0900 1)" 900
+_test "numeric_or: epoch seconds pass" "$(_eq "$(_numeric_or 1792929082 0)" 1792929082)" "$(_numeric_or 1792929082 0)" 1792929082
+_test "numeric_or: overflow → default" "$(_eq "$(_numeric_or 9223372036854775808 900)" 900)" "$(_numeric_or 9223372036854775808 900)" 900
 
 echo "── Running-app detection (Electron guard) ──"
 PSF=$(mktemp "${TMPDIR:-/tmp}/upkeep-clean-ps.XXXXXX")
@@ -171,7 +173,13 @@ grep -v 'Visual Studio Code' "$PSF" > "$PSF.t" && mv "$PSF.t" "$PSF"
 _test "app-running: codex/Passcode ≠ Code"         "$(_eq "$(_ar Code)" stopped)" "$(_ar Code)" stopped
 _test "app-running: regex chars are literal"       "$(_eq "$(_ar "S.ack")" stopped)" "$(_ar "S.ack")" stopped
 _test "app-running: absent app stopped"            "$(_eq "$(_ar Discord)" stopped)" "$(_ar Discord)" stopped
+echo "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" >> "$PSF"
+_test "app-running: vendor dir BraveSoftware → Brave Browser" "$(_eq "$(_ar BraveSoftware)" running)" "$(_ar BraveSoftware)" running
 rm -f -- "$PSF"
+# Real ps, no seam: a pipeline grep must not see its own argv in the process
+# list. Repeat to give the race a chance to show up.
+SELF=0; for _i in 1 2 3 4 5 6 7 8 9 10; do _clean_app_running "ZzNoSuchApp$_i" && SELF=$((SELF+1)); done
+_test "app-running: real ps never self-matches" "$(_eq "$SELF" 0)" "$SELF/10 running" "0/10"
 
 OS_TYPE=""; UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=apt _detect_os
 _test "OS override seam (linux/apt)" "$([ "$OS_TYPE" = "linux" ] && [ "$PKG_MGR" = "apt" ] && echo true || echo false)" "$OS_TYPE/$PKG_MGR" "linux/apt"

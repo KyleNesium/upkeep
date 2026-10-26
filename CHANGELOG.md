@@ -28,23 +28,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wiped). Replaced by `_clean_app_running`, which matches the full command line
   as case-insensitive fixed strings against the bundle shapes Electron apps run
   under (`/<app>.app/`, `/<app> Helper`, `/MacOS/<app>`, `Application Support/<app>/`).
+  The process list is snapshotted before matching, so `grep` can never match its
+  own argv. Vendor dirs whose name differs from the app's process name
+  (`BraveSoftware` → Brave Browser, `Google` → Google Chrome, `Microsoft` →
+  Teams/Edge) are mapped.
 - **MEDIUM — non-numeric env overrides failed open.** `UPKEEP_CLEAN_TTL=abc`
   made the manifest-age check evaluate false, so a stale manifest was *applied*;
   `UPKEEP_CLEAN_DRIFT_PCT=abc` aborted apply mid-loop; `UPKEEP_SCAN_BUDGET=abc`
   killed the artifact scan instantly. All now go through `_numeric_or`, which
-  falls back to the safe default.
+  falls back to the safe default (including for 19+ digit values that would
+  wrap in 64-bit arithmetic).
 - **LOW — prewarm reuse lacked the `created_at` integer guard** that apply
   already had. A corrupt prewarm manifest is now ignored (fresh scan) instead of
   hitting shell arithmetic.
 
 ### Tests
 
-- Clean suite 99 → 125: ancestor-symlink battery (validator + apply-time swap,
+- Clean suite 99 → 129: ancestor-symlink battery (validator + apply-time swap,
   plus a symlinked-`$HOME` positive case), `_clean_lexnorm` / `_numeric_or`
   units, running-app detection against a fixture process list
   (`UPKEEP_PS_FILE` seam), non-numeric env overrides at apply, corrupt prewarm.
   The old "C1: symlink target not deleted" check, which could never fail, is
-  replaced by a real apply-time assertion. All 22 new assertions fail against
+  replaced by a real apply-time assertion. The new regression assertions fail against
   the 1.8.1 scripts.
 
 ## [1.8.1] - 2026-06-30

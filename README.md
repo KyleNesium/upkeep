@@ -430,7 +430,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**233 tests** across 2 automated test files (125 `clean` + 108 `update`). Run with
+**237 tests** across 2 automated test files (129 `clean` + 108 `update`). Run with
 `bash tests/test-clean-skill.sh` and `bash tests/test-update-skill.sh` (both
 pass under `/bin/bash`, macOS 3.2.57). The `clean` suite includes a pre-merge
 security-regression set (shell-config command-injection, future-dated manifest
@@ -457,8 +457,8 @@ out of LLM prose into a tested, hardcoded path-safety validator.
 | Shell-config editor | ~8 | dead source/path-alias lines removed; conditional / `&&` / live lines kept; cp backup created; result passes `zsh -n` (edit + validate + auto-restore) |
 | Eager-discovery prewarm | ~9 | prewarm writes a stable manifest; discover reuses within TTL; `UPKEEP_NO_REUSE` + stale-TTL + corrupt `created_at` force a fresh scan; hook no-op when disabled; plugin.json/hooks.json valid |
 | Wrapper + umbrella structure | ~22 | All three wrappers reference the engine, version 1.8.0, no broad `Bash(rm *)`/`Edit` grants; audit never applies; quick/deep two-turn; umbrella routes to clean.sh with the self-update gate preceding cleanup execution |
-| Shared helpers | ~13 | `_sanitize_text` caps free-text/strips control chars (never paths); `_detect_os` override seam; `_clean_lexnorm` (`//`, `.`, `..`, relative → empty); `_numeric_or` (non-numeric/negative → default, no octal) |
-| Running-app detection | 7 | Electron guard via `_clean_app_running` on a fixture process list: helper / main binary / >15-char / case-insensitive matches; `Code` ≠ `codex`/`PasscodeSettings`; regex chars literal |
+| Shared helpers | ~15 | `_sanitize_text` caps free-text/strips control chars (never paths); `_detect_os` override seam; `_clean_lexnorm` (`//`, `.`, `..`, relative → empty); `_numeric_or` (non-numeric/negative/overflow → default, no octal, epoch passes) |
+| Running-app detection | 9 | Electron guard via `_clean_app_running` on a fixture process list: helper / main binary / >15-char / case-insensitive matches; vendor dir → app name (BraveSoftware); `Code` ≠ `codex`/`PasscodeSettings`; regex chars literal; real `ps` never self-matches |
 
 ### `update` skill (v1.1–v1.7) — `tests/test-update-skill.sh`
 

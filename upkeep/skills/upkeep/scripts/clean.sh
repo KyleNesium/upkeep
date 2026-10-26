@@ -512,13 +512,38 @@ _is_selected() { [ -z "$ITEMS_CSV" ] && return 0; case ",$ITEMS_CSV," in *",$1,"
 #   …/<app> Helper…             helper bundles/binaries (Code Helper (GPU))
 #   …/MacOS/<app> <args>        main binary             (…/MacOS/Code)
 #   Application Support/<app>/  --user-data-dir style args
+# The Application Support dir name isn't always the process name (Brave stores
+# under "BraveSoftware", Chrome under "Google"), so a few known vendor dirs map
+# to the app names they run as; the dir name itself is always tried too.
 # UPKEEP_PS_FILE is a test seam: read the process list from a file.
+_clean_app_names() {
+  printf '%s\n' "$1"
+  case "$1" in
+    BraveSoftware) printf '%s\n' "Brave Browser" ;;
+    Google)        printf '%s\n' "Google Chrome" ;;
+    Microsoft)     printf '%s\n' "Microsoft Teams" "Microsoft Edge" ;;
+  esac
+}
+
 _clean_app_running() {
-  local app="$1"
+  local app="$1" procs name
   [ -n "$app" ] || return 1
-  { if [ -n "${UPKEEP_PS_FILE:-}" ]; then cat -- "$UPKEEP_PS_FILE"; else ps -axo command= 2>/dev/null; fi; } \
-    | sed 's/$/ /' \
-    | grep -iqF -e "/$app.app/" -e "/$app Helper" -e "/MacOS/$app " -e "Application Support/$app/"
+  # Snapshot the process list BEFORE grepping: in a `ps | grep` pipeline both
+  # start concurrently, and if grep has exec'd first, ps lists grep's own
+  # argv — which contains every pattern — so any app reads as "running".
+  if [ -n "${UPKEEP_PS_FILE:-}" ]; then procs=$(cat -- "$UPKEEP_PS_FILE")
+  else procs=$(ps -axo command= 2>/dev/null); fi
+  procs=$(printf '%s\n' "$procs" | sed 's/$/ /')
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if printf '%s\n' "$procs" | grep -iqF -e "/$name.app/" -e "/$name Helper" \
+        -e "/MacOS/$name " -e "Application Support/$name/"; then
+      return 0
+    fi
+  done <<EOF
+$(_clean_app_names "$app")
+EOF
+  return 1
 }
 
 cmd_apply() {

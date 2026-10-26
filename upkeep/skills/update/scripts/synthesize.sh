@@ -32,6 +32,15 @@ if ! jq -e '.schema_version == "1"' <<<"$DISCOVERY" >/dev/null 2>&1; then
   exit 1
 fi
 
+# v1.8.3: Apple's system Ruby is left alone unless the user opted in
+# (config system_ruby_gems). Its outdated gems move to skipped_system_ruby, so
+# no gems group, count, ETA or major-bump warning is planned for them.
+DISCOVERY=$(jq -c '
+  if (.language.gems.system_ruby // false) and ((.language.gems.system_ruby_opt_in // false) | not)
+  then .language.gems.skipped_system_ruby = (.language.gems.outdated // [])
+       | .language.gems.outdated = []
+  else . end' <<<"$DISCOVERY")
+
 COMPAT=$(jq -c '.' "$COMPAT_FILE")
 HISTORY='{}'
 if [ -n "$HIST_FILE" ] && [ -f "$HIST_FILE" ]; then
@@ -120,12 +129,11 @@ WARNINGS=$(jq -c --argjson a "$WARNINGS" --argjson b "$SYSTEM_RUBY_WARN" '$a + $
 
 # ── Build manual_steps[] ─────────────────────────────────────────
 MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
-  # Outdated Claude Code plugins → /plugin update (interactive) + relaunch.
-  # v1.7: only OUTDATED plugins reach .skills.managed (discover.sh compares
-  # installed_plugins.json vs the marketplace.json version). The apply phase
-  # refreshes the marketplace git source; the reinstall itself is NOT
-  # auto-appliable (no headless path — needs /plugin update + a relaunch), so
-  # each outdated plugin is surfaced as a manual step with both versions.
+  # Outdated Claude Code plugins. v1.7: only OUTDATED plugins reach
+  # .skills.managed (discover.sh compares installed_plugins.json vs the
+  # marketplace.json version). v1.8.3: apply updates them via
+  # `claude plugin update`; the step keeps the /plugin update fallback and
+  # the relaunch the user always has to do.
   [ ($d.skills.managed // [])[] |
     {kind: "plugin-update",
      name: .name,
@@ -134,8 +142,9 @@ MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
      update_command: .update_command,
      message: ("Plugin " + .name + " "
                + (.installed_version // "?") + " → " + (.available_version // "?")
-               + " (marketplace " + (.marketplace // "?") + ") — run: " + .update_command
-               + ", then relaunch Claude Code")} ]
+               + " (marketplace " + (.marketplace // "?") + ") — apply updates it via"
+               + " claude plugin update (fallback: " + .update_command + ");"
+               + " relaunch Claude Code afterwards")} ]
   # Untrusted skill repos → require trust gate
   + [ ($d.skills.git_repos // [])[] | select(.untrusted == true) |
     {kind: "trust-required",
@@ -145,6 +154,23 @@ MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
   + [ ($d.skills.git_repos // [])[] | select((.dirty_files // []) | length > 0) |
     {kind: "skill-dirty",
      message: ("Skill " + .name + " has uncommitted changes; commit or stash before next /upkeep:update")} ]
+  # Major macOS upgrades → never auto-installed (v1.8.3). softwareupdate marks
+  # them Recommended, so they would otherwise ride along with point releases.
+  + [ ($d.native.softwareupdate.major_upgrades // [])[] |
+    {kind: "macos-major",
+     label: .label,
+     message: (.title + " (major upgrade) is available — not auto-installed;"
+               + " upgrade from System Settings › General › Software Update when you are ready")} ]
+  # System-Ruby gems skipped by default (v1.8.3) → informational
+  + ( ($d.language.gems.skipped_system_ruby // []) as $sk
+      | if ($sk | length) > 0
+        then [ {kind: "system-ruby-skipped",
+                count: ($sk | length),
+                message: (($sk | length | tostring) + " gem(s) on the macOS system Ruby "
+                          + ($d.language.gems.ruby_version // "") + " left alone."
+                          + " Install a managed Ruby (brew/rbenv/mise) for your own gems, or set"
+                          + " system_ruby_gems: true in ~/.claude/data/upkeep-config.json to update them anyway")} ]
+        else [] end )
   # PATH shadows → informational
   + [ ($d.shadow.duplicates // [])[] |
     {kind: "path-shadow",

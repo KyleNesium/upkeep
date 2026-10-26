@@ -126,6 +126,25 @@ EOF
     printf 'REFUSE outside-safe-roots %s\n' "$raw"; return 1
   fi
 
+  # (2b) SYMLINKED-ANCESTOR REFUSAL — the leaf check in (1) misses a symlink
+  # higher up: App Support/Slack -> App Support/Signal makes
+  # ".../Slack/Cache" canonicalize to ".../Signal/Cache", which passes
+  # containment and every check below, and gets wiped. Require that
+  # canonicalization changed nothing but the $HOME prefix (itself allowed to be
+  # a symlink, e.g. /var → /private/var): the lexical form, with home mapped to
+  # canonical home, must equal canon. Any traversed symlink below home makes
+  # them differ. (Runs after containment so paths outside home keep reporting
+  # outside-safe-roots.)
+  local lex lexhome
+  lex=$(_clean_lexnorm "$raw")
+  lexhome=$(_clean_lexnorm "$HOME")
+  case "$lex/" in
+    "$lexhome/"*) lex="$H${lex#"$lexhome"}" ;;
+  esac
+  if [ "$lex" != "$canon" ]; then
+    printf 'REFUSE symlink-ancestor %s\n' "$raw"; return 1
+  fi
+
   # (3) denylist — not == or under a PROTECTED dir
   while IFS= read -r root; do
     [ -z "$root" ] && continue

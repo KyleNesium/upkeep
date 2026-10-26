@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-10-26
+
+### Fixed
+
+#### Cleanup-engine safety follow-ups deferred from the 1.8.1 ship review
+
+- **CRITICAL — a symlinked *ancestor* could still redirect a deletion into
+  another app's or safe root's data.** 1.8.1 refused a symlinked *leaf*, but a
+  link higher up (e.g. `Application Support/Slack → Signal`) made
+  `…/Slack/Cache` canonicalize to `…/Signal/Cache`, which passed every check
+  and was wiped. The validator now requires the canonical path to equal the
+  lexically-normalized raw path (with only `$HOME` itself allowed to be a
+  symlink) and refuses with `symlink-ancestor` otherwise. This also runs at the
+  apply-time re-validation, so an ancestor swapped between discover and apply is
+  skipped (`clean-validate.sh`, new `_clean_lexnorm` in `lib/common.sh`).
+  Checked against a real 401-item deep manifest: zero false refusals.
+- **HIGH — Electron "app is running" guard matched the wrong processes.**
+  `pgrep -i <app>` was an ERE substring over ~15-char truncated process names:
+  `Code` matched `codex` / `PasscodeSettings…` (VS Code cache never cleaned),
+  while long or paren-bearing app names never matched (running app's cache
+  wiped). Replaced by `_clean_app_running`, which matches the full command line
+  as case-insensitive fixed strings against the bundle shapes Electron apps run
+  under (`/<app>.app/`, `/<app> Helper`, `/MacOS/<app>`, `Application Support/<app>/`).
+  The process list is snapshotted before matching, so `grep` can never match its
+  own argv. Vendor dirs whose name differs from the app's process name
+  (`BraveSoftware` → Brave Browser, `Google` → Google Chrome, `Microsoft` →
+  Teams/Edge) are mapped.
+- **MEDIUM — non-numeric env overrides failed open.** `UPKEEP_CLEAN_TTL=abc`
+  made the manifest-age check evaluate false, so a stale manifest was *applied*;
+  `UPKEEP_CLEAN_DRIFT_PCT=abc` aborted apply mid-loop; `UPKEEP_SCAN_BUDGET=abc`
+  killed the artifact scan instantly. All now go through `_numeric_or`, which
+  falls back to the safe default (including for 19+ digit values that would
+  wrap in 64-bit arithmetic).
+- **LOW — prewarm reuse lacked the `created_at` integer guard** that apply
+  already had. A corrupt prewarm manifest is now ignored (fresh scan) instead of
+  hitting shell arithmetic.
+
+### Tests
+
+- Clean suite 99 → 129: ancestor-symlink battery (validator + apply-time swap,
+  plus a symlinked-`$HOME` positive case), `_clean_lexnorm` / `_numeric_or`
+  units, running-app detection against a fixture process list
+  (`UPKEEP_PS_FILE` seam), non-numeric env overrides at apply, corrupt prewarm.
+  The old "C1: symlink target not deleted" check, which could never fail, is
+  replaced by a real apply-time assertion. The new regression assertions fail against
+  the 1.8.1 scripts.
+
 ## [1.8.1] - 2026-06-30
 
 ### Fixed

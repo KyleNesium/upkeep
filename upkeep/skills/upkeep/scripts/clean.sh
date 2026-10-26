@@ -139,7 +139,7 @@ scan_electron() {
   local d app
   while IFS= read -r -d '' d; do
     [ -n "$d" ] || continue
-    # app name = the Application Support child dir, for pgrep re-check at apply
+    # app name = the Application Support child dir, for the running-app re-check at apply
     app=$(printf '%s' "$d" | sed "s|$HOME/Library/Application Support/||; s|/.*||")
     _emit electron "$d" electron_cache safe "" "$app"
   done < <(find "$HOME/Library/Application Support" -maxdepth 5 \
@@ -179,7 +179,7 @@ scan_build_artifacts() {
       -o -name __pycache__ -o -name .pytest_cache -o -name .turbo \) -type d \
       -print0 > "$tmpf" 2>/dev/null &
     local fpid=$! kpid
-    ( sleep "${UPKEEP_SCAN_BUDGET:-20}"; kill -TERM "$fpid" 2>/dev/null ) & kpid=$!
+    ( sleep "$(_numeric_or "${UPKEEP_SCAN_BUDGET:-}" 20)"; kill -TERM "$fpid" 2>/dev/null ) & kpid=$!
     if ! wait "$fpid" 2>/dev/null; then
       _warn "build-artifacts scan hit the time budget — results may be partial; re-run for full coverage"
     fi
@@ -489,16 +489,62 @@ emit_skill_json() {
 #     manifest is data, not trust.
 #   • TOCTOU re-stat: vanished → skip; type-swap (is_symlink changed) → skip;
 #     size grew beyond threshold → skip + warn.
-#   • electron: re-check pgrep -x <app> at apply; skip if the app launched.
+#   • electron: re-check _clean_app_running <app> at apply; skip if it launched.
 #   • per-item isolation: one failure records ✗ and the batch continues.
 #   • commands are hardcoded by action; the manifest never carries a command.
-_CLEAN_TTL="${UPKEEP_CLEAN_TTL:-900}"
-_DRIFT_PCT="${UPKEEP_CLEAN_DRIFT_PCT:-50}"   # skip if size grew > this percent
+_CLEAN_TTL=$(_numeric_or "${UPKEEP_CLEAN_TTL:-}" 900)
+_DRIFT_PCT=$(_numeric_or "${UPKEEP_CLEAN_DRIFT_PCT:-}" 50)   # skip if size grew > this percent
 
 # is item category dropped? ($1=category, uses $DROP_CSV)
 _is_dropped() { case ",$DROP_CSV," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 # is item id selected? (uses $ITEMS_CSV; empty = all)
 _is_selected() { [ -z "$ITEMS_CSV" ] && return 0; case ",$ITEMS_CSV," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+
+# Is the Electron app owning Application Support/<app> running?
+#
+# NOT pgrep: `pgrep -x` never matched (helpers are "Slack Helper (Renderer)"),
+# and `pgrep -i <app>` is an ERE substring over ~15-char truncated comm names —
+# "Code" matched codex/PasscodeSettings (cache never cleaned) while long or
+# paren-bearing names never matched (running app's cache wiped). Instead match
+# the FULL command line as fixed strings, case-insensitively, against the
+# shapes an Electron app actually runs under:
+#   …/<app>.app/…               main bundle             (Slack.app)
+#   …/<app> Helper…             helper bundles/binaries (Code Helper (GPU))
+#   …/MacOS/<app> <args>        main binary             (…/MacOS/Code)
+#   Application Support/<app>/  --user-data-dir style args
+# The Application Support dir name isn't always the process name (Brave stores
+# under "BraveSoftware", Chrome under "Google"), so a few known vendor dirs map
+# to the app names they run as; the dir name itself is always tried too.
+# UPKEEP_PS_FILE is a test seam: read the process list from a file.
+_clean_app_names() {
+  printf '%s\n' "$1"
+  case "$1" in
+    BraveSoftware) printf '%s\n' "Brave Browser" ;;
+    Google)        printf '%s\n' "Google Chrome" ;;
+    Microsoft)     printf '%s\n' "Microsoft Teams" "Microsoft Edge" ;;
+  esac
+}
+
+_clean_app_running() {
+  local app="$1" procs name
+  [ -n "$app" ] || return 1
+  # Snapshot the process list BEFORE grepping: in a `ps | grep` pipeline both
+  # start concurrently, and if grep has exec'd first, ps lists grep's own
+  # argv — which contains every pattern — so any app reads as "running".
+  if [ -n "${UPKEEP_PS_FILE:-}" ]; then procs=$(cat -- "$UPKEEP_PS_FILE")
+  else procs=$(ps -axo command= 2>/dev/null); fi
+  procs=$(printf '%s\n' "$procs" | sed 's/$/ /')
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if printf '%s\n' "$procs" | grep -iqF -e "/$name.app/" -e "/$name Helper" \
+        -e "/MacOS/$name " -e "Application Support/$name/"; then
+      return 0
+    fi
+  done <<EOF
+$(_clean_app_names "$app")
+EOF
+  return 1
+}
 
 cmd_apply() {
   local manifest="" ; DROP_CSV="" ; ITEMS_CSV=""
@@ -601,11 +647,7 @@ cmd_apply() {
     fi
     # electron: re-check the app is not running
     if [ "$action" = "electron_cache" ] && [ -n "$app" ] && [ "$app" != "null" ]; then
-      # Match case-insensitively as a SUBSTRING, not `-x` exact: Electron helper
-      # processes are named "Slack Helper", "Code Helper (Renderer)" etc., never
-      # exactly the Application Support dir name ("Slack"/"Code"), so `pgrep -x`
-      # almost never matched and the guard let us wipe a running app's cache.
-      if pgrep -i "$app" >/dev/null 2>&1; then
+      if _clean_app_running "$app"; then
         printf '%s\treason=app-running\n' "$id" >> "$SKIPPED"; continue
       fi
     fi
@@ -737,8 +779,11 @@ cmd_discover() {
   # forces a fresh scan.
   local pw; pw=$(_prewarm_path "$MODE")
   if [ -z "${UPKEEP_NO_REUSE:-}" ] && [ -f "$pw" ]; then
-    local pc age; pc=$(jq -r '.created_at // 0' "$pw" 2>/dev/null); age=$(( $(date +%s) - pc ))
-    if [ "$age" -ge 0 ] && [ "$age" -lt "$_CLEAN_TTL" ]; then
+    # Same non-integer guard as cmd_apply: a corrupt created_at means "don't
+    # reuse", never an arithmetic abort or an octal mis-parse.
+    local pc age; pc=$(_numeric_or "$(jq -r '.created_at // empty' "$pw" 2>/dev/null)" 0)
+    age=$(( $(date +%s) - pc ))
+    if [ "$pc" -gt 0 ] && [ "$age" -ge 0 ] && [ "$age" -lt "$_CLEAN_TTL" ]; then
       mkdir -p "$DATA_DIR" 2>/dev/null
       local wd sfx fresh; wd=$(mktemp -d "${DATA_DIR}/.upkeep-clean-tmp.XXXXXX") || _die "mktemp -d failed"
       chmod 700 "$wd" 2>/dev/null; sfx=${wd##*.}; fresh="${DATA_DIR}/upkeep-clean.${sfx}.json"

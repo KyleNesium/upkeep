@@ -4,21 +4,24 @@ version: 1.2.2
 author: KyleNesium
 description: |
   Cross-platform system cleanup and updates for macOS 14+, Linux (Debian/Ubuntu,
-  Fedora/RHEL, Arch), and WSL2. Three cleanup modes: deep (full phase audit +
-  cleanup), quick (caches + package manager sweep), audit (report only, no
-  changes). Plus update mode for AI skills and package managers. Discovery-based
-  orphan detection with before/after disk tracking. On macOS: Homebrew, dev caches,
-  orphaned app data, LaunchAgents, Xcode, Docker, build artifacts, Electron, shell
-  config, logs, large files, iOS backups, pipx tools. On Linux: apt/dnf/pacman
-  package cache, ~/.cache sweep, systemd journal vacuum, snap/flatpak cleanup,
-  orphaned kernels. On WSL2: everything Linux offers plus Windows temp and
-  %LOCALAPPDATA% cache audit via /mnt/c bridge.
+  Fedora/RHEL, Arch), and WSL2. Three cleanup modes: deep (full scan +
+  cleanup), quick (caches, Electron caches, Trash; build artifacts reported),
+  audit (report only, no changes). Plus update mode for AI skills, Claude Code
+  plugins, and package managers. Discovery-based orphan detection with
+  before/after disk tracking. On macOS: app/dev caches, Electron caches, Trash,
+  build artifacts, saved app state, Xcode DerivedData/Archives, Homebrew,
+  Docker, iOS backups, large installers, orphaned LaunchAgents, dead shell-config
+  lines, orphaned app data (report only), pipx tools (report only). On Linux and
+  WSL2: ~/.cache, Trash, build artifacts, Docker, snap disabled revisions, unused
+  flatpak runtimes, and apt/dnf/pacman cache cleanup as a manual sudo step.
   Use when: "clean up my mac", "clean up my linux box", "clean up wsl", "disk cleanup",
   "free up space", "audit my system", "what is taking up space", "new machine setup",
   "mac cleanup", "ubuntu cleanup", "fedora cleanup", "arch cleanup", "wsl2 cleanup".
   Also handles updates: "update upkeep", "update my AI skills", "update everything",
   "check for updates", "upgrade my packages", "update all my tools", "is upkeep up to date".
 allowed-tools:
+  # The cleanup engine (discover / apply / disk) — same grant as the wrappers
+  - Bash(bash *clean.sh *)
   # Read-only discovery / queries
   - Bash(diskutil *)
   - Bash(df *)
@@ -101,7 +104,6 @@ allowed-tools:
   - Bash(git -C * symbolic-ref *)
   # Linux system tools (used by cleanup phases)
   - Bash(systemctl *)
-  - Bash(journalctl *)
   # Linux package managers (cleanup phases — apt-get clean / autoremove etc.)
   - Bash(apt *)
   - Bash(dnf *)
@@ -228,12 +230,13 @@ Audit mode never executes step 3; it stops after step 1.
 Run first in both modes. Record the starting disk state for before/after comparison.
 
 ```bash
+# Shared disk reading on every OS: "<free_gb> <total_gb>", base-10 GB matching
+# macOS Settings → Storage (purgeable included); `df -P` on Linux/WSL2.
+echo "=== Disk (free_gb total_gb) ===" && bash "${CLAUDE_SKILL_DIR}/scripts/clean.sh" disk
 if [ "$OS_TYPE" = "macos" ]; then
-  echo "=== Disk ===" && diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
   echo "=== macOS ===" && sw_vers
   echo "=== Homebrew ===" && brew --version 2>/dev/null || echo "not installed"
 elif [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
-  echo "=== Disk ===" && df -h / | tail -1
   echo "=== OS ===" && (cat /etc/os-release 2>/dev/null | grep -E "^(NAME|VERSION|ID)=" || echo "unknown")
   echo "=== Kernel ===" && uname -r
   echo "=== Package Manager ===" && echo "Detected: $PKG_MGR"
@@ -246,9 +249,7 @@ elif [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "wsl2" ]; then
 fi
 ```
 
-Capture the "Available" and "Purgeable" values from `diskutil info`.
-APFS volumes have purgeable space that `df` doesn't distinguish — use `diskutil`
-for accurate before/after. Fall back to `df` if `diskutil` is unavailable.
+Record `free_gb` as the baseline for the before/after comparison.
 
 Then run a self-update check (at most once per 24h, silent on all failures). The
 check handles two install layouts:
@@ -414,53 +415,46 @@ The router intentionally has **no** `git fetch` / `brew upgrade` / `npm update` 
 
 ## Reporting
 
-### Per-phase reporting
+### Gate and report come from the engine
 
-After each phase, report findings in a short table. Ask before taking action.
-Batch removals by phase — don't ask per-file unless it's ambiguous (like which
-brew packages to remove).
+Render the gate from discover's `category_counts` / items, and the final
+report from apply's JSON (`applied[]`, `skipped[]` with reasons,
+`failed[]`, `reclaimed_bytes`). Do not ask per item — the gate is one
+multi-select over categories.
 
 ### Final Summary
 
-After all phases complete, present the cumulative report:
+One row per category present in the manifest; never list categories the
+engine didn't report:
 
 ```
 ## Cleanup Report
 
-| # | Category | Items | Reclaimable | Status |
-|---|----------|-------|-------------|--------|
-| 2 | Homebrew | ... | ...MB | Cleaned / Skipped |
-| 3 | Dev caches | ... | ...GB | Cleaned / Skipped |
-| 4 | Orphaned app data | ... | ...MB | Cleaned / Skipped |
-| 5 | LaunchAgents | ... | — | Cleaned / Skipped |
-| 6 | Xcode & Dev Tools | ... | ...GB | Cleaned / Skipped |
-| 7 | Docker | ... | ...GB | Cleaned / Skipped |
-| 8 | Build artifacts | ... | ...GB | Cleaned / Skipped |
-| 9 | Stale logs | ... | ...MB | Cleaned / Skipped |
-| 10| Shell config | ... | — | Fixed / Skipped |
-| 11| Electron caches | ... | ...MB | Cleaned / Skipped |
-| 12| Large files | ... | ...MB | Cleaned / Skipped |
-| 13| Trash | ... | ...GB | Cleaned / Skipped |
-| 14| iOS backups | ... | ...GB | Cleaned / Skipped |
-| 15| pipx tools | ... | — | Cleaned / Skipped |
-| 16| Snap & Flatpak | ... | ...MB | Cleaned / Skipped |
-| 17| Windows Temp (WSL2) | ... | ...MB | Cleaned / Skipped |
-| 18| Windows npm/pip (WSL2) | ... | ...MB | Cleaned / Skipped |
-| **Total** | | | **...GB** | |
+| Category | Items | Reclaimable | Status |
+|----------|-------|-------------|--------|
+| <category from category_counts> | <n> | <size> | Cleaned / Skipped (<reason>) / Report only |
+| **Total** | | **<sum>** | |
 ```
+
+Category ids the engine can emit: `dev_caches`, `electron`, `trash`,
+`build_artifacts`, `saved_state`, `xcode`, `brew`, `docker`, `ios_backup`,
+`large_file`, `launchagent`, `shell_config`, `orphan_app_data` (report only),
+`pipx` (report only), `snap`, `flatpak`. Linux system package-cache cleanup
+appears in `manual_steps[]` as a `sudo` command for the user to run.
 
 ### Before/After
 
 ```bash
-diskutil info / 2>/dev/null | grep -E "Free|Available|Purgeable" || df -h / | tail -1
+bash "${CLAUDE_SKILL_DIR}/scripts/clean.sh" disk   # "<free_gb> <total_gb>"
 ```
 
-Compare against Phase 1 baseline. Report Available and Purgeable separately:
+Compare against the Phase 1 baseline, and prefer the apply report's
+`reclaimed_bytes` for the reclaimed figure:
 
 ```
-Disk before: XXX available (YYY purgeable)
-Disk after:  XXX available (YYY purgeable)
-Reclaimed:   ~ZZZ
+Disk before: XXX GB free
+Disk after:  XXX GB free
+Reclaimed:   ~ZZZ (from apply's reclaimed_bytes)
 ```
 
 macOS keeps recently deleted data as "purgeable" — Finder may not show freed space immediately because it reclaims on demand.

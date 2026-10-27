@@ -819,6 +819,8 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
     discover) shift; cmd_discover "$@" ;;
     apply)    shift; cmd_apply "$@" ;;
     prewarm)  shift; cmd_prewarm "$@" ;;
-    *) _die "usage: clean.sh discover <audit|quick|deep> | apply <manifest> | prewarm [mode]" ;;
+    # "<free_gb> <total_gb>" on / — the shared reading SKILL.md pre-flights use.
+    disk)     _disk_gb ;;
+    *) _die "usage: clean.sh discover <audit|quick|deep> | apply <manifest> | prewarm [mode] | disk" ;;
   esac
 fi

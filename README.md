@@ -358,6 +358,7 @@ Full notes: [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Highlights |
 |---------|-----------|
+| 1.8.4 | Update no longer refuses on Linux/WSL2 with long device names (one shared `df -P` disk reading); disk-space refusals no longer reported as "up to date"; `--drop` expands from the plan; skill descriptions match the code |
 | 1.8.3 | Plugin updates finish headlessly via `claude plugin update`; major macOS upgrades never auto-installed; `upkeep-config.json`; system-Ruby gems skipped by default; fixes `/upkeep:update skills` crash (broken since 1.6) |
 | 1.8.2 | Validator refuses symlinked ancestors; Electron running-app check rewritten; non-numeric env overrides fall back to safe defaults |
 | 1.8.1 | Audit-driven hardening: symlinked-target refusal, `--drop` fix, fail-safe disk guard, git argument-injection fix |

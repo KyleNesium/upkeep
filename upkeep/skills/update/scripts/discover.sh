@@ -41,49 +41,15 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ── Disk pre-flight ──────────────────────────────────────────────
-# Report disk space the way macOS itself does (Finder / System Settings →
-# Storage), in base-10 GB. A naive `df -k /` hits three macOS traps:
-#   1. Unit: KiB ÷ 1024² yields GiB, not GB — macOS reports base-10 GB.
-#   2. Sealed APFS: `/` is the read-only system snapshot (Used ≈ 13 GB), so a
-#      total from used+avail on `/` is garbage (~227 GB vs the ~995 GB container).
-#   3. Purgeable: df AND diskutil report only strictly-free space (~215 GB),
-#      but macOS counts purgeable caches/snapshots as available (~374 GB) — so
-#      "free" must include purgeable to match what the user sees in Settings.
-# The authoritative source is URLResourceValues
-# (.volumeAvailableCapacityForImportantUsage / .volumeTotalCapacity) — exactly
-# what Finder and System Settings use. Read it via osascript (present on every
-# Mac, no Xcode needed); fall back to diskutil (strictly-free, no purgeable),
-# then df on Linux/WSL2 where `/` is a normal volume.
-free_gb=0
-total_gb=0
-if command -v osascript >/dev/null 2>&1; then
-  read -r _free_b _total_b < <(osascript -l JavaScript -e \
-'ObjC.import("Foundation");function c(k){var u=$.NSURL.fileURLWithPath("/"),v=Ref(),e=Ref();return u.getResourceValueForKeyError(v,k,e)?v[0].longLongValue:-1;}c($.NSURLVolumeAvailableCapacityForImportantUsageKey)+" "+c($.NSURLVolumeTotalCapacityKey)' 2>/dev/null)
-  if [ "${_free_b:-0}" -gt 0 ] 2>/dev/null && [ "${_total_b:-0}" -gt 0 ] 2>/dev/null; then
-    free_gb=$(awk -v b="$_free_b"  'BEGIN{printf "%d", (b/1e9)+0.5}')
-    total_gb=$(awk -v b="$_total_b" 'BEGIN{printf "%d", (b/1e9)+0.5}')
-  fi
-fi
-if [ "$free_gb" -eq 0 ] 2>/dev/null && command -v diskutil >/dev/null 2>&1; then
-  _disk_info=$(diskutil info / 2>/dev/null)
-  _free_b=$(awk -F'[()]' '/Container Free Space:/{print $2}'  <<<"$_disk_info" | awk '{print $1}')
-  _total_b=$(awk -F'[()]' '/Container Total Space:/{print $2}' <<<"$_disk_info" | awk '{print $1}')
-  if [ -n "${_free_b:-}" ] && [ -n "${_total_b:-}" ]; then
-    free_gb=$(awk -v b="$_free_b"  'BEGIN{printf "%d", (b/1e9)+0.5}')
-    total_gb=$(awk -v b="$_total_b" 'BEGIN{printf "%d", (b/1e9)+0.5}')
-  fi
-fi
-if [ "$free_gb" -eq 0 ] 2>/dev/null; then
-  # Linux / WSL2 / no macOS tooling: df -k reports KiB; ×1024 = bytes → base-10 GB.
-  # `-P` forces POSIX single-line output (GNU df wraps long device names —
-  # LVM/mapper, many WSL2 mounts — onto a second line, which would shift the
-  # columns onto the wrong row). Total is df's own total ($2), NOT used+avail:
-  # ext4 etc. reserve ~5% of blocks, so $3+$4 understates the real device size.
-  read -r free_gb total_gb < <(df -P -k / 2>/dev/null | awk 'NR==2 {
-    printf "%d %d\n", ($4*1024/1e9)+0.5, ($2*1024/1e9)+0.5 }')
-fi
-free_gb=${free_gb:-0}
-total_gb=${total_gb:-0}
+# One shared implementation (_disk_gb in the upkeep lib): macOS-accurate
+# (importantUsage incl. purgeable, base-10 GB, APFS container — not the sealed
+# system snapshot), then diskutil, then `df -P` on Linux/WSL2. See common.sh.
+_DISCOVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=../../upkeep/scripts/lib/common.sh
+. "$_DISCOVER_DIR/../../upkeep/scripts/lib/common.sh"
+read -r free_gb total_gb < <(_disk_gb)
+free_gb=$(_numeric_or "${free_gb:-}" 0)
+total_gb=$(_numeric_or "${total_gb:-}" 0)
 disk_json=$(jq -n \
   --argjson free "$free_gb" \
   --argjson total "$total_gb" \
@@ -133,10 +99,7 @@ ARCH=$(uname -m 2>/dev/null || echo unknown)
 # on OS detection + the test-seam contract (UPKEEP_OS_OVERRIDE /
 # UPKEEP_PKG_MGR_OVERRIDE). Sets OS_TYPE (macos|linux|wsl2|unknown), OS_DISTRO,
 # PKG_MGR. The override forces BOTH the emitted os.type AND which native-discovery
-# function the parallel runner picks.
-_DISCOVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-# shellcheck source=../../upkeep/scripts/lib/common.sh
-. "$_DISCOVER_DIR/../../upkeep/scripts/lib/common.sh"
+# function the parallel runner picks. (The lib is sourced in the disk pre-flight.)
 _detect_os
 
 # ── Skills section ───────────────────────────────────────────────
@@ -178,12 +141,7 @@ discover_skills() {
       branch=""
       [ "$detached" = "false" ] && branch=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null || echo "")
 
-      # A VERSION file that exists but is blank/whitespace makes `tr` succeed
-      # with empty output, so a `||` chain never falls through to plugin.json.
-      # Test for an empty result explicitly instead.
-      current_ver=$(tr -d '[:space:]' < "$path/VERSION" 2>/dev/null)
-      [ -z "$current_ver" ] && current_ver=$(jq -r '.version // empty' "$path/.claude-plugin/plugin.json" 2>/dev/null)
-      current_ver="${current_ver:-}"
+      current_ver=$(_read_repo_version "$path")
 
       behind=0
       subjects='[]'

@@ -941,6 +941,111 @@ if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
 fi
 rm -rf "$V19_CF"
 
+# ── 14. v1.8.4: shared disk reading, refused plans, detached skills, drop expansion ──
+echo
+echo "── 14. disk / refusal / detached / drop (v1.8.4) ──"
+V184=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-v184.XXXXXX")
+mkdir -p "$V184/bin" "$V184/cs" "$V184/xs" "$V184/mkts" "$V184/data"
+echo '{"version":2,"plugins":{}}' > "$V184/installed.json"
+# GNU-style df that WRAPS a long device name onto its own line (LVM/WSL2). The
+# pre-1.8.4 un-`-P` pipelines read NR==2 → the device-name line → free=0.
+# With -P it prints one line per filesystem, as real GNU df does.
+_v184_df() {  # $1 = free KiB
+  cat > "$V184/bin/df" <<DF
+#!/bin/sh
+case " \$* " in
+  *" -P "*) printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/mapper/ubuntu--vg-ubuntu--lv 100000000 10 $1 1%% /\n' ;;
+  *)        printf 'Filesystem 1K-blocks Used Available Use%% Mounted on\n/dev/mapper/ubuntu--vg-ubuntu--lv\n 100000000 10 $1 1%% /\n' ;;
+esac
+DF
+  chmod +x "$V184/bin/df"
+}
+_v184_plan() {
+  PATH="$V184/bin:$PATH" UPKEEP_DISK_SOURCE=df \
+  UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V184/cs" UPKEEP_CODEX_SKILLS="$V184/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V184/installed.json" UPKEEP_PLUGIN_MARKETPLACES="$V184/mkts" \
+  UPKEEP_DATA_DIR="$V184/data" UPKEEP_CONFIG="$V184/none.json" \
+  bash "$SCRIPTS/update.sh" plan all 2>/dev/null
+}
+
+# #3: wrapped df output no longer reads as 0 GB free (50 GB stub)
+_v184_df 50000000
+V184_DISC=$(PATH="$V184/bin:$PATH" UPKEEP_DISK_SOURCE=df UPKEEP_OS_OVERRIDE=linux UPKEEP_PKG_MGR_OVERRIDE=unknown \
+  UPKEEP_CLAUDE_SKILLS="$V184/cs" UPKEEP_CODEX_SKILLS="$V184/xs" \
+  UPKEEP_INSTALLED_PLUGINS="$V184/installed.json" UPKEEP_PLUGIN_MARKETPLACES="$V184/mkts" \
+  UPKEEP_CONFIG="$V184/none.json" bash "$SCRIPTS/discover.sh" 2>/dev/null)
+_assert_eq "disk: wrapped GNU df reads real free space (#3)" "$(echo "$V184_DISC" | jq '.disk.free_gb')" "51"
+_assert_eq "disk: clean.sh disk prints free + total via df -P" \
+  "$(PATH="$V184/bin:$PATH" UPKEEP_DISK_SOURCE=df bash "$REPO_ROOT/upkeep/skills/upkeep/scripts/clean.sh" disk)" "51 102"
+_assert_eq "plan: healthy disk → refused=false" "$(_v184_plan | jq '.refused')" "false"
+
+# #4: a disk-refuse plan is flagged, never mistaken for "nothing to do"
+_v184_df 1000000   # ~1 GB free
+V184_REF=$(_v184_plan)
+_assert_eq "plan: low disk → refused=true (#4)" "$(echo "$V184_REF" | jq '.refused')" "true"
+_assert_eq "plan: low disk → needs_approval=false" "$(echo "$V184_REF" | jq '.needs_approval')" "false"
+_assert_eq "plan: low disk carries the disk-refuse warning" \
+  "$(echo "$V184_REF" | jq '[.warnings[]|select(.code=="disk-refuse")]|length')" "1"
+_assert_eq "SKILL.md: refusal step precedes nothing-to-do step" \
+  "$(awk '/^#### 0\. Refusal/{r=NR} /^#### C\. Nothing-to-do/{c=NR} END{print (r>0 && c>r) ? "ok" : "bad"}' "$REPO_ROOT/upkeep/skills/update/SKILL.md")" "ok"
+
+# #9: one predicate; a detached repo is never counted and is surfaced
+V184_SD=$(jq -n '{schema_version:"1", os:{type:"linux",arch:"x86_64"},
+  skills:{git_repos:[
+    {name:"ok",  path:"/x/ok",  branch:"main", remote_url:"u", untrusted:false, detached:false, commits_behind:2, dirty_files:[]},
+    {name:"det", path:"/x/det", branch:"",     remote_url:"u", untrusted:false, detached:true,  commits_behind:3, dirty_files:[]}],
+    managed:[], info:{}, errors:[]},
+  native:{system:{manager:"apt",installed:true,upgradable:[],count:0,requires_sudo:true},
+          snap:{installed:false,refreshable:[]}, flatpak:{installed:false,updatable:[]},
+          windows:{wsl2:false,managers:[]}, errors:[]},
+  language:{npm:{installed:false,outdated:[]}, pipx:{installed:false,tools:[],outdated_count:0},
+            gems:{installed:false,system_ruby:false,outdated:[]}, uv:{installed:false}, bun:{installed:false},
+            deno:{installed:false}, rustup:{installed:false}, cargo:{installed:false}, mise:{installed:false}, errors:[]},
+  shadow:{duplicates:[],broken_symlinks:[],errors:[]},
+  disk:{free_gb:100,warn_threshold_gb:10,refuse_threshold_gb:5}}')
+V184_SP=$(echo "$V184_SD" | bash "$SCRIPTS/synthesize.sh" "$REPO_ROOT/upkeep/skills/update/compatibility.json" 2>/dev/null)
+_assert_eq "synthesize: detached repo excluded from skills group count (#9)" \
+  "$(echo "$V184_SP" | jq '[.ordered_groups[]|select(.name=="skills")|.item_count]|first')" "1"
+_assert_eq "synthesize: category_counts.skills agrees with the group" \
+  "$(echo "$V184_SP" | jq '.summary.category_counts.skills')" "1"
+_assert_eq "synthesize: detached repo surfaced as skill-detached step" \
+  "$(echo "$V184_SP" | jq '[.manual_steps[]|select(.kind=="skill-detached")]|length')" "1"
+_assert_eq "synthesize: skills predicate defined once" \
+  "$(grep -c 'commits_behind // 0) > 0' "$SCRIPTS/synthesize.sh")" "1"
+
+# #10: --drop=<group> expands from the plan's own tools list, not a hardcoded map.
+# A plan whose "language" group lists only npm: dropping "language" must skip npm
+# (proved by npm never being invoked — a PATH stub records any call).
+V184_LOG="$V184/npm.calls"
+printf '#!/bin/sh\necho "$*" >> "%s"\nexit 0\n' "$V184_LOG" > "$V184/bin/npm"; chmod +x "$V184/bin/npm"
+jq -n '{schema_version:"1", mode:"all", created_at:"2026-01-01T00:00:00Z",
+  plan:{schema_version:"1", summary:{category_counts:{},eta_minutes_p50:1,eta_minutes_p90:1,disk_free_gb:100},
+        warnings:[], manual_steps:[], tool_specs:{}, risk_categories:[],
+        ordered_groups:[{name:"language",parallelism:"parallel",tools:["npm"],item_count:1}]},
+  discovery:{schema_version:"1", os:{type:"linux",arch:"x86_64"},
+    skills:{git_repos:[],managed:[],info:{},errors:[]},
+    native:{errors:[]},
+    language:{npm:{installed:true,outdated:[{name:"left-pad",current:"1.0.0",latest:"1.1.0"}]},errors:[]},
+    shadow:{duplicates:[],broken_symlinks:[],errors:[]},
+    disk:{free_gb:100,warn_threshold_gb:10,refuse_threshold_gb:5}}}' > "$V184/plan.tmpl"
+# apply consumes (deletes) its plan file, so each run gets a fresh copy.
+cp "$V184/plan.tmpl" "$V184/plan.json"
+PATH="$V184/bin:$PATH" UPKEEP_DATA_DIR="$V184/data" UPKEEP_CLAUDE_BIN="$V184/no-claude" \
+  bash "$SCRIPTS/update.sh" apply "$V184/plan.json" --drop=language >/dev/null 2>&1
+_assert_eq "apply: --drop=language (from plan tools) never runs npm (#10)" \
+  "$([ -s "$V184_LOG" ] && echo ran || echo skipped)" "skipped"
+# Control: the same plan WITHOUT the drop does invoke npm (else the test above
+# would pass vacuously).
+cp "$V184/plan.tmpl" "$V184/plan.json"
+PATH="$V184/bin:$PATH" UPKEEP_DATA_DIR="$V184/data" UPKEEP_CLAUDE_BIN="$V184/no-claude" \
+  bash "$SCRIPTS/update.sh" apply "$V184/plan.json" >/dev/null 2>&1
+_assert_eq "apply: control — without --drop, npm is invoked" \
+  "$([ -s "$V184_LOG" ] && echo ran || echo skipped)" "ran"
+_assert_eq "apply: drop expansion no longer hardcodes group names" \
+  "$(grep -c 'language)  dropped=' "$SCRIPTS/update.sh")" "0"
+rm -rf "$V184"
+
 # ── Summary ────────────────────────────────────────────────────
 echo
 echo "════════════════════════════════════════"

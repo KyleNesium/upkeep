@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.4] - 2026-10-27
+
+Closes the last update-side findings deferred from the 1.8.1 ship review.
+
+### Fixed
+
+- **HIGH — `/upkeep:update` refused to run on many Linux/WSL2 machines.** The
+  SKILL.md disk pre-flights used `df -k` without `-P`; GNU df wraps a long
+  device name (LVM `/dev/mapper/…`, many WSL2 mounts) onto its own line, so
+  free space read as 0 GB and the update refused to start. There were also
+  four separate copies of the disk-reading chain. They are now one helper,
+  `_disk_gb` in `lib/common.sh` (`df -P` on Linux), exposed as
+  `clean.sh disk`. `discover.sh`, the update and cleandeep pre-flights, and
+  the umbrella skill's before/after reading all use it.
+- **HIGH — a disk-space refusal was reported as "Everything is up to date."**
+  A refused plan has no groups, so the skill's nothing-to-do path rendered it
+  as success. `update.sh plan` now emits `refused: true`, and the update skill
+  checks it first and renders the refusal.
+- **Skill counts and apply now share one definition of "pullable skill
+  repo".** The predicate was copy-pasted three times in `synthesize.sh` and
+  lacked the `detached` check that apply uses. Discovery happens to report
+  `commits_behind: 0` for detached repos, so counts didn't diverge in
+  practice, but the copies could drift. It is now one jq definition. Detached
+  repos also get a `skill-detached` manual step instead of being dropped
+  silently.
+- **`--drop=<group>` expands from the plan's own `ordered_groups[].tools`**
+  instead of a hardcoded group→tool map in `update.sh`, so a reshaped group
+  can't silently stop being droppable. Tool ids are still allowlisted.
+- **Blank `VERSION` file no longer shadows `plugin.json` after a skills pull.**
+  `update.sh` still had the `tr … || …` chain fixed in `discover.sh` in 1.8.1.
+  Both now use `_read_repo_version`.
+- **Skill descriptions no longer advertise features that don't exist.** The
+  umbrella skill's description claimed systemd journal vacuuming, orphaned
+  kernels, and a WSL2 Windows-cache audit. Its final-report template listed
+  phases the engine doesn't have; it is now driven by the manifest's
+  categories. The unused `Bash(journalctl *)` permission is removed. The
+  umbrella and update skills now pre-approve the `clean.sh` calls they make.
+
+### Not changed (by decision)
+
+- **Purgeable space still counts toward the 5 GB update refuse threshold.**
+  The 1.8.1 review flagged that macOS's "available for important usage"
+  figure includes purgeable space. Apple documents that figure as space the
+  system will make available for important writes, and package upgrades
+  qualify. Switching to strictly-free space would refuse updates on Macs
+  that macOS itself reports as having plenty of room.
+
 ## [1.8.3] - 2026-10-27
 
 ### Added

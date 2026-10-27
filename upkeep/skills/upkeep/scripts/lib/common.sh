@@ -166,14 +166,20 @@ _disk_gb() {
     info=$(diskutil info / 2>/dev/null)
     free_b=$(printf '%s\n' "$info" | awk -F'[()]' '/Container Free Space:/{print $2}' | awk '{print $1}')
     total_b=$(printf '%s\n' "$info" | awk -F'[()]' '/Container Total Space:/{print $2}' | awk '{print $1}')
-    case "$free_b$total_b" in ''|*[!0-9]*) free_b=""; total_b="" ;; esac
+    # Validate EACH value: a joined check would pass "200" + "" (missing
+    # total line) and report a 0 GB total.
+    case "$free_b" in ''|*[!0-9]*) free_b="" ;; esac
+    case "$total_b" in ''|*[!0-9]*) free_b="" ;; esac
   fi
   if [ -n "$free_b" ]; then
     awk -v f="$free_b" -v t="$total_b" 'BEGIN{printf "%d %d\n", (f/1e9)+0.5, (t/1e9)+0.5}'
     return 0
   fi
-  df -P -k / 2>/dev/null | awk 'NR==2 && $4 ~ /^[0-9]+$/ {
-    printf "%d %d\n", ($4*1024/1e9)+0.5, ($2*1024/1e9)+0.5; ok=1 }
+  # Columns counted from the RIGHT (mount "/" is $NF, capacity $(NF-1),
+  # available $(NF-2), size $(NF-4)) so a device name containing spaces can't
+  # shift them — counting from the left read the size column as free space.
+  df -P -k / 2>/dev/null | awk 'NR==2 && NF >= 6 && $(NF-2) ~ /^[0-9]+$/ && $(NF-4) ~ /^[0-9]+$/ {
+    printf "%d %d\n", ($(NF-2)*1024/1e9)+0.5, ($(NF-4)*1024/1e9)+0.5; ok=1 }
     END { if (!ok) print "0 0" }'
 }
 

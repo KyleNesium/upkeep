@@ -979,6 +979,15 @@ _assert_eq "disk: wrapped GNU df reads real free space (#3)" "$(echo "$V184_DISC
 _assert_eq "disk: clean.sh disk prints free + total via df -P" \
   "$(PATH="$V184/bin:$PATH" UPKEEP_DISK_SOURCE=df bash "$REPO_ROOT/upkeep/skills/upkeep/scripts/clean.sh" disk)" "51 102"
 _assert_eq "plan: healthy disk → refused=false" "$(_v184_plan | jq '.refused')" "false"
+# Device name containing spaces (e.g. a WSL2 drvfs mount): columns are counted
+# from the right, so free/total aren't shifted onto the size column.
+cat > "$V184/bin/df" <<'DF'
+#!/bin/sh
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nC:\\ My Drive 100000000 10 50000000 1%% /\n'
+DF
+chmod +x "$V184/bin/df"
+_assert_eq "disk: spaced device name still reads free + total" \
+  "$(PATH="$V184/bin:$PATH" UPKEEP_DISK_SOURCE=df bash "$REPO_ROOT/upkeep/skills/upkeep/scripts/clean.sh" disk)" "51 102"
 
 # #4: a disk-refuse plan is flagged, never mistaken for "nothing to do"
 _v184_df 1000000   # ~1 GB free

@@ -364,12 +364,14 @@ _cmd_apply() {
     # and some groups are COMPOSITE (language → npm,pipx,…). Expand each dropped
     # group name to the member tool ids the PLAN itself lists, so a group
     # synthesize.sh adds or reshapes can never drift out of sync with a
-    # hardcoded map here. A plain tool id passes through as itself.
+    # hardcoded map here. The dropped id itself is ALWAYS kept too (never
+    # replaced by the expansion), so even a plan whose group lists unexpected
+    # tools can't make dropping "skills" or "brew" a no-op.
     local _expanded
     for t in "${_drop_arr[@]}"; do
       [ -n "$t" ] || continue
       _expanded=$(jq -r --arg g "$t" \
-        '[.ordered_groups[]? | select(.name == $g) | .tools[]?] | if length > 0 then .[] else $g end' \
+        '$g, (.ordered_groups[]? | select(.name == $g) | .tools[]? | strings)' \
         <<<"$plan" 2>/dev/null || printf '%s\n' "$t")
       while IFS= read -r _tid; do
         # Allowlist still applies: the plan is data, and only known tool ids

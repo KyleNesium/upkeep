@@ -18,7 +18,9 @@ Closes the last update-side findings deferred from the 1.8.1 ship review.
   four separate copies of the disk-reading chain. They are now one helper,
   `_disk_gb` in `lib/common.sh` (`df -P` on Linux), exposed as
   `clean.sh disk`. `discover.sh`, the update and cleandeep pre-flights, and
-  the umbrella skill's before/after reading all use it.
+  the umbrella skill's before/after reading all use it. Its `df` parsing
+  counts columns from the right, so a device name containing spaces can't
+  shift them, and each `diskutil` value is validated on its own.
 - **HIGH — a disk-space refusal was reported as "Everything is up to date."**
   A refused plan has no groups, so the skill's nothing-to-do path rendered it
   as success. `update.sh plan` now emits `refused: true`, and the update skill
@@ -32,7 +34,9 @@ Closes the last update-side findings deferred from the 1.8.1 ship review.
   silently.
 - **`--drop=<group>` expands from the plan's own `ordered_groups[].tools`**
   instead of a hardcoded group→tool map in `update.sh`, so a reshaped group
-  can't silently stop being droppable. Tool ids are still allowlisted.
+  can't silently stop being droppable. The dropped id itself is always kept,
+  so even a hand-edited plan can't turn dropping `skills` or `brew` into a
+  no-op. Tool ids are still allowlisted.
 - **Blank `VERSION` file no longer shadows `plugin.json` after a skills pull.**
   `update.sh` still had the `tr … || …` chain fixed in `discover.sh` in 1.8.1.
   Both now use `_read_repo_version`.

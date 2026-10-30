@@ -154,6 +154,14 @@ MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
   + [ ($d.skills.git_repos // [])[] | select((.dirty_files // []) | length > 0) |
     {kind: "skill-dirty",
      message: ("Skill " + .name + " has uncommitted changes; commit or stash before next /upkeep:update")} ]
+  # Detached-HEAD skill repos → discovery cannot tell whether they are
+  # behind (it only fetches on a branch), and apply skips them. Say so instead
+  # of silently leaving them out of the plan. (No apostrophes in this block:
+  # it sits inside a single-quoted shell string.)
+  + [ ($d.skills.git_repos // [])[]
+      | select(.untrusted == false and (.detached // false) == true) |
+    {kind: "skill-detached",
+     message: ("Skill " + .name + " is on a detached HEAD, so /upkeep:update cannot check or pull it; check out a branch to include it")} ]
   # Major macOS upgrades → never auto-installed (v1.8.3). softwareupdate marks
   # them Recommended, so they would otherwise ride along with point releases.
   + [ ($d.native.softwareupdate.major_upgrades // [])[] |
@@ -203,10 +211,25 @@ MANUAL_STEPS=$(jq -nc --argjson d "$DISCOVERY" '
       else [] end )
 ')
 
+# ── Shared jq predicate: skill repos apply will actually pull ────
+# ONE definition for ordered_groups, the ETA, and category_counts so the gate's
+# counts can never diverge from what apply does. Mirrors update.sh's skills
+# loop, which skips untrusted, dirty, AND detached-HEAD repos — the copies this
+# replaces forgot `detached`, so a detached repo inflated counts/ETA but was
+# then skipped at apply.
+_JQ_DEFS='
+def skills_actionable:
+  (.skills.git_repos // [])
+  | map(select(.untrusted == false
+               and (.detached // false) == false
+               and (.commits_behind // 0) > 0
+               and ((.dirty_files // []) | length) == 0));
+'
+
 # ── Build ordered_groups[] ───────────────────────────────────────
 # Fixed order: skills → brew → language (parallel) → stores
-ORDERED_GROUPS=$(jq -nc --argjson d "$DISCOVERY" '
-  ($d.skills.git_repos // [] | map(select(.untrusted == false and (.commits_behind // 0) > 0 and ((.dirty_files // []) | length) == 0))) as $skills_actionable |
+ORDERED_GROUPS=$(jq -nc --argjson d "$DISCOVERY" "$_JQ_DEFS"'
+  ($d | skills_actionable) as $skills_actionable |
   ($d.skills.managed // []) as $plugins |
   ($d.native.brew.outdated // []) as $brew |
   ($d.language.npm.outdated // []) as $npm |
@@ -316,15 +339,13 @@ TOOL_SPECS=$(jq -nc --argjson d "$DISCOVERY" '
 # skills 3, mas 30, macOS 300.
 ETA_JSON=$(jq -nc \
   --argjson d "$DISCOVERY" \
-  --argjson hist "$HISTORY" '
+  --argjson hist "$HISTORY" "$_JQ_DEFS"'
   ($d.native.brew.outdated // [] | length) as $brew_n |
   ($d.language.npm.outdated // [] | length) as $npm_n |
   ($d.language.pipx.tools   // [] | length) as $pipx_n |
   ($d.language.gems.outdated // [] | length) as $gems_n |
-  # Count the SAME actionable set apply will pull (trusted, behind, clean) — the
-  # ordered_groups/ category_counts predicate. The old `commits_behind>0`-only
-  # count padded the ETA with untrusted and dirty repos that apply skips.
-  ($d.skills.git_repos // [] | map(select(.untrusted == false and (.commits_behind // 0) > 0 and ((.dirty_files // []) | length) == 0)) | length) as $skills_n |
+  # Count the SAME actionable set apply will pull (skills_actionable above).
+  ($d | skills_actionable | length) as $skills_n |
   ($d.skills.managed // [] | length) as $plugins_n |
   ($d.native.mas.outdated   // [] | length) as $mas_n |
   ($d.native.softwareupdate.updates // [] | length) as $macos_n |
@@ -347,9 +368,9 @@ ETA_JSON=$(jq -nc \
 # ── Build summary{} ──────────────────────────────────────────────
 SUMMARY=$(jq -nc \
   --argjson d "$DISCOVERY" \
-  --argjson eta "$ETA_JSON" '
+  --argjson eta "$ETA_JSON" "$_JQ_DEFS"'
   {category_counts: {
-    skills: ($d.skills.git_repos // [] | map(select(.untrusted == false and (.commits_behind // 0) > 0 and ((.dirty_files // []) | length) == 0)) | length),
+    skills: ($d | skills_actionable | length),
     plugins:($d.skills.managed // [] | length),
     brew:   ($d.native.brew.outdated // [] | length),
     npm:    ($d.language.npm.outdated // [] | length),

@@ -127,6 +127,62 @@ _numeric_or() {
   esac
 }
 
+# Version of a skill/plugin repo checkout: VERSION file first, then
+# .claude-plugin/plugin.json's "version". NOT a `tr … || jq …` chain: a VERSION
+# file that exists but is blank makes `tr` succeed with empty output, so the
+# `||` never falls through and a valid plugin.json is shadowed. Echoes empty
+# when neither source has a version.
+_read_repo_version() {
+  local dir="$1" v=""
+  [ -f "$dir/VERSION" ] && v=$(tr -d '[:space:]' < "$dir/VERSION" 2>/dev/null)
+  [ -z "$v" ] && v=$(jq -r '.version // empty' "$dir/.claude-plugin/plugin.json" 2>/dev/null)
+  printf '%s' "$v"
+}
+
+# Disk space on / the way the OS reports it, as "<free_gb> <total_gb>" in
+# base-10 GB (echoes "0 0" if every source fails). The ONE implementation —
+# discover.sh and both SKILL.md pre-flights (via `clean.sh disk`) call this.
+#   macOS: URLResourceValues importantUsage/total capacity via osascript — what
+#          Finder and System Settings show. "free" includes purgeable space,
+#          which Apple documents as available for important writes; df and
+#          diskutil omit it and under-report by ~100+ GB. A naive `df /` also
+#          sees only the sealed system snapshot, not the APFS container.
+#   then diskutil (strictly-free container space), then
+#   Linux/WSL2: `df -P -k /` — `-P` is required: GNU df wraps long device
+#          names (LVM/mapper, many WSL2 mounts) onto a second line, which
+#          shifts the columns and made free read as 0 → update refused to run.
+#          Total is df's own size column, not used+avail (ext4 reserves ~5%).
+# UPKEEP_DISK_SOURCE=df forces the df path (test seam for the Linux branch).
+_disk_gb() {
+  local free_b="" total_b="" info
+  if [ "${UPKEEP_DISK_SOURCE:-}" != "df" ] && command -v osascript >/dev/null 2>&1; then
+    read -r free_b total_b < <(osascript -l JavaScript -e \
+'ObjC.import("Foundation");function c(k){var u=$.NSURL.fileURLWithPath("/"),v=Ref(),e=Ref();return u.getResourceValueForKeyError(v,k,e)?v[0].longLongValue:-1;}c($.NSURLVolumeAvailableCapacityForImportantUsageKey)+" "+c($.NSURLVolumeTotalCapacityKey)' 2>/dev/null)
+    if ! { [ "${free_b:-0}" -gt 0 ] 2>/dev/null && [ "${total_b:-0}" -gt 0 ] 2>/dev/null; }; then
+      free_b=""; total_b=""
+    fi
+  fi
+  if [ -z "$free_b" ] && [ "${UPKEEP_DISK_SOURCE:-}" != "df" ] && command -v diskutil >/dev/null 2>&1; then
+    info=$(diskutil info / 2>/dev/null)
+    free_b=$(printf '%s\n' "$info" | awk -F'[()]' '/Container Free Space:/{print $2}' | awk '{print $1}')
+    total_b=$(printf '%s\n' "$info" | awk -F'[()]' '/Container Total Space:/{print $2}' | awk '{print $1}')
+    # Validate EACH value: a joined check would pass "200" + "" (missing
+    # total line) and report a 0 GB total.
+    case "$free_b" in ''|*[!0-9]*) free_b="" ;; esac
+    case "$total_b" in ''|*[!0-9]*) free_b="" ;; esac
+  fi
+  if [ -n "$free_b" ]; then
+    awk -v f="$free_b" -v t="$total_b" 'BEGIN{printf "%d %d\n", (f/1e9)+0.5, (t/1e9)+0.5}'
+    return 0
+  fi
+  # Columns counted from the RIGHT (mount "/" is $NF, capacity $(NF-1),
+  # available $(NF-2), size $(NF-4)) so a device name containing spaces can't
+  # shift them — counting from the left read the size column as free space.
+  df -P -k / 2>/dev/null | awk 'NR==2 && NF >= 6 && $(NF-2) ~ /^[0-9]+$/ && $(NF-4) ~ /^[0-9]+$/ {
+    printf "%d %d\n", ($(NF-2)*1024/1e9)+0.5, ($(NF-4)*1024/1e9)+0.5; ok=1 }
+    END { if (!ok) print "0 0" }'
+}
+
 # Is canonical path $1 strictly under root $2? Trailing-slash discipline
 # prevents `/a/b-evil` from matching root `/a/b`. Equal paths are NOT
 # "under" (you can never delete a SAFE_ROOT itself).

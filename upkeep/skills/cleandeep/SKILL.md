@@ -44,14 +44,10 @@ The engine lives in the umbrella skill's `scripts/` dir;
 Disk pre-flight (sub-second), then discover:
 
 ```bash
-# Base-10 GB matching macOS Settings → Storage (free includes purgeable, which
-# df/diskutil omit). osascript on every Mac; diskutil then df fallbacks.
-if command -v osascript >/dev/null 2>&1; then
-  FREE_GB=$(osascript -l JavaScript -e 'ObjC.import("Foundation");var u=$.NSURL.fileURLWithPath("/"),v=Ref(),e=Ref();u.getResourceValueForKeyError(v,$.NSURLVolumeAvailableCapacityForImportantUsageKey,e)?Math.round(v[0].longLongValue/1e9):""' 2>/dev/null)
-fi
-[ -z "${FREE_GB:-}" ] && command -v diskutil >/dev/null 2>&1 && FREE_GB=$(diskutil info / 2>/dev/null | awk -F'[()]' '/Container Free Space:/{print $2}' | awk '{printf "%d", ($1/1e9)+0.5}')
-[ -z "${FREE_GB:-}" ] && FREE_GB=$(df -k / 2>/dev/null | awk 'NR==2{printf "%d", ($4*1024/1e9)+0.5}')
-[ -n "$FREE_GB" ] && [ "$FREE_GB" -lt 2 ] && echo "⚠ Only ${FREE_GB}GB free on /."
+# Shared disk reading: base-10 GB matching macOS Settings → Storage; `df -P`
+# on Linux/WSL2. Prints "<free_gb> <total_gb>".
+read -r FREE_GB _ < <(bash "${CLAUDE_SKILL_DIR}/../upkeep/scripts/clean.sh" disk 2>/dev/null)
+[ -n "${FREE_GB:-}" ] && [ "$FREE_GB" -lt 2 ] && echo "⚠ Only ${FREE_GB}GB free on /."
 bash "${CLAUDE_SKILL_DIR}/../upkeep/scripts/clean.sh" discover deep
 ```
 

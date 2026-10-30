@@ -133,6 +133,17 @@ _assert_verdict "launchagent non-plist dir"  "$HOME/Library/LaunchAgents/somedir
 _assert_verdict "mobilesync parent (Backup)" "$HOME/Library/Application Support/MobileSync/Backup" mobilesync_rm REFUSE
 _assert_verdict "unknown action"             "$HOME/Library/Caches/com.example.foo" frobnicate REFUSE unknown-action
 
+echo "── Shared helpers: _read_repo_version (#7) ──"
+RV=$(mktemp -d "${TMPDIR:-/tmp}/upkeep-clean-rv.XXXXXX")
+mkdir -p "$RV/.claude-plugin"
+printf '  \n' > "$RV/VERSION"; echo '{"version":"2.3.4"}' > "$RV/.claude-plugin/plugin.json"
+_test "repo version: blank VERSION falls through to plugin.json" "$([ "$(_read_repo_version "$RV")" = 2.3.4 ] && echo true || echo false)" "$(_read_repo_version "$RV")" "2.3.4"
+echo "1.0.0" > "$RV/VERSION"
+_test "repo version: VERSION wins when present" "$([ "$(_read_repo_version "$RV")" = 1.0.0 ] && echo true || echo false)" "$(_read_repo_version "$RV")" "1.0.0"
+rm -f "$RV/VERSION" "$RV/.claude-plugin/plugin.json"
+_test "repo version: neither source → empty" "$([ -z "$(_read_repo_version "$RV")" ] && echo true || echo false)" "$(_read_repo_version "$RV")" "(empty)"
+rm -rf -- "$RV"
+
 echo "── Shared helpers ──"
 LONGTEXT=$(printf 'x%.0s' $(seq 1 400))
 SANITIZED=$(_sanitize_text "$LONGTEXT")

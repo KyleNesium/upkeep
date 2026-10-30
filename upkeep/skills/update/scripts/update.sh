@@ -31,6 +31,9 @@ DATA_DIR="${UPKEEP_DATA_DIR:-$HOME/.claude/data}"
 # apply phase refuses any marketplace_path that doesn't resolve under it
 # (mirrors the skills-root containment check). Test seam overrides it.
 MARKETPLACES_ROOT="${UPKEEP_PLUGIN_MARKETPLACES:-$HOME/.claude/plugins/marketplaces}"
+# Shared lib (pure functions, no side effects on source): _read_repo_version.
+# shellcheck source=../../upkeep/scripts/lib/common.sh
+. "$SCRIPT_DIR/../../upkeep/scripts/lib/common.sh"
 
 # ── Common helpers ───────────────────────────────────────────────
 _require_jq() {
@@ -239,6 +242,13 @@ _cmd_plan() {
     needs_approval=false
   fi
 
+  # A disk-refuse plan ALSO has empty ordered_groups, so without an explicit
+  # flag SKILL.md's nothing-to-do path rendered it as "Everything is up to
+  # date." — masking the refusal as success. Emit `refused` so the skill can
+  # branch on it before any other render path.
+  local refused
+  refused=$(jq '[.warnings[]? | select(.code == "disk-refuse")] | length > 0' <<<"$plan")
+
   # SKILL.md-facing summary. Compact — render hints, not full plan.
   # v1.5.1 (codex P2): every string in the emitted JSON is run through
   # one final sanitization pass — strip control bytes (incl. ANSI
@@ -257,11 +267,13 @@ _cmd_plan() {
     --argjson plan "$plan" \
     --argjson untrusted "$untrusted" \
     --argjson needs_approval "$needs_approval" \
+    --argjson refused "$refused" \
     --arg mode "$mode" \
     '{
       mode: $mode,
       plan_file: $plan_file,
       needs_approval: $needs_approval,
+      refused: $refused,
       summary: $plan.summary,
       warnings: $plan.warnings,
       manual_steps: $plan.manual_steps,
@@ -348,18 +360,27 @@ _cmd_apply() {
     local _drop_arr=()
     read -r -a _drop_arr <<<"$drop_csv"
     IFS="$_saved_ifs"
+    # The gate's "Drop categories" multi-select is keyed on ordered_groups[].name,
+    # and some groups are COMPOSITE (language → npm,pipx,…). Expand each dropped
+    # group name to the member tool ids the PLAN itself lists, so a group
+    # synthesize.sh adds or reshapes can never drift out of sync with a
+    # hardcoded map here. The dropped id itself is ALWAYS kept too (never
+    # replaced by the expansion), so even a plan whose group lists unexpected
+    # tools can't make dropping "skills" or "brew" a no-op.
+    local _expanded
     for t in "${_drop_arr[@]}"; do
-      case "$t" in
-        skills|plugins|brew|npm|pipx|gems|uv|bun|mas|macos|snap|flatpak) dropped="${dropped}${t}," ;;
-        # The gate's "Drop categories" multi-select is keyed on ordered_groups[].name.
-        # skills/plugins/brew are already 1:1 tool ids (above); these three are
-        # COMPOSITE group names — expand them to their member tool ids so dropping
-        # a group actually excludes its tools instead of silently no-op'ing.
-        language)  dropped="${dropped}npm,pipx,gems,uv,bun," ;;
-        stores)    dropped="${dropped}mas,macos," ;;
-        user-apps) dropped="${dropped}snap,flatpak," ;;
-        *) ;;  # silently ignore unknown ids (e.g. "sys" — apt/dnf/pacman are never auto-applied)
-      esac
+      [ -n "$t" ] || continue
+      _expanded=$(jq -r --arg g "$t" \
+        '$g, (.ordered_groups[]? | select(.name == $g) | .tools[]? | strings)' \
+        <<<"$plan" 2>/dev/null || printf '%s\n' "$t")
+      while IFS= read -r _tid; do
+        # Allowlist still applies: the plan is data, and only known tool ids
+        # may enter the dropped set (unknown ids like "sys" are ignored —
+        # apt/dnf/pacman are never auto-applied anyway).
+        case "$_tid" in
+          skills|plugins|brew|npm|pipx|gems|uv|bun|mas|macos|snap|flatpak) dropped="${dropped}${_tid}," ;;
+        esac
+      done <<<"$_expanded"
     done
   fi
   # Membership helper: returns 0 if the tool is in the dropped set.
@@ -453,10 +474,8 @@ _cmd_apply() {
     # After "--" git treats it strictly as a refspec (invalid → harmless failure).
     if GIT_TERMINAL_PROMPT=0 git -C "$repo_path" pull --ff-only origin -- "$branch" >> "$skills_log" 2>&1; then
       local new_version
-      new_version=$(tr -d '[:space:]' < "$repo_path/VERSION" 2>/dev/null \
-        || grep -m1 '"version"' "$repo_path/.claude-plugin/plugin.json" 2>/dev/null \
-           | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
-        || echo "?")
+      new_version=$(_read_repo_version "$repo_path")
+      new_version=${new_version:-?}
       echo "$repo_name $current_version → $new_version" >> "$upgraded_tools_file"
       skills_applied=$((skills_applied+1))
     else

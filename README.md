@@ -358,6 +358,7 @@ Full notes: [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Highlights |
 |---------|-----------|
+| 1.8.4 | Update no longer refuses on Linux/WSL2 with long device names (one shared `df -P` disk reading); disk-space refusals no longer reported as "up to date"; `--drop` expands from the plan; skill descriptions match the code |
 | 1.8.3 | Plugin updates finish headlessly via `claude plugin update`; major macOS upgrades never auto-installed; `upkeep-config.json`; system-Ruby gems skipped by default; fixes `/upkeep:update skills` crash (broken since 1.6) |
 | 1.8.2 | Validator refuses symlinked ancestors; Electron running-app check rewritten; non-numeric env overrides fall back to safe defaults |
 | 1.8.1 | Audit-driven hardening: symlinked-target refusal, `--drop` fix, fail-safe disk guard, git argument-injection fix |
@@ -379,7 +380,7 @@ upkeep runs locally and modifies your filesystem. See [SECURITY.md](SECURITY.md)
 
 ## Test Coverage
 
-**262 tests** across 2 automated test files (129 `clean` + 133 `update`). Run with
+**280 tests** across 2 automated test files (132 `clean` + 148 `update`). Run with
 `bash tests/test-clean-skill.sh` and `bash tests/test-update-skill.sh` (both
 pass under `/bin/bash`, macOS 3.2.57). The `clean` suite includes a pre-merge
 security-regression set (shell-config command-injection, future-dated manifest
@@ -406,10 +407,10 @@ out of LLM prose into a tested, hardcoded path-safety validator.
 | Shell-config editor | ~8 | dead source/path-alias lines removed; conditional / `&&` / live lines kept; cp backup created; result passes `zsh -n` (edit + validate + auto-restore) |
 | Eager-discovery prewarm | ~9 | prewarm writes a stable manifest; discover reuses within TTL; `UPKEEP_NO_REUSE` + stale-TTL + corrupt `created_at` force a fresh scan; hook no-op when disabled; plugin.json/hooks.json valid |
 | Wrapper + umbrella structure | ~22 | All three wrappers reference the engine, version 1.8.0, no broad `Bash(rm *)`/`Edit` grants; audit never applies; quick/deep two-turn; umbrella routes to clean.sh with the self-update gate preceding cleanup execution |
-| Shared helpers | ~15 | `_sanitize_text` caps free-text/strips control chars (never paths); `_detect_os` override seam; `_clean_lexnorm` (`//`, `.`, `..`, relative → empty); `_numeric_or` (non-numeric/negative/overflow → default, no octal, epoch passes) |
+| Shared helpers | ~18 | `_sanitize_text` caps free-text/strips control chars (never paths); `_detect_os` override seam; `_clean_lexnorm` (`//`, `.`, `..`, relative → empty); `_numeric_or` (non-numeric/negative/overflow → default, no octal, epoch passes); `_read_repo_version` (blank `VERSION` falls through to `plugin.json`, `VERSION` wins, neither → empty) |
 | Running-app detection | 9 | Electron guard via `_clean_app_running` on a fixture process list: helper / main binary / >15-char / case-insensitive matches; vendor dir → app name (BraveSoftware); `Code` ≠ `codex`/`PasscodeSettings`; regex chars literal; real `ps` never self-matches |
 
-### `update` skill (v1.1–v1.8.3) — `tests/test-update-skill.sh`
+### `update` skill (v1.1–v1.8.4) — `tests/test-update-skill.sh`
 
 | Area | Tests | What's covered |
 |------|-------|----------------|
@@ -426,6 +427,7 @@ out of LLM prose into a tested, hardcoded path-safety validator.
 | Headless plugin update (v1.8.3) | 8 | Apply runs `claude plugin update <name>@<marketplace> --scope user --json` (exact argv asserted via a stub CLI); success → `updated` + relaunch-only note; CLI failure → `failed` + `/plugin update` hand-off kept; no CLI → `no-cli` + hand-off; malformed plugin id (`;`, spaces) refused and never passed to the CLI |
 | macOS updates + PATH shadows (v1.8.3) | 6 | Stub `softwareupdate`/`sw_vers`: bare labels, Recommended major upgrade excluded into `major_upgrades[]`, `restart_required` ignores it, `macos-major` manual step; apply runs one `softwareupdate -i <label>` per safe label and refuses `-ia` / metacharacter labels; PATH dir listed twice → one shadow row (macOS + Homebrew only) |
 | Config, system Ruby, dirty (v1.8.3) | 9 | System-Ruby gems skipped by default (no group/count/warning, `system-ruby-skipped` step) and planned when opted in; `upkeep-config.json` `system_ruby_gems` reaches discovery, absent file → default; `shadow_ignore_dirs` suppresses that dir's shadow rows; untracked-only skill repo not dirty, tracked edit still dirty. Suite sandboxes `UPKEEP_DATA_DIR`/`UPKEEP_CONFIG` |
+| Disk, refusal, detached, drop (v1.8.4) | 15 | Stub GNU `df` that wraps long device names (and one with spaces in the device name): discovery and `clean.sh disk` read the real free/total via `df -P`; low disk → plan `refused: true`, `needs_approval: false`, `disk-refuse` warning; SKILL.md refusal step precedes the nothing-to-do step; detached skill repo excluded from group count and `category_counts`, surfaced as `skill-detached`; skills predicate defined once; `--drop=language` expands from the plan's `tools` (npm stub never invoked, with a control run that does invoke it); no hardcoded group map |
 
 ### Skill-level coverage (live invocation)
 

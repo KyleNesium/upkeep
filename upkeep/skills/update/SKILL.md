@@ -31,6 +31,8 @@ description: |
   "check for updates", "upgrade my packages", "update all my tools",
   "is upkeep up to date", "self-update", "upgrade brew", "update skills".
 allowed-tools:
+  # Shared disk reading (read-only) used by the Turn 1 pre-flight
+  - Bash(bash *clean.sh disk)
   # Read-only discovery / queries
   - Bash(echo *)
   - Bash(date *)
@@ -87,7 +89,6 @@ allowed-tools:
   - WebFetch  # v1.5: only used in --advisor mode
   # Linux system tools
   - Bash(systemctl *)
-  - Bash(journalctl *)
   # Linux package managers
   - Bash(apt *)
   - Bash(apt-get *)
@@ -225,19 +226,18 @@ all platforms now get the single-gate UX. If `$OS_TYPE` is `unknown`, report
 
 ### Turn 1: Plan
 
-Disk pre-flight first (sub-second):
+`<SKILL_DIR>` below is the directory containing this SKILL.md — the harness
+tells you the absolute path when the skill loads; use it as a literal.
+
+Disk pre-flight first (sub-second). It uses the one shared disk reading
+(`clean.sh disk`: macOS Settings-accurate, `df -P` on Linux/WSL2) and only
+exists to fail fast — the plan re-checks and refuses authoritatively (see
+`refused` below):
 
 ```bash
-# Report free space the way macOS shows it (Settings → Storage), in base-10 GB:
-# URLResourceValues' importantUsage capacity INCLUDES purgeable space, which
-# df/diskutil omit (they'd under-count by ~150 GB). osascript is on every Mac;
-# fall back to diskutil (strictly-free), then df on Linux/WSL2.
-if command -v osascript >/dev/null 2>&1; then
-  FREE_GB=$(osascript -l JavaScript -e 'ObjC.import("Foundation");var u=$.NSURL.fileURLWithPath("/"),v=Ref(),e=Ref();u.getResourceValueForKeyError(v,$.NSURLVolumeAvailableCapacityForImportantUsageKey,e)?Math.round(v[0].longLongValue/1e9):""' 2>/dev/null)
-fi
-[ -z "${FREE_GB:-}" ] && command -v diskutil >/dev/null 2>&1 && FREE_GB=$(diskutil info / 2>/dev/null | awk -F'[()]' '/Container Free Space:/{print $2}' | awk '{printf "%d", ($1/1e9)+0.5}')
-[ -z "${FREE_GB:-}" ] && FREE_GB=$(df -k / 2>/dev/null | awk 'NR==2 {printf "%d", ($4*1024/1e9)+0.5}')
-if [ -z "$FREE_GB" ] || [ "$FREE_GB" -lt 5 ]; then
+# Replace <SKILL_DIR> with the absolute path the harness reported.
+read -r FREE_GB _ < <(bash <SKILL_DIR>/../upkeep/scripts/clean.sh disk 2>/dev/null)
+if [ -z "${FREE_GB:-}" ] || [ "$FREE_GB" -lt 5 ]; then
   echo "✗ Refusing to start: only ${FREE_GB:-?} GB free on /. Free up at least 5 GB and re-run."
   exit 1
 elif [ "$FREE_GB" -lt 10 ]; then
@@ -245,12 +245,9 @@ elif [ "$FREE_GB" -lt 10 ]; then
 fi
 ```
 
-Then build the plan in one call. `$SKILL_DIR` is the directory containing
-this SKILL.md — the harness tells you the absolute path when the skill
-loads; use it as a literal in the command:
+Then build the plan in one call:
 
 ```bash
-# Replace <SKILL_DIR> with the absolute path the harness reported.
 PLAN_RENDER=$(bash <SKILL_DIR>/scripts/update.sh plan "$MODE")
 ```
 
@@ -259,10 +256,19 @@ The script:
 2. Runs `scripts/synthesize.sh` to build the plan.
 3. Writes the full plan to a temp file in `~/.claude/data/`.
 4. Prints SKILL.md-facing JSON to stdout: `{plan_file, needs_approval,
-   summary, warnings, manual_steps, ordered_groups, restart_required,
-   untrusted_repos}`.
+   refused, summary, warnings, manual_steps, ordered_groups,
+   restart_required, untrusted_repos}`.
 
 Honor the JSON in this order:
+
+#### 0. Refusal (check first)
+
+If `refused == true`, the plan refused to run (e.g. too little disk space).
+Render the `warnings[]` entry with `code == "disk-refuse"` as
+`✗ <message>. Free up space and re-run /upkeep:update.` and stop. Never
+render "Everything is up to date." for a refused plan — its
+`ordered_groups` is empty because nothing was checked, not because nothing
+is outdated.
 
 #### A. Untrusted skill repos (skill trust gate)
 
@@ -290,7 +296,7 @@ Render the plan compactly as a report (no apply). Stop.
 #### C. Nothing-to-do short-circuit
 
 If `needs_approval == false` for any other reason (empty
-`ordered_groups`):
+`ordered_groups`, and `refused` is false — refusals are handled in step 0):
 
 - If `manual_steps[]` contains a `system-sudo` entry (Linux: apt/dnf/pacman
   has pending upgrades that upkeep can't auto-apply), do **not** say

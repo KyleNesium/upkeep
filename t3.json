@@ -1,0 +1,16 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "defaultThreadEnvMode": "worktree",
+  "scripts": [
+    {
+      "name": "Test",
+      "command": "bash tests/test-clean-skill.sh && bash tests/test-update-skill.sh",
+      "icon": "test"
+    },
+    {
+      "name": "Shell syntax check",
+      "command": "find upkeep tests -name \"*.sh\" -exec bash -n {} +",
+      "icon": "lint"
+    }
+  ]
+}
